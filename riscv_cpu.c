@@ -33,13 +33,7 @@
 #include "iomem.h"
 #include "riscv_cpu.h"
 
-#ifndef MAX_XLEN
-#error MAX_XLEN must be defined
-#endif
-#ifndef CONFIG_RISCV_MAX_XLEN
-#error CONFIG_RISCV_MAX_XLEN must be defined
-#endif
-
+#define MAX_XLEN 64
 //#define DUMP_INVALID_MEM_ACCESS
 //#define DUMP_MMU_EXCEPTIONS
 //#define DUMP_INTERRUPTS
@@ -87,17 +81,10 @@ static void __attribute__((format(printf, 1, 2), unused)) log_printf(const char 
     va_end(ap);
 }
 
-#if MAX_XLEN == 128
-static void fprint_target_ulong(FILE *f, target_ulong a)
-{
-    fprintf(f, "%016" PRIx64 "%016" PRIx64, (uint64_t)(a >> 64), (uint64_t)a);
-}
-#else
 static void fprint_target_ulong(FILE *f, target_ulong a)
 {
     fprintf(f, "%" PR_target_ulong, a);
 }
-#endif
 
 static void print_target_ulong(target_ulong a)
 {
@@ -115,7 +102,7 @@ static void dump_regs(RISCVCPUState *s)
 {
     int i, cols;
     const char priv_str[4] = "USHM";
-    cols = 256 / MAX_XLEN;
+    cols = 4;
     printf("pc =");
     print_target_ulong(s->pc);
     printf(" ");
@@ -201,28 +188,9 @@ static int get_phys_addr(RISCVCPUState *s,
     }
 
     if (priv == PRV_M) {
-        if (s->cur_xlen < MAX_XLEN) {
-            /* truncate virtual address */
-            *ppaddr = vaddr & (((target_ulong)1 << s->cur_xlen) - 1);
-        } else {
-            *ppaddr = vaddr;
-        }
-        return 0;
-    }
-#if MAX_XLEN == 32
-    /* 32 bits */
-    mode = s->satp >> 31;
-    if (mode == 0) {
-        /* bare: no translation */
         *ppaddr = vaddr;
         return 0;
-    } else {
-        /* sv32 */
-        levels = 2;
-        pte_size_log2 = 2;
-        pte_addr_bits = 22;
     }
-#else
     mode = (s->satp >> 60) & 0xf;
     if (mode == 0) {
         /* bare: no translation */
@@ -232,12 +200,11 @@ static int get_phys_addr(RISCVCPUState *s,
         /* sv39/sv48 */
         levels = mode - 8 + 3;
         pte_size_log2 = 3;
-        vaddr_shift = MAX_XLEN - (PG_SHIFT + levels * 9);
+        vaddr_shift = 64 - (PG_SHIFT + levels * 9);
         if ((((target_long)vaddr << vaddr_shift) >> vaddr_shift) != vaddr)
             return -1;
         pte_addr_bits = 44;
     }
-#endif
     pte_addr = (s->satp & (((target_ulong)1 << pte_addr_bits) - 1)) << PG_SHIFT;
     pte_bits = 12 - pte_size_log2;
     pte_mask = (1 << pte_bits) - 1;
@@ -333,7 +300,6 @@ int target_read_slow(RISCVCPUState *s, mem_uint_t *pval,
                 ret = (v0 >> (al * 8)) | (v1 << (32 - al * 8));
             }
             break;
-#if MLEN >= 64
         case 3:
             {
                 uint64_t v0, v1;
@@ -347,22 +313,6 @@ int target_read_slow(RISCVCPUState *s, mem_uint_t *pval,
                 ret = (v0 >> (al * 8)) | (v1 << (64 - al * 8));
             }
             break;
-#endif
-#if MLEN >= 128
-        case 4:
-            {
-                uint128_t v0, v1;
-                addr -= al;
-                err = target_read_u128(s, &v0, addr);
-                if (err)
-                    return err;
-                err = target_read_u128(s, &v1, addr + 16);
-                if (err)
-                    return err;
-                ret = (v0 >> (al * 8)) | (v1 << (128 - al * 8));
-            }
-            break;
-#endif
         default:
             abort();
         }
@@ -395,16 +345,9 @@ int target_read_slow(RISCVCPUState *s, mem_uint_t *pval,
             case 2:
                 ret = *(uint32_t *)ptr;
                 break;
-#if MLEN >= 64
             case 3:
                 ret = *(uint64_t *)ptr;
                 break;
-#endif
-#if MLEN >= 128
-            case 4:
-                ret = *(uint128_t *)ptr;
-                break;
-#endif
             default:
                 abort();
             }
@@ -413,14 +356,12 @@ int target_read_slow(RISCVCPUState *s, mem_uint_t *pval,
             if (((pr->devio_flags >> size_log2) & 1) != 0) {
                 ret = pr->read_func(pr->opaque, offset, size_log2);
             }
-#if MLEN >= 64
             else if ((pr->devio_flags & DEVIO_SIZE32) && size_log2 == 3) {
                 /* emulate 64 bit access */
                 ret = pr->read_func(pr->opaque, offset, 2);
                 ret |= (uint64_t)pr->read_func(pr->opaque, offset + 4, 2) << 32;
                 
             }
-#endif
             else {
 #ifdef DUMP_INVALID_MEM_ACCESS
                 printf("unsupported device read access: addr=0x");
@@ -482,16 +423,9 @@ int target_write_slow(RISCVCPUState *s, target_ulong addr,
             case 2:
                 *(uint32_t *)ptr = val;
                 break;
-#if MLEN >= 64
             case 3:
                 *(uint64_t *)ptr = val;
                 break;
-#endif
-#if MLEN >= 128
-            case 4:
-                *(uint128_t *)ptr = val;
-                break;
-#endif
             default:
                 abort();
             }
@@ -500,7 +434,6 @@ int target_write_slow(RISCVCPUState *s, target_ulong addr,
             if (((pr->devio_flags >> size_log2) & 1) != 0) {
                 pr->write_func(pr->opaque, offset, val, size_log2);
             }
-#if MLEN >= 64
             else if ((pr->devio_flags & DEVIO_SIZE32) && size_log2 == 3) {
                 /* emulate 64 bit access */
                 pr->write_func(pr->opaque, offset,
@@ -508,7 +441,6 @@ int target_write_slow(RISCVCPUState *s, target_ulong addr,
                 pr->write_func(pr->opaque, offset + 4,
                                (val >> 32) & 0xffffffff, 2);
             }
-#endif
             else {
 #ifdef DUMP_INVALID_MEM_ACCESS
                 printf("unsupported device write access: addr=0x");
@@ -631,11 +563,7 @@ static void glue(riscv_cpu_flush_tlb_write_range_ram,
                       MSTATUS_SPP | \
                       MSTATUS_FS | MSTATUS_XS | \
                       MSTATUS_SUM | MSTATUS_MXR)
-#if MAX_XLEN >= 64
-#define SSTATUS_MASK (SSTATUS_MASK0 | MSTATUS_UXL_MASK)
-#else
 #define SSTATUS_MASK SSTATUS_MASK0
-#endif
 
 
 #define MSTATUS_MASK (MSTATUS_UIE | MSTATUS_SIE | MSTATUS_MIE |      \
@@ -657,20 +585,10 @@ static target_ulong get_mstatus(RISCVCPUState *s, target_ulong mask)
     sd = ((val & MSTATUS_FS) == MSTATUS_FS) |
         ((val & MSTATUS_XS) == MSTATUS_XS);
     if (sd)
-        val |= (target_ulong)1 << (s->cur_xlen - 1);
+        val |= (target_ulong)1 << 63;
     return val;
 }
                               
-static int get_base_from_xlen(int xlen)
-{
-    if (xlen == 32)
-        return 1;
-    else if (xlen == 64)
-        return 2;
-    else
-        return 3;
-}
-
 static void set_mstatus(RISCVCPUState *s, target_ulong val)
 {
     target_ulong mod, mask;
@@ -684,17 +602,6 @@ static void set_mstatus(RISCVCPUState *s, target_ulong val)
     s->fs = (val >> MSTATUS_FS_SHIFT) & 3;
 
     mask = MSTATUS_MASK & ~MSTATUS_FS;
-#if MAX_XLEN >= 64
-    {
-        int uxl, sxl;
-        uxl = (val >> MSTATUS_UXL_SHIFT) & 3;
-        if (uxl >= 1 && uxl <= get_base_from_xlen(MAX_XLEN))
-            mask |= MSTATUS_UXL_MASK;
-        sxl = (val >> MSTATUS_UXL_SHIFT) & 3;
-        if (sxl >= 1 && sxl <= get_base_from_xlen(MAX_XLEN))
-            mask |= MSTATUS_SXL_MASK;
-    }
-#endif
     s->mstatus = (s->mstatus & ~mask) | (val & mask);
 }
 
@@ -743,24 +650,6 @@ static int csr_read(RISCVCPUState *s, target_ulong *pval, uint32_t csr,
         }
         val = (int64_t)s->insn_counter;
         break;
-    case 0xc80: /* mcycleh */
-    case 0xc82: /* minstreth */
-        if (s->cur_xlen != 32)
-            goto invalid_csr;
-        {
-            uint32_t counteren;
-            if (s->priv < PRV_M) {
-                if (s->priv < PRV_S)
-                    counteren = s->scounteren;
-                else
-                    counteren = s->mcounteren;
-                if (((counteren >> (csr & 0x1f)) & 1) == 0)
-                    goto invalid_csr;
-            }
-        }
-        val = s->insn_counter >> 32;
-        break;
-        
     case 0x100:
         val = get_mstatus(s, SSTATUS_MASK);
         break;
@@ -796,7 +685,7 @@ static int csr_read(RISCVCPUState *s, target_ulong *pval, uint32_t csr,
         break;
     case 0x301:
         val = s->misa;
-        val |= (target_ulong)s->mxl << (s->cur_xlen - 2);
+        val |= (target_ulong)2 << 62;
         break;
     case 0x302:
         val = s->medeleg;
@@ -831,12 +720,6 @@ static int csr_read(RISCVCPUState *s, target_ulong *pval, uint32_t csr,
     case 0xb00: /* mcycle */
     case 0xb02: /* minstret */
         val = (int64_t)s->insn_counter;
-        break;
-    case 0xb80: /* mcycleh */
-    case 0xb82: /* minstreth */
-        if (s->cur_xlen != 32)
-            goto invalid_csr;
-        val = s->insn_counter >> 32;
         break;
     case 0xf14:
         val = s->mhartid;
@@ -934,14 +817,6 @@ static int csr_write(RISCVCPUState *s, uint32_t csr, target_ulong val)
         break;
     case 0x180:
         /* no ASID implemented */
-#if MAX_XLEN == 32
-        {
-            int new_mode;
-            new_mode = (val >> 31) & 1;
-            s->satp = (val & (((target_ulong)1 << 22) - 1)) |
-                (new_mode << 31);
-        }
-#else
         {
             int mode, new_mode;
             mode = s->satp >> 60;
@@ -951,7 +826,6 @@ static int csr_write(RISCVCPUState *s, uint32_t csr, target_ulong val)
             s->satp = (val & (((uint64_t)1 << 44) - 1)) |
                 ((uint64_t)mode << 60);
         }
-#endif
         tlb_flush_all(s);
         return 2;
         
@@ -959,21 +833,6 @@ static int csr_write(RISCVCPUState *s, uint32_t csr, target_ulong val)
         set_mstatus(s, val);
         break;
     case 0x301: /* misa */
-#if MAX_XLEN >= 64
-        {
-            int new_mxl;
-            new_mxl = (val >> (s->cur_xlen - 2)) & 3;
-            if (new_mxl >= 1 && new_mxl <= get_base_from_xlen(MAX_XLEN)) {
-                /* Note: misa is only modified in M level, so cur_xlen
-                   = 2^(mxl + 4) */
-                if (s->mxl != new_mxl) {
-                    s->mxl = new_mxl;
-                    s->cur_xlen = 1 << (new_mxl + 4);
-                    return 1;
-                }
-            }
-        }
-#endif
         break;
     case 0x302:
         mask = (1 << (CAUSE_STORE_PAGE_FAULT + 1)) - 1;
@@ -1022,19 +881,6 @@ static void set_priv(RISCVCPUState *s, int priv)
 {
     if (s->priv != priv) {
         tlb_flush_all(s);
-#if MAX_XLEN >= 64
-        /* change the current xlen */
-        {
-            int mxl;
-            if (priv == PRV_S)
-                mxl = (s->mstatus >> MSTATUS_SXL_SHIFT) & 3;
-            else if (priv == PRV_U)
-                mxl = (s->mstatus >> MSTATUS_UXL_SHIFT) & 3;
-            else
-                mxl = s->mxl;
-            s->cur_xlen = 1 << (4 + mxl);
-        }
-#endif
         s->priv = priv;
     }
 }
@@ -1083,7 +929,7 @@ static void raise_exception2(RISCVCPUState *s, uint32_t cause,
     if (s->priv <= PRV_S) {
         /* delegate the exception to the supervisor priviledge */
         if (cause & CAUSE_INTERRUPT)
-            deleg = (s->mideleg >> (cause & (MAX_XLEN - 1))) & 1;
+            deleg = (s->mideleg >> (cause & 63)) & 1;
         else
             deleg = (s->medeleg >> cause) & 1;
     } else {
@@ -1092,7 +938,7 @@ static void raise_exception2(RISCVCPUState *s, uint32_t cause,
     
     causel = cause & 0x7fffffff;
     if (cause & CAUSE_INTERRUPT)
-        causel |= (target_ulong)1 << (s->cur_xlen - 1);
+    causel |= (target_ulong)1 << 63;
     
     if (deleg) {
         s->scause = causel;
@@ -1213,18 +1059,8 @@ static inline uint32_t get_field1(uint32_t val, int src_pos,
         return (val >> (src_pos - dst_pos)) & mask;
 }
 
-#define XLEN 32
-#include "riscv_cpu_template.h"
-
-#if MAX_XLEN >= 64
 #define XLEN 64
 #include "riscv_cpu_template.h"
-#endif
-
-#if MAX_XLEN >= 128
-#define XLEN 128
-#include "riscv_cpu_template.h"
-#endif
 
 static void glue(riscv_cpu_interp, MAX_XLEN)(RISCVCPUState *s, int n_cycles)
 {
@@ -1237,23 +1073,7 @@ static void glue(riscv_cpu_interp, MAX_XLEN)(RISCVCPUState *s, int n_cycles)
     while (!s->power_down_flag &&
            (int)(timeout - s->insn_counter) > 0) {
         n_cycles = timeout - s->insn_counter;
-        switch(s->cur_xlen) {
-        case 32:
-            riscv_cpu_interp_x32(s, n_cycles);
-            break;
-#if MAX_XLEN >= 64
-        case 64:
-            riscv_cpu_interp_x64(s, n_cycles);
-            break;
-#endif
-#if MAX_XLEN >= 128
-        case 128:
-            riscv_cpu_interp_x128(s, n_cycles);
-            break;
-#endif
-        default:
-            abort();
-        }
+        riscv_cpu_interp_x64(s, n_cycles);
     }
 }
 
@@ -1299,19 +1119,13 @@ static RISCVCPUState *glue(riscv_cpu_init, MAX_XLEN)(PhysMemoryMap *mem_map)
     s->mem_map = mem_map;
     s->pc = 0x1000;
     s->priv = PRV_M;
-    s->cur_xlen = MAX_XLEN;
-    s->mxl = get_base_from_xlen(MAX_XLEN);
-    s->mstatus = ((uint64_t)s->mxl << MSTATUS_UXL_SHIFT) |
-        ((uint64_t)s->mxl << MSTATUS_SXL_SHIFT);
+    s->mstatus = 0;
     s->misa |= MCPUID_SUPER | MCPUID_USER | MCPUID_I | MCPUID_M | MCPUID_A;
 #if FLEN >= 32
     s->misa |= MCPUID_F;
 #endif
 #if FLEN >= 64
     s->misa |= MCPUID_D;
-#endif
-#if FLEN >= 128
-    s->misa |= MCPUID_Q;
 #endif
 #ifdef CONFIG_EXT_C
     s->misa |= MCPUID_C;
@@ -1345,33 +1159,7 @@ const RISCVCPUClass glue(riscv_cpu_class, MAX_XLEN) = {
     glue(riscv_cpu_flush_tlb_write_range_ram, MAX_XLEN),
 };
 
-#if CONFIG_RISCV_MAX_XLEN == MAX_XLEN
-RISCVCPUState *riscv_cpu_init(PhysMemoryMap *mem_map, int max_xlen)
+RISCVCPUState *riscv_cpu_init(PhysMemoryMap *mem_map)
 {
-    const RISCVCPUClass *c;
-    switch(max_xlen) {
-        /* with emscripten we compile a single CPU */
-#if defined(EMSCRIPTEN)
-    case MAX_XLEN:
-        c = &glue(riscv_cpu_class, MAX_XLEN);
-        break;
-#else
-    case 32:
-        c = &riscv_cpu_class32;
-        break;
-    case 64:
-        c = &riscv_cpu_class64;
-        break;
-#if CONFIG_RISCV_MAX_XLEN == 128
-    case 128:
-        c = &riscv_cpu_class128;
-        break;
-#endif
-#endif /* !EMSCRIPTEN */
-    default:
-        return NULL;
-    }
-    return c->riscv_cpu_init(mem_map);
+    return riscv_cpu_class64.riscv_cpu_init(mem_map);
 }
-#endif /* CONFIG_RISCV_MAX_XLEN == MAX_XLEN */
-

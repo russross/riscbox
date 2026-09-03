@@ -4,14 +4,13 @@ TinyEMU System Emulator by Fabrice Bellard
 1) Features
 -----------
 
-- RISC-V system emulator supporting the RV128IMAFDQC base ISA (user
+- RISC-V system emulator supporting the RV64IMAFDC base ISA (user
   level ISA version 2.2, priviledged architecture version 1.10)
   including:
 
-  - 32/64/128 bit integer registers
-  - 32/64/128 bit floating point instructions
+  - 64 bit integer registers
+  - 32/64 bit floating point instructions
   - Compressed instructions
-  - dynamic XLEN change
 
 - VirtIO console, network, block device, input and 9P filesystem
 
@@ -36,10 +35,6 @@ TinyEMU System Emulator by Fabrice Bellard
   It is possible to compile the programs without these libraries by
   commenting CONFIG_FS_NET and/or CONFIG_SDL in the Makefile.
 
-- Edit the Makefile to disable the 128 bit target if you compile on a
-  32 bit host (for the 128 bit RISCV target the compiler must support
-  the __int128 C extension).
-
 - Use 'make' to compile the binaries.
 
 - You can optionally install the program to '/usr/local/bin' with:
@@ -63,8 +58,6 @@ TinyEMU System Emulator by Fabrice Bellard
   (diskimage-linux-riscv-yyyy-mm-dd.tar.gz) and use it:
 
   ./temu root-riscv64.cfg
-
-  ./temu rv128test/rv128test.cfg
 
 - Access to your local hard disk (/tmp directory) in the guest:
 
@@ -136,20 +129,10 @@ the JSON blk.txt file must be provided as disk image filename.
 4) Technical notes
 ------------------
 
-4.1) 128 bit support
-
-The RISC-V specification does not define all the instruction encodings
-for the 128 bit integer and floating point operations. The missing
-ones were interpolated from the 32 and 64 ones.
-
-Unfortunately there is no RISC-V 128 bit toolchain nor OS now
-(volunteers for the Linux port ?), so rv128test.bin may be the first
-128 bit code for RISC-V !
-
-4.2) Floating point emulation
+4.1) Floating point emulation
 
 The floating point emulation is bit exact and supports all the
-specified instructions for 32, 64 and 128 bit floating point
+specified instructions for 32 and 64 bit floating point
 numbers. It uses the new SoftFP library.
 
 4.3) HTIF console

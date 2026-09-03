@@ -43,7 +43,6 @@
 typedef struct RISCVMachine {
     VirtMachine common;
     PhysMemoryMap *mem_map;
-    int max_xlen;
     RISCVCPUState *cpu_state;
     uint64_t ram_size;
     /* RTC */
@@ -590,7 +589,7 @@ static int riscv_build_fdt(RISCVMachine *m, uint8_t *dst,
                            const char *cmd_line)
 {
     FDTState *s;
-    int size, max_xlen, i, cur_phandle, intc_phandle, plic_phandle;
+    int size, i, cur_phandle, intc_phandle, plic_phandle;
     char isa_string[128], *q;
     uint32_t misa;
     uint32_t tab[4];
@@ -619,10 +618,9 @@ static int riscv_build_fdt(RISCVMachine *m, uint8_t *dst,
     fdt_prop_str(s, "status", "okay");
     fdt_prop_str(s, "compatible", "riscv");
 
-    max_xlen = m->max_xlen;
     misa = riscv_cpu_get_misa(m->cpu_state);
-    q = isa_string;
-    q += snprintf(isa_string, sizeof(isa_string), "rv%d", max_xlen);
+    strcpy(isa_string, "rv64");
+    q = isa_string + 4;
     for(i = 0; i < 26; i++) {
         if (misa & (1 << i))
             *q++ = 'a' + i;
@@ -630,7 +628,7 @@ static int riscv_build_fdt(RISCVMachine *m, uint8_t *dst,
     *q = '\0';
     fdt_prop_str(s, "riscv,isa", isa_string);
     
-    fdt_prop_str(s, "mmu-type", max_xlen <= 32 ? "riscv,sv32" : "riscv,sv48");
+    fdt_prop_str(s, "mmu-type", "riscv,sv48");
     fdt_prop_u32(s, "clock-frequency", 2000000000);
 
     fdt_begin_node(s, "interrupt-controller");
@@ -771,10 +769,7 @@ static void copy_bios(RISCVMachine *s, const uint8_t *buf, int buf_len,
     kernel_base = 0;
     if (kernel_buf_len > 0) {
         /* copy the kernel if present */
-        if (s->max_xlen == 32)
-            align = 4 << 20; /* 4 MB page align */
-        else
-            align = 2 << 20; /* 2 MB page align */
+        align = 2 << 20; /* 2 MB page align */
         kernel_base = (buf_len + align - 1) & ~(align - 1);
         memcpy(ram_ptr + kernel_base, kernel_buf, kernel_buf_len);
         if (kernel_buf_len + kernel_base > s->ram_size) {
@@ -826,17 +821,11 @@ static VirtMachine *riscv_machine_init(const VirtMachineParams *p)
 {
     RISCVMachine *s;
     VIRTIODevice *blk_dev;
-    int irq_num, i, max_xlen, ram_flags;
+    int irq_num, i, ram_flags;
     VIRTIOBusDef vbus_s, *vbus = &vbus_s;
 
 
-    if (!strcmp(p->machine_name, "riscv32")) {
-        max_xlen = 32;
-    } else if (!strcmp(p->machine_name, "riscv64")) {
-        max_xlen = 64;
-    } else if (!strcmp(p->machine_name, "riscv128")) {
-        max_xlen = 128;
-    } else {
+    if (strcmp(p->machine_name, "riscv64") != 0) {
         vm_error("unsupported machine: %s\n", p->machine_name);
         return NULL;
     }
@@ -844,15 +833,14 @@ static VirtMachine *riscv_machine_init(const VirtMachineParams *p)
     s = mallocz(sizeof(*s));
     s->common.vmc = p->vmc;
     s->ram_size = p->ram_size;
-    s->max_xlen = max_xlen;
     s->mem_map = phys_mem_map_init();
     /* needed to handle the RAM dirty bits */
     s->mem_map->opaque = s;
     s->mem_map->flush_tlb_write_range = riscv_flush_tlb_write_range;
 
-    s->cpu_state = riscv_cpu_init(s->mem_map, max_xlen);
+    s->cpu_state = riscv_cpu_init(s->mem_map);
     if (!s->cpu_state) {
-        vm_error("unsupported max_xlen=%d\n", max_xlen);
+        vm_error("unable to initialize the RV64 CPU\n");
         /* XXX: should free resources */
         return NULL;
     }

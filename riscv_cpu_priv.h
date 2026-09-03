@@ -30,11 +30,7 @@
 #define __exception __attribute__((warn_unused_result))
 
 #ifndef FLEN
-#if MAX_XLEN == 128
-#define FLEN 128
-#else
 #define FLEN 64
-#endif
 #endif /* !FLEN */
 
 #define CONFIG_EXT_C /* compressed instructions */
@@ -45,58 +41,18 @@
 #define USE_GLOBAL_VARIABLES
 #endif
 
-#if MAX_XLEN == 32
-typedef uint32_t target_ulong;
-typedef int32_t target_long;
-#define PR_target_ulong "08x"
-#elif MAX_XLEN == 64
 typedef uint64_t target_ulong;
 typedef int64_t target_long;
 #define PR_target_ulong "016" PRIx64
-#elif MAX_XLEN == 128
-typedef uint128_t target_ulong;
-typedef int128_t target_long;
-#define PR_target_ulong "016" PRIx64 /* XXX */
-#else
-#error unsupported MAX_XLEN
-#endif
 
 /* FLEN is the floating point register width */
 #if FLEN > 0
-#if FLEN == 32
-typedef uint32_t fp_uint;
-#define F32_HIGH 0
-#elif FLEN == 64
 typedef uint64_t fp_uint;
 #define F32_HIGH ((fp_uint)-1 << 32)
 #define F64_HIGH 0
-#elif FLEN == 128
-typedef uint128_t fp_uint;
-#define F32_HIGH ((fp_uint)-1 << 32)
-#define F64_HIGH ((fp_uint)-1 << 64)
-#else
-#error unsupported FLEN
-#endif
 #endif
 
-/* MLEN is the maximum memory access width */
-#if MAX_XLEN <= 32 && FLEN <= 32
-#define MLEN 32
-#elif MAX_XLEN <= 64 && FLEN <= 64
-#define MLEN 64
-#else
-#define MLEN 128
-#endif
-
-#if MLEN == 32
-typedef uint32_t mem_uint_t;
-#elif MLEN == 64
 typedef uint64_t mem_uint_t;
-#elif MLEN == 128
-typedef uint128_t mem_uint_t;
-#else
-#unsupported MLEN
-#endif
 
 #define TLB_SIZE 256
 
@@ -142,8 +98,6 @@ typedef uint128_t mem_uint_t;
 #define MSTATUS_SPP_SHIFT 8
 #define MSTATUS_MPP_SHIFT 11
 #define MSTATUS_FS_SHIFT 13
-#define MSTATUS_UXL_SHIFT 32
-#define MSTATUS_SXL_SHIFT 34
 
 #define MSTATUS_UIE (1 << 0)
 #define MSTATUS_SIE (1 << 1)
@@ -164,8 +118,6 @@ typedef uint128_t mem_uint_t;
 //#define MSTATUS_TVM (1 << 20)
 //#define MSTATUS_TW (1 << 21)
 //#define MSTATUS_TSR (1 << 22)
-#define MSTATUS_UXL_MASK ((uint64_t)3 << MSTATUS_UXL_SHIFT)
-#define MSTATUS_SXL_MASK ((uint64_t)3 << MSTATUS_SXL_SHIFT)
 
 #define PG_SHIFT 12
 #define PG_MASK ((1 << PG_SHIFT) - 1)
@@ -193,10 +145,8 @@ struct RISCVCPUState {
     uint8_t frm;
 #endif
     
-    uint8_t cur_xlen;  /* current XLEN value, <= MAX_XLEN */
     uint8_t priv; /* see PRV_x */
     uint8_t fs; /* MSTATUS_FS value */
-    uint8_t mxl; /* MXL field in MISA register */
     
     int32_t n_cycles; /* only used inside the CPU loop */
     uint64_t insn_counter;
@@ -224,11 +174,7 @@ struct RISCVCPUState {
     target_ulong sepc;
     target_ulong scause;
     target_ulong stval;
-#if MAX_XLEN == 32
-    uint32_t satp;
-#else
     uint64_t satp; /* currently 64 bit physical addresses max */
-#endif
     uint32_t scounteren;
 
     target_ulong load_res; /* for atomic LR/SC */
@@ -283,11 +229,6 @@ static inline __exception int target_write_u ## size(RISCVCPUState *s, target_ul
 TARGET_READ_WRITE(8, uint8_t, 0)
 TARGET_READ_WRITE(16, uint16_t, 1)
 TARGET_READ_WRITE(32, uint32_t, 2)
-#if MLEN >= 64
 TARGET_READ_WRITE(64, uint64_t, 3)
-#endif
-#if MLEN >= 128
-TARGET_READ_WRITE(128, uint128_t, 4)
-#endif
 
 #endif /* RISCV_CPU_PRIV_H */

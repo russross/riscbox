@@ -30,7 +30,7 @@ EMLDFLAGS=-O3 --memory-init-file 0 --closure 0 -s NO_EXIT_RUNTIME=1 -s NO_FILESY
 EMLDFLAGS_ASMJS:=$(EMLDFLAGS) -s WASM=0
 EMLDFLAGS_WASM:=$(EMLDFLAGS) -s WASM=1 -s TOTAL_MEMORY=67108864 -s ALLOW_MEMORY_GROWTH=1
 
-PROGS=js/riscvemu32.js js/riscvemu32-wasm.js js/riscvemu64.js js/riscvemu64-wasm.js
+PROGS=js/riscvemu64.js js/riscvemu64-wasm.js
 
 all: $(PROGS)
 
@@ -38,25 +38,15 @@ JS_OBJS=jsemu.js.o softfp.js.o virtio.js.o fs.js.o fs_net.js.o fs_wget.js.o fs_u
 JS_OBJS+=iomem.js.o cutils.js.o aes.js.o sha256.js.o
 
 RISCVEMU64_OBJS=$(JS_OBJS) riscv_cpu64.js.o riscv_machine.js.o machine.js.o
-RISCVEMU32_OBJS=$(JS_OBJS) riscv_cpu32.js.o riscv_machine.js.o machine.js.o
 
 js/riscvemu64.js: $(RISCVEMU64_OBJS) js/lib.js
 	$(EMCC) $(EMLDFLAGS_ASMJS) -o $@ $(RISCVEMU64_OBJS)
 
-js/riscvemu32.js: $(RISCVEMU32_OBJS) js/lib.js
-	$(EMCC) $(EMLDFLAGS_ASMJS) -o $@ $(RISCVEMU32_OBJS)
-
 js/riscvemu64-wasm.js: $(RISCVEMU64_OBJS) js/lib.js
 	$(EMCC) $(EMLDFLAGS_WASM) -o $@ $(RISCVEMU64_OBJS)
 
-js/riscvemu32-wasm.js: $(RISCVEMU32_OBJS) js/lib.js
-	$(EMCC) $(EMLDFLAGS_WASM) -o $@ $(RISCVEMU32_OBJS)
-
-riscv_cpu32.js.o: riscv_cpu.c
-	$(EMCC) $(EMCFLAGS) -DMAX_XLEN=32 -DCONFIG_RISCV_MAX_XLEN=32 -c -o $@ $<
-
 riscv_cpu64.js.o: riscv_cpu.c
-	$(EMCC) $(EMCFLAGS) -DMAX_XLEN=64 -DCONFIG_RISCV_MAX_XLEN=64 -c -o $@ $<
+	$(EMCC) $(EMCFLAGS) -c -o $@ $<
 
 
 %.js.o: %.c

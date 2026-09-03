@@ -27,9 +27,6 @@
 #elif F_SIZE == 64
 #define OPID 1
 #define F_HIGH F64_HIGH
-#elif F_SIZE == 128
-#define OPID 3
-#define F_HIGH 0
 #else
 #error unsupported F_SIZE
 #endif
@@ -131,7 +128,6 @@
                     val = (int32_t)glue(glue(cvt_sf, F_SIZE), _u32)(s->fp_reg[rs1], rm,
                                                           &s->fflags);
                     break;
-#if XLEN >= 64
                 case 2: /* fcvt.l.[sdq] */
                     val = (int64_t)glue(glue(cvt_sf, F_SIZE), _i64)(s->fp_reg[rs1], rm,
                                                           &s->fflags);
@@ -140,18 +136,6 @@
                     val = (int64_t)glue(glue(cvt_sf, F_SIZE), _u64)(s->fp_reg[rs1], rm,
                                                           &s->fflags);
                     break;
-#endif
-#if XLEN >= 128
-                /* XXX: the index is not defined in the spec */
-                case 4: /* fcvt.t.[sdq] */
-                    val = glue(glue(cvt_sf, F_SIZE), _i128)(s->fp_reg[rs1], rm,
-                                                          &s->fflags);
-                    break;
-                case 5: /* fcvt.tu.[sdq] */
-                    val = glue(glue(cvt_sf, F_SIZE), _u128)(s->fp_reg[rs1], rm,
-                                                          &s->fflags);
-                    break;
-#endif
                 default:
                     goto illegal_insn;
                 }
@@ -191,7 +175,6 @@
                     s->fp_reg[rd] = glue(cvt_u32_sf, F_SIZE)(s->reg[rs1], rm,
                                                        &s->fflags) | F_HIGH;
                     break;
-#if XLEN >= 64
                 case 2: /* fcvt.[sdq].l */
                     s->fp_reg[rd] = glue(cvt_i64_sf, F_SIZE)(s->reg[rs1], rm,
                                                        &s->fflags) | F_HIGH;
@@ -200,18 +183,6 @@
                     s->fp_reg[rd] = glue(cvt_u64_sf, F_SIZE)(s->reg[rs1], rm,
                                                             &s->fflags) | F_HIGH;
                     break;
-#endif
-#if XLEN >= 128
-                /* XXX: the index is not defined in the spec */
-                case 4: /* fcvt.[sdq].t */
-                    s->fp_reg[rd] = glue(cvt_i128_sf, F_SIZE)(s->reg[rs1], rm,
-                                                       &s->fflags) | F_HIGH;
-                    break;
-                case 5: /* fcvt.[sdq].tu */
-                    s->fp_reg[rd] = glue(cvt_u128_sf, F_SIZE)(s->reg[rs1], rm,
-                                                            &s->fflags) | F_HIGH;
-                    break;
-#endif
                 default:
                     goto illegal_insn;
                 }
@@ -227,30 +198,12 @@
                 case 1: /* cvt.s.d */
                     s->fp_reg[rd] = cvt_sf64_sf32(s->fp_reg[rs1], rm, &s->fflags) | F32_HIGH;
                     break;
-#if FLEN >= 128
-                case 3: /* cvt.s.q */
-                    s->fp_reg[rd] = cvt_sf128_sf32(s->fp_reg[rs1], rm, &s->fflags) | F32_HIGH;
-                    break;
-#endif
 #endif /* F_SIZE == 32 */
 #if F_SIZE == 64
                 case 0: /* cvt.d.s */
                     s->fp_reg[rd] = cvt_sf32_sf64(s->fp_reg[rs1], &s->fflags) | F64_HIGH;
                     break;
-#if FLEN >= 128
-                case 1: /* cvt.d.q */
-                    s->fp_reg[rd] = cvt_sf128_sf64(s->fp_reg[rs1], rm, &s->fflags) | F64_HIGH;
-                    break;
-#endif
 #endif /* F_SIZE == 64 */
-#if F_SIZE == 128
-                case 0: /* cvt.q.s */
-                    s->fp_reg[rd] = cvt_sf32_sf128(s->fp_reg[rs1], &s->fflags);
-                    break;
-                case 1: /* cvt.q.d */
-                    s->fp_reg[rd] = cvt_sf64_sf128(s->fp_reg[rs1], &s->fflags);
-                    break;
-#endif /* F_SIZE == 128 */
                     
                 default:
                     goto illegal_insn;
@@ -268,10 +221,8 @@
                     val = (int32_t)s->fp_reg[rs1];
 #elif F_SIZE == 64
                     val = (int64_t)s->fp_reg[rs1];
-#else
-                    val = (int128_t)s->fp_reg[rs1];
-#endif
                     break;
+#endif
 #endif /* F_SIZE <= XLEN */
                 case 1: /* fclass */
                     val = glue(fclass_sf, F_SIZE)(s->fp_reg[rs1]);
@@ -291,11 +242,9 @@
                 s->fp_reg[rd] = (int32_t)s->reg[rs1];
 #elif F_SIZE == 64
                 s->fp_reg[rd] = (int64_t)s->reg[rs1];
-#else
-                s->fp_reg[rd] = (int128_t)s->reg[rs1];
-#endif
                 s->fs = 3;
                 break;
+#endif
 #endif /* F_SIZE <= XLEN */
 
 #undef F_SIZE

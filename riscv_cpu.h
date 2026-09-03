@@ -61,13 +61,9 @@ typedef struct {
     const RISCVCPUClass *class_ptr;
 } RISCVCPUCommonState;
 
-int riscv_cpu_get_max_xlen(void);
-
-extern const RISCVCPUClass riscv_cpu_class32;
 extern const RISCVCPUClass riscv_cpu_class64;
-extern const RISCVCPUClass riscv_cpu_class128;
 
-RISCVCPUState *riscv_cpu_init(PhysMemoryMap *mem_map, int max_xlen);
+RISCVCPUState *riscv_cpu_init(PhysMemoryMap *mem_map);
 static inline void riscv_cpu_end(RISCVCPUState *s)
 {
     const RISCVCPUClass *c = ((RISCVCPUCommonState *)s)->class_ptr;

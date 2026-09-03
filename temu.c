@@ -607,7 +607,6 @@ static struct option options[] = {
     { "rw", no_argument },
     { "ro", no_argument },
     { "append", required_argument },
-    { "no-accel", no_argument },
     { "build-preload", required_argument },
     { NULL },
 };
@@ -622,7 +621,6 @@ void help(void)
            "-ctrlc            the C-c key stops the emulator instead of being sent to the\n"
            "                  emulated software\n"
            "-append cmdline   append cmdline to the kernel command line\n"
-           "-no-accel         disable VM acceleration (KVM, x86 machine only)\n"
            "\n"
            "Console keys:\n"
            "Press C-a x to exit the emulator, C-a h to get some help.\n");
@@ -648,7 +646,7 @@ int main(int argc, char **argv)
 {
     VirtMachine *s;
     const char *path, *cmdline, *build_preload_file;
-    int c, option_index, i, ram_size, accel_enable;
+    int c, option_index, i, ram_size;
     BOOL allow_ctrlc;
     BlockDeviceModeEnum drive_mode;
     VirtMachineParams p_s, *p = &p_s;
@@ -657,7 +655,6 @@ int main(int argc, char **argv)
     allow_ctrlc = FALSE;
     (void)allow_ctrlc;
     drive_mode = BF_MODE_SNAPSHOT;
-    accel_enable = -1;
     cmdline = NULL;
     build_preload_file = NULL;
     for(;;) {
@@ -679,10 +676,7 @@ int main(int argc, char **argv)
             case 4: /* append */
                 cmdline = optarg;
                 break;
-            case 5: /* no-accel */
-                accel_enable = FALSE;
-                break;
-            case 6: /* build-preload */
+            case 5: /* build-preload */
                 build_preload_file = optarg;
                 break;
             default:
@@ -721,8 +715,6 @@ int main(int argc, char **argv)
     if (ram_size > 0) {
         p->ram_size = (uint64_t)ram_size << 20;
     }
-    if (accel_enable != -1)
-        p->accel_enable = accel_enable;
     if (cmdline) {
         vm_add_cmdline(p, cmdline);
     }

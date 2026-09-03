@@ -171,55 +171,6 @@ static char *cmdline_subst(const char *cmdline)
     return (char *)dbuf.buf;
 }
 
-static BOOL find_name(const char *name, const char *name_list)
-{
-    size_t len;
-    const char *p, *r;
-    
-    p = name_list;
-    for(;;) {
-        r = strchr(p, ',');
-        if (!r) {
-            if (!strcmp(name, p))
-                return TRUE;
-            break;
-        } else {
-            len = r - p;
-            if (len == strlen(name) && !memcmp(name, p, len))
-                return TRUE;
-            p = r + 1;
-        }
-    }
-    return FALSE;
-}
-
-static const VirtMachineClass *virt_machine_list[] = {
-#if defined(EMSCRIPTEN)
-    /* only a single machine in the EMSCRIPTEN target */
-#ifndef CONFIG_X86EMU
-    &riscv_machine_class,
-#endif    
-#else
-    &riscv_machine_class,
-#endif /* !EMSCRIPTEN */
-#ifdef CONFIG_X86EMU
-    &pc_machine_class,
-#endif
-    NULL,
-};
-
-static const VirtMachineClass *virt_machine_find_class(const char *machine_name)
-{
-    const VirtMachineClass *vmc, **pvmc;
-    
-    for(pvmc = virt_machine_list; *pvmc != NULL; pvmc++) {
-        vmc = *pvmc;
-        if (find_name(machine_name, vmc->machine_names))
-            return vmc;
-    }
-    return NULL;
-}
-
 static int virt_machine_parse_config(VirtMachineParams *p,
                                      char *config_file_str, int len)
 {
@@ -250,12 +201,7 @@ static int virt_machine_parse_config(VirtMachineParams *p,
     if (vm_get_str(cfg, "machine", &str) < 0)
         goto tag_fail;
     p->machine_name = strdup(str);
-    p->vmc = virt_machine_find_class(p->machine_name);
-    if (!p->vmc) {
-        vm_error("Unknown machine name: %s\n", p->machine_name);
-        goto tag_fail;
-    }
-    p->vmc->virt_machine_set_defaults(p);
+    p->vmc = &riscv_machine_class;
 
     tag_name = "memory_size";
     if (vm_get_int(cfg, tag_name, &val) < 0)
@@ -362,29 +308,11 @@ static int virt_machine_parse_config(VirtMachineParams *p,
             goto tag_fail;
         if (vm_get_int(obj, "height", &p->height) < 0)
             goto tag_fail;
-        if (vm_get_str_opt(obj, "vga_bios", &str) < 0)
-            goto tag_fail;
-        if (str) {
-            p->files[VM_FILE_VGA_BIOS].filename = strdup(str);
-        }
     }
 
     if (vm_get_str_opt(cfg, "input_device", &str) < 0)
         goto tag_fail;
     p->input_device = strdup_null(str);
-
-    if (vm_get_str_opt(cfg, "accel", &str) < 0)
-        goto tag_fail;
-    if (str) {
-        if (!strcmp(str, "none")) {
-            p->accel_enable = FALSE;
-        } else if (!strcmp(str, "auto")) {
-            p->accel_enable = TRUE;
-        } else {
-            vm_error("unsupported 'accel' config: %s\n", str);
-            return -1;
-        }
-    }
 
     tag_name = "rtc_local_time";
     el = json_object_get(cfg, tag_name);

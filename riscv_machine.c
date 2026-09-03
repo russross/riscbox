@@ -822,10 +822,6 @@ static void riscv_flush_tlb_write_range(void *opaque, uint8_t *ram_addr,
     riscv_cpu_flush_tlb_write_range_ram(s->cpu_state, ram_addr, ram_size);
 }
 
-static void riscv_machine_set_defaults(VirtMachineParams *p)
-{
-}
-
 static VirtMachine *riscv_machine_init(const VirtMachineParams *p)
 {
     RISCVMachine *s;
@@ -1041,8 +1037,6 @@ static void riscv_vm_send_mouse_event(VirtMachine *s1, int dx, int dy, int dz,
 }
 
 const VirtMachineClass riscv_machine_class = {
-    "riscv32,riscv64,riscv128",
-    riscv_machine_set_defaults,
     riscv_machine_init,
     riscv_machine_end,
     riscv_machine_get_sleep_duration,

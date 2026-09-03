@@ -13,8 +13,6 @@ TinyEMU System Emulator by Fabrice Bellard
   - Compressed instructions
   - dynamic XLEN change
 
-- x86 system emulator based on KVM
-
 - VirtIO console, network, block device, input and 9P filesystem
 
 - Graphical display with SDL
@@ -61,12 +59,6 @@ TinyEMU System Emulator by Fabrice Bellard
 
   ./temu https://bellard.org/jslinux/buildroot-riscv64.cfg
 
-  Graphical (with SDL):
-
-  ./temu https://bellard.org/jslinux/buildroot-x86-xwin.cfg
-
-  ./temu https://bellard.org/jslinux/win2k.cfg
-
 - Download the example RISC-V Linux image
   (diskimage-linux-riscv-yyyy-mm-dd.tar.gz) and use it:
 
@@ -93,8 +85,6 @@ options are:
 -ctrlc            the C-c key stops the emulator instead of being sent to the
                   emulated software
 -append cmdline   append cmdline to the kernel command line
--no-accel         disable VM acceleration (KVM, x86 machine only)
-
 Console keys:
 Press C-a x to exit the emulator, C-a h to get some help.
 
@@ -178,22 +168,6 @@ The Javascript version (JSLinux) can be compiled with Makefile.js and
 emscripten. A complete precompiled and preconfigured demo is available
 in the jslinux-yyyy-mm-dd.tar.gz archive (read the readme.txt file
 inside the archive).
-
-4.5) x86 emulator
-
-A small x86 emulator is included. It is not really an emulator because
-it uses the Linux KVM API to run the x86 code at near native
-performance. The x86 emulator uses the same set of VirtIO devices as
-the RISCV emulator and is able to run many operating systems.
-
-The x86 emulator accepts a Linux kernel image (bzImage). No BIOS image
-is necessary.
-
-The x86 emulator comes from my JS/Linux project (2011) which was one
-of the first emulator running Linux fully implemented in
-Javascript. It is provided to allow easy access to the x86 images
-hosted at https://bellard.org/jslinux .
-
 
 5) License / Credits
 --------------------

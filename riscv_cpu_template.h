@@ -1415,7 +1415,7 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
     } /* end of main loop */
  illegal_insn:
     s->pending_exception = CAUSE_ILLEGAL_INSTRUCTION;
-    s->pending_tval = insn;
+    s->pending_tval = (insn & 3) == 3 ? insn : insn & 0xffff;
  mmu_exception:
  exception:
     s->pc = GET_PC();

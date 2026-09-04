@@ -1160,6 +1160,11 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
                 case 0x14: /* amomax.w */                               \
                 case 0x18: /* amominu.w */                              \
                 case 0x1c: /* amomaxu.w */                              \
+                    if (addr & ((size / 8) - 1)) {                      \
+                        s->pending_exception = CAUSE_MISALIGNED_STORE;  \
+                        s->pending_tval = addr;                          \
+                        goto mmu_exception;                             \
+                    }                                                   \
                     if (target_read_u ## size(s, &rval, addr))          \
                         goto mmu_exception;                             \
                     val = (int## size ## _t)rval;                       \

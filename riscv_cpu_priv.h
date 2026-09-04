@@ -153,7 +153,8 @@ struct RISCVCPUState {
     uint8_t fs; /* MSTATUS_FS value */
     
     int32_t n_cycles; /* only used inside the CPU loop */
-    uint64_t insn_counter;
+    uint64_t elapsed_cycles;
+    uint64_t cycle_counter;
     uint64_t minstret_counter;
     BOOL power_down_flag;
     int pending_exception; /* used during MMU exception handling */

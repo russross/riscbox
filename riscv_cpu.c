@@ -117,7 +117,7 @@ static void dump_regs(RISCVCPUState *s)
     printf("priv=%c", priv_str[s->priv]);
     printf(" mstatus=");
     print_target_ulong(s->mstatus);
-    printf(" cycles=%" PRId64, s->insn_counter);
+    printf(" cycles=%" PRId64, s->elapsed_cycles);
     printf("\n");
 #if 1
     printf(" mideleg=");
@@ -666,7 +666,7 @@ static int csr_read(RISCVCPUState *s, target_ulong *pval, uint32_t csr,
                     goto invalid_csr;
             }
         }
-        val = (int64_t)s->insn_counter;
+        val = (int64_t)s->cycle_counter;
         break;
     case 0xc02: /* uinstret */
         {
@@ -750,7 +750,7 @@ static int csr_read(RISCVCPUState *s, target_ulong *pval, uint32_t csr,
         val = s->mip;
         break;
     case 0xb00: /* mcycle */
-        val = (int64_t)s->insn_counter;
+        val = (int64_t)s->cycle_counter;
         break;
     case 0xb02: /* minstret */
         val = (int64_t)s->minstret_counter;
@@ -793,14 +793,20 @@ static int get_insn_rm(RISCVCPUState *s, unsigned int rm)
 }
 #endif
 
-/* return -1 if invalid CSR, 0 if OK, 1 if the interpreter loop must be
-   exited (e.g. XLEN was modified), 2 if TLBs have been flushed. */
-static int csr_write(RISCVCPUState *s, uint32_t csr, target_ulong val)
+typedef enum {
+    CSR_WRITE_ERROR = -1,
+    CSR_WRITE_OK,
+    CSR_WRITE_FLUSH_TLB,
+    CSR_WRITE_MINSTRET,
+} CSRWriteResult;
+
+static CSRWriteResult csr_write(RISCVCPUState *s, uint32_t csr,
+                                target_ulong val)
 {
     target_ulong mask;
 
     if (csr == 0x180 && s->priv == PRV_S && (s->mstatus & MSTATUS_TVM))
-        return -1;
+        return CSR_WRITE_ERROR;
 
 #if defined(DUMP_CSR)
     printf("csr_write: csr=0x%03x val=0x", csr);
@@ -864,7 +870,7 @@ static int csr_write(RISCVCPUState *s, uint32_t csr, target_ulong val)
                 ((uint64_t)mode << SATP_MODE_SHIFT);
         }
         tlb_flush_all(s);
-        return 2;
+        return CSR_WRITE_FLUSH_TLB;
         
     case 0x300:
         set_mstatus(s, val);
@@ -889,6 +895,12 @@ static int csr_write(RISCVCPUState *s, uint32_t csr, target_ulong val)
     case 0x306:
         s->mcounteren = val & COUNTEREN_MASK;
         break;
+    case 0xb00: /* mcycle */
+        s->cycle_counter = val;
+        break;
+    case 0xb02: /* minstret */
+        s->minstret_counter = val;
+        return CSR_WRITE_MINSTRET;
     case 0x340:
         s->mscratch = val;
         break;
@@ -909,9 +921,9 @@ static int csr_write(RISCVCPUState *s, uint32_t csr, target_ulong val)
 #ifdef DUMP_INVALID_CSR
         printf("csr_write: invalid CSR=0x%x\n", csr);
 #endif
-        return -1;
+        return CSR_WRITE_ERROR;
     }
-    return 0;
+    return CSR_WRITE_OK;
 }
 
 static void set_priv(RISCVCPUState *s, int priv)
@@ -1109,10 +1121,10 @@ static void glue(riscv_cpu_interp, MAX_XLEN)(RISCVCPUState *s, int n_cycles)
 #endif
     uint64_t timeout;
 
-    timeout = s->insn_counter + n_cycles;
+    timeout = s->elapsed_cycles + n_cycles;
     while (!s->power_down_flag &&
-           (int)(timeout - s->insn_counter) > 0) {
-        n_cycles = timeout - s->insn_counter;
+           (int)(timeout - s->elapsed_cycles) > 0) {
+        n_cycles = timeout - s->elapsed_cycles;
         riscv_cpu_interp_x64(s, n_cycles);
     }
 }
@@ -1120,7 +1132,7 @@ static void glue(riscv_cpu_interp, MAX_XLEN)(RISCVCPUState *s, int n_cycles)
 /* Note: the value is not accurate when called in riscv_cpu_interp() */
 static uint64_t glue(riscv_cpu_get_cycles, MAX_XLEN)(RISCVCPUState *s)
 {
-    return s->insn_counter;
+    return s->elapsed_cycles;
 }
 
 static void glue(riscv_cpu_set_mip, MAX_XLEN)(RISCVCPUState *s, uint32_t mask)

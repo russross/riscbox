@@ -180,12 +180,18 @@ static inline uintx_t glue(mulhsu, XLEN)(intx_t a, uintx_t b)
     case n+(28 << 2): case n+(29 << 2): case n+(30 << 2): case n+(31 << 2): 
 
 #define GET_PC() (target_ulong)((uintptr_t)code_ptr + code_to_pc_addend)
-#define GET_INSN_COUNTER() (insn_counter_addend - s->n_cycles)
+#define GET_ELAPSED_CYCLES() (elapsed_cycles_addend - s->n_cycles)
+#define GET_CYCLE_COUNTER() (cycle_counter_addend - s->n_cycles)
 
-#define C_NEXT_INSN s->minstret_counter++; code_ptr += 2; break
-#define NEXT_INSN s->minstret_counter++; code_ptr += 4; break
+#define RETIRE_INSN do { \
+        if (!minstret_write) \
+            s->minstret_counter++; \
+        minstret_write = FALSE; \
+    } while (0)
+#define C_NEXT_INSN RETIRE_INSN; code_ptr += 2; break
+#define NEXT_INSN RETIRE_INSN; code_ptr += 4; break
 #define JUMP_INSN do {   \
-        s->minstret_counter++; \
+        RETIRE_INSN; \
         code_ptr = NULL;           \
         code_end = NULL;           \
         code_to_pc_addend = s->pc; \
@@ -202,7 +208,9 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
     uint8_t *code_ptr, *code_end;
     target_ulong code_to_pc_addend;
 #endif
-    uint64_t insn_counter_addend;
+    uint64_t elapsed_cycles_addend;
+    uint64_t cycle_counter_addend;
+    BOOL minstret_write;
 #if FLEN > 0
     uint32_t rs3;
     int32_t rm;
@@ -210,7 +218,9 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
 
     if (n_cycles1 == 0)
         return;
-    insn_counter_addend = s->insn_counter + n_cycles1;
+    elapsed_cycles_addend = s->elapsed_cycles + n_cycles1;
+    cycle_counter_addend = s->cycle_counter + n_cycles1;
+    minstret_write = FALSE;
     s->n_cycles = n_cycles1;
 
     /* check pending interrupts */
@@ -981,28 +991,35 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
             funct3 &= 3;
             switch(funct3) {
             case 1: /* csrrw */
-                s->insn_counter = GET_INSN_COUNTER();
+                s->elapsed_cycles = GET_ELAPSED_CYCLES();
+                s->cycle_counter = GET_CYCLE_COUNTER();
                 if (csr_read(s, &val2, imm, TRUE))
                     goto illegal_insn;
                 val2 = (intx_t)val2;
                 err = csr_write(s, imm, val);
                 if (err < 0)
                     goto illegal_insn;
+                cycle_counter_addend = s->cycle_counter + s->n_cycles;
+                if (err == CSR_WRITE_MINSTRET) {
+                    minstret_write = TRUE;
+                    err = CSR_WRITE_OK;
+                }
                 if (rd != 0)
                     s->reg[rd] = val2;
                 if (err > 0) {
                     s->pc = GET_PC() + 4;
-                    if (err == 2)
+                    if (err == CSR_WRITE_FLUSH_TLB)
                         JUMP_INSN;
                     else {
-                        s->minstret_counter++;
+                        RETIRE_INSN;
                         goto done_interp;
                     }
                 }
                 break;
             case 2: /* csrrs */
             case 3: /* csrrc */
-                s->insn_counter = GET_INSN_COUNTER();
+                s->elapsed_cycles = GET_ELAPSED_CYCLES();
+                s->cycle_counter = GET_CYCLE_COUNTER();
                 if (csr_read(s, &val2, imm, (rs1 != 0)))
                     goto illegal_insn;
                 val2 = (intx_t)val2;
@@ -1014,6 +1031,11 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
                     err = csr_write(s, imm, val);
                     if (err < 0)
                         goto illegal_insn;
+                    cycle_counter_addend = s->cycle_counter + s->n_cycles;
+                    if (err == CSR_WRITE_MINSTRET) {
+                        minstret_write = TRUE;
+                        err = CSR_WRITE_OK;
+                    }
                 } else {
                     err = 0;
                 }
@@ -1021,10 +1043,10 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
                     s->reg[rd] = val2;
                 if (err > 0) {
                     s->pc = GET_PC() + 4;
-                    if (err == 2)
+                    if (err == CSR_WRITE_FLUSH_TLB)
                         JUMP_INSN;
                     else {
-                        s->minstret_counter++;
+                        RETIRE_INSN;
                         goto done_interp;
                     }
                 }
@@ -1052,7 +1074,7 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
                             goto illegal_insn;
                         s->pc = GET_PC();
                         handle_sret(s);
-                        s->minstret_counter++;
+                        RETIRE_INSN;
                         goto done_interp;
                     }
                     break;
@@ -1064,7 +1086,7 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
                             goto illegal_insn;
                         s->pc = GET_PC();
                         handle_mret(s);
-                        s->minstret_counter++;
+                        RETIRE_INSN;
                         goto done_interp;
                     }
                     break;
@@ -1080,7 +1102,7 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
                     if ((s->mip & s->mie) == 0) {
                         s->power_down_flag = TRUE;
                         s->pc = GET_PC() + 4;
-                        s->minstret_counter++;
+                        RETIRE_INSN;
                         goto done_interp;
                     }
                     break;
@@ -1442,10 +1464,11 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
     }
  done_interp:
 the_end:
-    s->insn_counter = GET_INSN_COUNTER();
+    s->elapsed_cycles = GET_ELAPSED_CYCLES();
+    s->cycle_counter = GET_CYCLE_COUNTER();
 #if 0
     printf("done interp %lx int=%x mstatus=%lx prv=%d\n",
-           (uint64_t)s->insn_counter, s->mip & s->mie, (uint64_t)s->mstatus,
+           (uint64_t)s->elapsed_cycles, s->mip & s->mie, (uint64_t)s->mstatus,
            s->priv);
 #endif
 }
@@ -1454,3 +1477,4 @@ the_end:
 #undef intx_t
 #undef XLEN
 #undef OP_A
+#undef RETIRE_INSN

@@ -54,6 +54,8 @@ typedef struct CachedBlock {
 
 #define BLK_FMT "%sblk%09u.bin"
 #define GROUP_FMT "%sgrp%09u.bin"
+#define URL_LEN_MAX 1023
+#define REQUEST_URL_SIZE (URL_LEN_MAX + sizeof("blk4294967295.bin"))
 #define PREFETCH_GROUP_LEN_MAX 32
 
 typedef struct {
@@ -72,7 +74,7 @@ typedef struct Cluster {
 typedef struct BlockDeviceHTTP {
     BlockDevice *bs;
     int max_cache_size_kb;
-    char url[1024];
+    char url[URL_LEN_MAX + 1];
     int prefetch_count;
     void (*start_cb)(void *opaque);
     void *start_opaque;
@@ -176,7 +178,7 @@ static int64_t bf_get_sector_count(BlockDevice *bs)
 static void bf_start_load_block(BlockDevice *bs, int block_num)
 {
     BlockDeviceHTTP *bf = bs->opaque;
-    char filename[1024];
+    char filename[REQUEST_URL_SIZE];
     CachedBlock *b;
     b = bf_add_block(bf, block_num);
     bf->n_read_blocks++;
@@ -204,7 +206,7 @@ static void bf_start_load_prefetch_group(BlockDevice *bs, int group_num,
     BlockDeviceHTTP *bf = bs->opaque;
     CachedBlock *b;
     PrefetchGroupRequest *req;
-    char filename[1024];
+    char filename[REQUEST_URL_SIZE];
     BOOL req_flag;
     int i;
     
@@ -409,6 +411,11 @@ BlockDevice *block_device_init_http(const char *url,
     BlockDevice *bs;
     BlockDeviceHTTP *bf;
     char *p;
+
+    if (strlen(url) > URL_LEN_MAX) {
+        vm_error("HTTP block device URL is too long\n");
+        exit(1);
+    }
 
     bs = mallocz(sizeof(*bs));
     bf = mallocz(sizeof(*bf));

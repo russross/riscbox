@@ -156,6 +156,8 @@ struct RISCVCPUState {
     uint64_t elapsed_cycles;
     uint64_t cycle_counter;
     uint64_t minstret_counter;
+    RISCVCPUTimeFunc *get_time;
+    void *time_opaque;
     BOOL power_down_flag;
     int pending_exception; /* used during MMU exception handling */
     target_ulong pending_tval;

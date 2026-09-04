@@ -98,6 +98,13 @@ static uint64_t rtc_get_time(RISCVMachine *m)
     return val;
 }
 
+static uint64_t rtc_get_time_for_cpu(void *opaque)
+{
+    RISCVMachine *m = opaque;
+
+    return rtc_get_time(m);
+}
+
 static uint32_t htif_read(void *opaque, uint32_t offset,
                           int size_log2)
 {
@@ -852,6 +859,7 @@ static VirtMachine *riscv_machine_init(const VirtMachineParams *p)
     if (p->rtc_real_time) {
         s->rtc_start_time = rtc_get_real_time(s);
     }
+    riscv_cpu_set_time_source(s->cpu_state, rtc_get_time_for_cpu, s);
     
     cpu_register_device(s->mem_map, CLINT_BASE_ADDR, CLINT_SIZE, s,
                         clint_read, clint_write, DEVIO_SIZE32);

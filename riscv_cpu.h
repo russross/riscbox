@@ -42,6 +42,7 @@
 #define MIP_MEIP (1 << 11)
 
 typedef struct RISCVCPUState RISCVCPUState;
+typedef uint64_t RISCVCPUTimeFunc(void *opaque);
 
 typedef struct {
     RISCVCPUState *(*riscv_cpu_init)(PhysMemoryMap *mem_map);
@@ -64,6 +65,9 @@ typedef struct {
 extern const RISCVCPUClass riscv_cpu_class64;
 
 RISCVCPUState *riscv_cpu_init(PhysMemoryMap *mem_map);
+void riscv_cpu_set_time_source(RISCVCPUState *s,
+                               RISCVCPUTimeFunc *get_time,
+                               void *opaque);
 static inline void riscv_cpu_end(RISCVCPUState *s)
 {
     const RISCVCPUClass *c = ((RISCVCPUCommonState *)s)->class_ptr;

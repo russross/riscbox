@@ -588,7 +588,7 @@ static void glue(riscv_cpu_flush_tlb_write_range_ram,
                       MSTATUS_TVM | MSTATUS_TW | MSTATUS_TSR)
 
 /* cycle and insn counters */
-#define COUNTEREN_MASK ((1 << 0) | (1 << 2))
+#define COUNTEREN_MASK ((1 << 0) | (1 << 1) | (1 << 2))
 
 /* return the complete mstatus with the SD bit */
 static target_ulong get_mstatus(RISCVCPUState *s, target_ulong mask)
@@ -672,6 +672,11 @@ static int csr_read(RISCVCPUState *s, target_ulong *pval, uint32_t csr,
         if (!counter_access_enabled(s, csr & 0x1f))
             goto invalid_csr;
         val = (int64_t)s->cycle_counter;
+        break;
+    case 0xc01: /* time */
+        if (!counter_access_enabled(s, csr & 0x1f) || !s->get_time)
+            goto invalid_csr;
+        val = s->get_time(s->time_opaque);
         break;
     case 0xc02: /* uinstret */
         if (!counter_access_enabled(s, csr & 0x1f))
@@ -1210,4 +1215,12 @@ const RISCVCPUClass glue(riscv_cpu_class, MAX_XLEN) = {
 RISCVCPUState *riscv_cpu_init(PhysMemoryMap *mem_map)
 {
     return riscv_cpu_class64.riscv_cpu_init(mem_map);
+}
+
+void riscv_cpu_set_time_source(RISCVCPUState *s,
+                               RISCVCPUTimeFunc *get_time,
+                               void *opaque)
+{
+    s->get_time = get_time;
+    s->time_opaque = opaque;
 }

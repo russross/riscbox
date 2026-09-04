@@ -584,7 +584,8 @@ static void glue(riscv_cpu_flush_tlb_write_range_ram,
                       MSTATUS_UPIE | MSTATUS_SPIE | MSTATUS_MPIE |    \
                       MSTATUS_SPP | MSTATUS_MPP | \
                       MSTATUS_FS | \
-                      MSTATUS_MPRV | MSTATUS_SUM | MSTATUS_MXR)
+                      MSTATUS_MPRV | MSTATUS_SUM | MSTATUS_MXR | \
+                      MSTATUS_TVM | MSTATUS_TW | MSTATUS_TSR)
 
 /* cycle and insn counters */
 #define COUNTEREN_MASK ((1 << 0) | (1 << 2))
@@ -630,6 +631,8 @@ static int csr_read(RISCVCPUState *s, target_ulong *pval, uint32_t csr,
         return -1; /* read-only CSR */
     if (s->priv < ((csr >> 8) & 3))
         return -1; /* not enough priviledge */
+    if (csr == 0x180 && s->priv == PRV_S && (s->mstatus & MSTATUS_TVM))
+        return -1;
     
     switch(csr) {
 #if FLEN > 0
@@ -778,6 +781,9 @@ static int get_insn_rm(RISCVCPUState *s, unsigned int rm)
 static int csr_write(RISCVCPUState *s, uint32_t csr, target_ulong val)
 {
     target_ulong mask;
+
+    if (csr == 0x180 && s->priv == PRV_S && (s->mstatus & MSTATUS_TVM))
+        return -1;
 
 #if defined(DUMP_CSR)
     printf("csr_write: csr=0x%03x val=0x", csr);

@@ -115,9 +115,9 @@ typedef uint64_t mem_uint_t;
 #define MSTATUS_MPRV (1 << 17)
 #define MSTATUS_SUM (1 << 18)
 #define MSTATUS_MXR (1 << 19)
-//#define MSTATUS_TVM (1 << 20)
-//#define MSTATUS_TW (1 << 21)
-//#define MSTATUS_TSR (1 << 22)
+#define MSTATUS_TVM (1 << 20)
+#define MSTATUS_TW (1 << 21)
+#define MSTATUS_TSR (1 << 22)
 
 #define PG_SHIFT 12
 #define PG_MASK ((1 << PG_SHIFT) - 1)

@@ -223,6 +223,9 @@ static int get_phys_addr(RISCVCPUState *s,
         if (xwr != 0) {
             if (xwr == 2 || xwr == 6)
                 return -1;
+            vaddr_mask = ((target_ulong)1 << vaddr_shift) - 1;
+            if (paddr & vaddr_mask)
+                return -1;
             /* priviledge check */
             if (priv == PRV_S) {
                 if ((pte & PTE_U_MASK) && !(s->mstatus & MSTATUS_SUM))
@@ -245,7 +248,6 @@ static int get_phys_addr(RISCVCPUState *s,
                 pte |= PTE_D_MASK;
             if (need_write)
                 phys_write_u64(s, pte_addr, pte);
-            vaddr_mask = ((target_ulong)1 << vaddr_shift) - 1;
             *ppaddr = (vaddr & vaddr_mask) | (paddr  & ~vaddr_mask);
             return 0;
         } else {

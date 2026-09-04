@@ -655,7 +655,6 @@ static int csr_read(RISCVCPUState *s, target_ulong *pval, uint32_t csr,
         break;
 #endif
     case 0xc00: /* ucycle */
-    case 0xc02: /* uinstret */
         {
             uint32_t counteren;
             if (s->priv < PRV_M) {
@@ -668,6 +667,20 @@ static int csr_read(RISCVCPUState *s, target_ulong *pval, uint32_t csr,
             }
         }
         val = (int64_t)s->insn_counter;
+        break;
+    case 0xc02: /* uinstret */
+        {
+            uint32_t counteren;
+            if (s->priv < PRV_M) {
+                if (s->priv < PRV_S)
+                    counteren = s->scounteren;
+                else
+                    counteren = s->mcounteren;
+                if (((counteren >> (csr & 0x1f)) & 1) == 0)
+                    goto invalid_csr;
+            }
+        }
+        val = (int64_t)s->minstret_counter;
         break;
     case 0x100:
         val = get_mstatus(s, SSTATUS_MASK);
@@ -737,8 +750,10 @@ static int csr_read(RISCVCPUState *s, target_ulong *pval, uint32_t csr,
         val = s->mip;
         break;
     case 0xb00: /* mcycle */
-    case 0xb02: /* minstret */
         val = (int64_t)s->insn_counter;
+        break;
+    case 0xb02: /* minstret */
+        val = (int64_t)s->minstret_counter;
         break;
     case 0xf14:
         val = s->mhartid;

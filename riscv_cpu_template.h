@@ -182,9 +182,10 @@ static inline uintx_t glue(mulhsu, XLEN)(intx_t a, uintx_t b)
 #define GET_PC() (target_ulong)((uintptr_t)code_ptr + code_to_pc_addend)
 #define GET_INSN_COUNTER() (insn_counter_addend - s->n_cycles)
 
-#define C_NEXT_INSN code_ptr += 2; break
-#define NEXT_INSN code_ptr += 4; break
+#define C_NEXT_INSN s->minstret_counter++; code_ptr += 2; break
+#define NEXT_INSN s->minstret_counter++; code_ptr += 4; break
 #define JUMP_INSN do {   \
+        s->minstret_counter++; \
         code_ptr = NULL;           \
         code_end = NULL;           \
         code_to_pc_addend = s->pc; \
@@ -993,8 +994,10 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
                     s->pc = GET_PC() + 4;
                     if (err == 2)
                         JUMP_INSN;
-                    else
+                    else {
+                        s->minstret_counter++;
                         goto done_interp;
+                    }
                 }
                 break;
             case 2: /* csrrs */
@@ -1020,8 +1023,10 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
                     s->pc = GET_PC() + 4;
                     if (err == 2)
                         JUMP_INSN;
-                    else
+                    else {
+                        s->minstret_counter++;
                         goto done_interp;
+                    }
                 }
                 break;
             case 0:
@@ -1047,6 +1052,7 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
                             goto illegal_insn;
                         s->pc = GET_PC();
                         handle_sret(s);
+                        s->minstret_counter++;
                         goto done_interp;
                     }
                     break;
@@ -1058,6 +1064,7 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
                             goto illegal_insn;
                         s->pc = GET_PC();
                         handle_mret(s);
+                        s->minstret_counter++;
                         goto done_interp;
                     }
                     break;
@@ -1073,6 +1080,7 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
                     if ((s->mip & s->mie) == 0) {
                         s->power_down_flag = TRUE;
                         s->pc = GET_PC() + 4;
+                        s->minstret_counter++;
                         goto done_interp;
                     }
                     break;

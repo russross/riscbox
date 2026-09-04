@@ -1127,15 +1127,17 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
                         goto mmu_exception;                             \
                     val = (int## size ## _t)rval;                       \
                     s->load_res = addr;                                 \
+                    s->load_res_valid = TRUE;                           \
                     break;                                              \
                 case 3: /* sc.w */                                      \
-                    if (s->load_res == addr) {                          \
+                    if (s->load_res_valid && s->load_res == addr) {     \
                         if (target_write_u ## size(s, addr, s->reg[rs2])) \
                             goto mmu_exception;                         \
                         val = 0;                                        \
                     } else {                                            \
                         val = 1;                                        \
                     }                                                   \
+                    s->load_res_valid = FALSE;                          \
                     break;                                              \
                 case 1: /* amiswap.w */                                 \
                 case 0: /* amoadd.w */                                  \

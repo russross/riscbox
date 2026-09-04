@@ -178,6 +178,7 @@ struct RISCVCPUState {
     uint32_t scounteren;
 
     target_ulong load_res; /* for atomic LR/SC */
+    BOOL load_res_valid;
 
     PhysMemoryMap *mem_map;
 

@@ -628,7 +628,7 @@ static int riscv_build_fdt(RISCVMachine *m, uint8_t *dst,
     *q = '\0';
     fdt_prop_str(s, "riscv,isa", isa_string);
     
-    fdt_prop_str(s, "mmu-type", "riscv,sv48");
+    fdt_prop_str(s, "mmu-type", "riscv,sv39");
     fdt_prop_u32(s, "clock-frequency", 2000000000);
 
     fdt_begin_node(s, "interrupt-controller");

@@ -158,13 +158,22 @@ static __maybe_unused inline uint_type phys_read_u ## size(RISCVCPUState *s, tar
 }
 
 PHYS_MEM_READ_WRITE(8, uint8_t)
-PHYS_MEM_READ_WRITE(32, uint32_t)
 PHYS_MEM_READ_WRITE(64, uint64_t)
 
 #define PTE_V_MASK (1 << 0)
 #define PTE_U_MASK (1 << 4)
 #define PTE_A_MASK (1 << 6)
 #define PTE_D_MASK (1 << 7)
+
+#define SATP_MODE_SHIFT 60
+#define SATP_MODE_MASK 0xf
+#define SATP_MODE_BARE 0
+#define SATP_MODE_SV39 8
+#define SATP_PPN_MASK (((uint64_t)1 << 44) - 1)
+
+#define SV39_LEVELS 3
+#define SV39_VPN_BITS 9
+#define SV39_VADDR_SHIFT (64 - (PG_SHIFT + SV39_LEVELS * SV39_VPN_BITS))
 
 #define ACCESS_READ  0
 #define ACCESS_WRITE 1
@@ -176,8 +185,8 @@ static int get_phys_addr(RISCVCPUState *s,
                          target_ulong *ppaddr, target_ulong vaddr,
                          int access)
 {
-    int mode, levels, pte_bits, pte_idx, pte_mask, pte_size_log2, xwr, priv;
-    int need_write, vaddr_shift, i, pte_addr_bits;
+    int pte_idx, xwr, priv;
+    int need_write, vaddr_shift, i;
     target_ulong pte_addr, pte, vaddr_mask, paddr;
 
     if ((s->mstatus & MSTATUS_MPRV) && access != ACCESS_CODE) {
@@ -191,31 +200,21 @@ static int get_phys_addr(RISCVCPUState *s,
         *ppaddr = vaddr;
         return 0;
     }
-    mode = (s->satp >> 60) & 0xf;
-    if (mode == 0) {
+    if ((s->satp >> SATP_MODE_SHIFT) == SATP_MODE_BARE) {
         /* bare: no translation */
         *ppaddr = vaddr;
         return 0;
-    } else {
-        /* sv39/sv48 */
-        levels = mode - 8 + 3;
-        pte_size_log2 = 3;
-        vaddr_shift = 64 - (PG_SHIFT + levels * 9);
-        if ((((target_long)vaddr << vaddr_shift) >> vaddr_shift) != vaddr)
-            return -1;
-        pte_addr_bits = 44;
     }
-    pte_addr = (s->satp & (((target_ulong)1 << pte_addr_bits) - 1)) << PG_SHIFT;
-    pte_bits = 12 - pte_size_log2;
-    pte_mask = (1 << pte_bits) - 1;
-    for(i = 0; i < levels; i++) {
-        vaddr_shift = PG_SHIFT + pte_bits * (levels - 1 - i);
-        pte_idx = (vaddr >> vaddr_shift) & pte_mask;
-        pte_addr += pte_idx << pte_size_log2;
-        if (pte_size_log2 == 2)
-            pte = phys_read_u32(s, pte_addr);
-        else
-            pte = phys_read_u64(s, pte_addr);
+
+    if ((((target_long)vaddr << SV39_VADDR_SHIFT) >> SV39_VADDR_SHIFT) != vaddr)
+        return -1;
+
+    pte_addr = (s->satp & SATP_PPN_MASK) << PG_SHIFT;
+    for(i = 0; i < SV39_LEVELS; i++) {
+        vaddr_shift = PG_SHIFT + SV39_VPN_BITS * (SV39_LEVELS - 1 - i);
+        pte_idx = (vaddr >> vaddr_shift) & ((1 << SV39_VPN_BITS) - 1);
+        pte_addr += pte_idx * sizeof(uint64_t);
+        pte = phys_read_u64(s, pte_addr);
         //printf("pte=0x%08" PRIx64 "\n", pte);
         if (!(pte & PTE_V_MASK))
             return -1; /* invalid PTE */
@@ -244,12 +243,8 @@ static int get_phys_addr(RISCVCPUState *s,
             pte |= PTE_A_MASK;
             if (access == ACCESS_WRITE)
                 pte |= PTE_D_MASK;
-            if (need_write) {
-                if (pte_size_log2 == 2)
-                    phys_write_u32(s, pte_addr, pte);
-                else
-                    phys_write_u64(s, pte_addr, pte);
-            }
+            if (need_write)
+                phys_write_u64(s, pte_addr, pte);
             vaddr_mask = ((target_ulong)1 << vaddr_shift) - 1;
             *ppaddr = (vaddr & vaddr_mask) | (paddr  & ~vaddr_mask);
             return 0;
@@ -819,12 +814,12 @@ static int csr_write(RISCVCPUState *s, uint32_t csr, target_ulong val)
         /* no ASID implemented */
         {
             int mode, new_mode;
-            mode = s->satp >> 60;
-            new_mode = (val >> 60) & 0xf;
-            if (new_mode == 0 || (new_mode >= 8 && new_mode <= 9))
+            mode = s->satp >> SATP_MODE_SHIFT;
+            new_mode = (val >> SATP_MODE_SHIFT) & SATP_MODE_MASK;
+            if (new_mode == SATP_MODE_BARE || new_mode == SATP_MODE_SV39)
                 mode = new_mode;
-            s->satp = (val & (((uint64_t)1 << 44) - 1)) |
-                ((uint64_t)mode << 60);
+            s->satp = (val & SATP_PPN_MASK) |
+                ((uint64_t)mode << SATP_MODE_SHIFT);
         }
         tlb_flush_all(s);
         return 2;

@@ -98,6 +98,8 @@ typedef uint64_t mem_uint_t;
 #define MSTATUS_SPP_SHIFT 8
 #define MSTATUS_MPP_SHIFT 11
 #define MSTATUS_FS_SHIFT 13
+#define MSTATUS_UXL_SHIFT 32
+#define MSTATUS_SXL_SHIFT 34
 
 #define MSTATUS_UIE (1 << 0)
 #define MSTATUS_SIE (1 << 1)
@@ -118,6 +120,8 @@ typedef uint64_t mem_uint_t;
 #define MSTATUS_TVM (1 << 20)
 #define MSTATUS_TW (1 << 21)
 #define MSTATUS_TSR (1 << 22)
+#define MSTATUS_UXL ((target_ulong)3 << MSTATUS_UXL_SHIFT)
+#define MSTATUS_SXL ((target_ulong)3 << MSTATUS_SXL_SHIFT)
 
 #define PG_SHIFT 12
 #define PG_MASK ((1 << PG_SHIFT) - 1)

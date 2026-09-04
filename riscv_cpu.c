@@ -576,7 +576,7 @@ static void glue(riscv_cpu_flush_tlb_write_range_ram,
                       MSTATUS_UPIE | MSTATUS_SPIE |     \
                       MSTATUS_SPP | \
                       MSTATUS_FS | MSTATUS_XS | \
-                      MSTATUS_SUM | MSTATUS_MXR)
+                      MSTATUS_SUM | MSTATUS_MXR | MSTATUS_UXL)
 #define SSTATUS_MASK SSTATUS_MASK0
 
 
@@ -595,7 +595,9 @@ static target_ulong get_mstatus(RISCVCPUState *s, target_ulong mask)
 {
     target_ulong val;
     BOOL sd;
-    val = s->mstatus | (s->fs << MSTATUS_FS_SHIFT);
+    val = s->mstatus | (s->fs << MSTATUS_FS_SHIFT) |
+        ((target_ulong)2 << MSTATUS_UXL_SHIFT) |
+        ((target_ulong)2 << MSTATUS_SXL_SHIFT);
     val &= mask;
     sd = ((val & MSTATUS_FS) == MSTATUS_FS) |
         ((val & MSTATUS_XS) == MSTATUS_XS);

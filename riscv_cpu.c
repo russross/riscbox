@@ -164,6 +164,8 @@ PHYS_MEM_READ_WRITE(64, uint64_t)
 #define PTE_U_MASK (1 << 4)
 #define PTE_A_MASK (1 << 6)
 #define PTE_D_MASK (1 << 7)
+#define PTE_HIGH_RESERVED_MASK ((uint64_t)0x3ff << 54)
+#define PTE_NONLEAF_RESERVED_MASK (PTE_U_MASK | PTE_A_MASK | PTE_D_MASK)
 
 #define SATP_MODE_SHIFT 60
 #define SATP_MODE_MASK 0xf
@@ -216,7 +218,7 @@ static int get_phys_addr(RISCVCPUState *s,
         pte_addr += pte_idx * sizeof(uint64_t);
         pte = phys_read_u64(s, pte_addr);
         //printf("pte=0x%08" PRIx64 "\n", pte);
-        if (!(pte & PTE_V_MASK))
+        if (!(pte & PTE_V_MASK) || (pte & PTE_HIGH_RESERVED_MASK))
             return -1; /* invalid PTE */
         paddr = (pte >> 10) << PG_SHIFT;
         xwr = (pte >> 1) & 7;
@@ -251,6 +253,8 @@ static int get_phys_addr(RISCVCPUState *s,
             *ppaddr = (vaddr & vaddr_mask) | (paddr  & ~vaddr_mask);
             return 0;
         } else {
+            if (pte & PTE_NONLEAF_RESERVED_MASK)
+                return -1;
             pte_addr = paddr;
         }
     }

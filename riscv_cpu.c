@@ -1002,6 +1002,7 @@ static void handle_sret(RISCVCPUState *s)
     s->mstatus |= MSTATUS_SPIE;
     /* set SPP to U */
     s->mstatus &= ~MSTATUS_SPP;
+    s->mstatus &= ~MSTATUS_MPRV;
     set_priv(s, spp);
     s->pc = s->sepc;
 }
@@ -1018,6 +1019,8 @@ static void handle_mret(RISCVCPUState *s)
     s->mstatus |= MSTATUS_MPIE;
     /* set MPP to U */
     s->mstatus &= ~MSTATUS_MPP;
+    if (mpp < PRV_M)
+        s->mstatus &= ~MSTATUS_MPRV;
     set_priv(s, mpp);
     s->pc = s->mepc;
 }

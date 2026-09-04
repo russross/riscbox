@@ -1145,6 +1145,8 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
                             goto mmu_exception;                         \
                         val = 0;                                        \
                     } else {                                            \
+                        if (target_write_check(s, addr))                 \
+                            goto mmu_exception;                         \
                         val = 1;                                        \
                     }                                                   \
                     s->load_res_valid = FALSE;                          \

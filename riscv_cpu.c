@@ -448,6 +448,19 @@ int target_write_slow(RISCVCPUState *s, target_ulong addr,
     return 0;
 }
 
+static __exception int target_write_check(RISCVCPUState *s,
+                                          target_ulong addr)
+{
+    target_ulong paddr;
+
+    if (get_phys_addr(s, &paddr, addr, ACCESS_WRITE)) {
+        s->pending_tval = addr;
+        s->pending_exception = CAUSE_STORE_PAGE_FAULT;
+        return -1;
+    }
+    return 0;
+}
+
 struct __attribute__((packed)) unaligned_u32 {
     uint32_t u32;
 };

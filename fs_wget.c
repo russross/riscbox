@@ -36,6 +36,12 @@
 #include "fs_utils.h"
 #include "fs_wget.h"
 
+#ifdef USE_BUILTIN_CRYPTO
+#include "sha256.h"
+#else
+#include <openssl/evp.h>
+#endif
+
 #if defined(EMSCRIPTEN)
 #include <emscripten.h>
 #else
@@ -327,21 +333,37 @@ XHRState *fs_wget(const char *url, const char *user, const char *password,
 /***********************************************/
 /* file decryption */
 
-#define ENCRYPTED_FILE_HEADER_SIZE (4 + AES_BLOCK_SIZE)
+#define ENCRYPTED_FILE_HEADER_SIZE (4 + AES_DECRYPT_BLOCK_SIZE)
 
-#define DEC_BUF_SIZE (256 * AES_BLOCK_SIZE)
+#define DEC_BUF_SIZE (256 * AES_DECRYPT_BLOCK_SIZE)
 
 struct DecryptFileState {
     DecryptFileCB *write_cb;
     void *opaque;
     int dec_state;
     int dec_buf_pos;
-    AES_KEY *aes_state;
-    uint8_t iv[AES_BLOCK_SIZE];
+    const AESDecryptKey *key;
+#ifndef USE_BUILTIN_CRYPTO
+    EVP_CIPHER_CTX *cipher_ctx;
+#endif
+    uint8_t iv[AES_DECRYPT_BLOCK_SIZE];
     uint8_t dec_buf[DEC_BUF_SIZE];
 };
 
-DecryptFileState *decrypt_file_init(AES_KEY *aes_state,
+void aes_decrypt_key_init(AESDecryptKey *key,
+                          const uint8_t bytes[AES_DECRYPT_KEY_SIZE])
+{
+#ifdef USE_BUILTIN_CRYPTO
+    int result;
+
+    result = AES_set_decrypt_key(bytes, AES_DECRYPT_KEY_SIZE * 8, &key->state);
+    assert(result == 0);
+#else
+    memcpy(key->bytes, bytes, sizeof(key->bytes));
+#endif
+}
+
+DecryptFileState *decrypt_file_init(const AESDecryptKey *key,
                                     DecryptFileCB *write_cb,
                                     void *opaque)
 {
@@ -349,8 +371,39 @@ DecryptFileState *decrypt_file_init(AES_KEY *aes_state,
     s = mallocz(sizeof(*s));
     s->write_cb = write_cb;
     s->opaque = opaque;
-    s->aes_state = aes_state;
+    s->key = key;
     return s;
+}
+
+static int decrypt_file_start(DecryptFileState *s)
+{
+#ifdef USE_BUILTIN_CRYPTO
+    return s->key ? 0 : -1;
+#else
+    s->cipher_ctx = EVP_CIPHER_CTX_new();
+    if (!s->cipher_ctx)
+        return -1;
+    if (EVP_DecryptInit_ex(s->cipher_ctx, EVP_aes_128_cbc(), NULL,
+                           s->key->bytes, s->iv) != 1 ||
+        EVP_CIPHER_CTX_set_padding(s->cipher_ctx, 0) != 1)
+        return -1;
+    return 0;
+#endif
+}
+
+static int decrypt_file_blocks(DecryptFileState *s, uint8_t *buf, int len)
+{
+#ifdef USE_BUILTIN_CRYPTO
+    AES_cbc_encrypt(buf, buf, len, &s->key->state, s->iv, FALSE);
+    return 0;
+#else
+    int output_len;
+
+    if (EVP_DecryptUpdate(s->cipher_ctx, buf, &output_len, buf, len) != 1 ||
+        output_len != len)
+        return -1;
+    return 0;
+#endif
 }
     
 int decrypt_file(DecryptFileState *s, const uint8_t *data,
@@ -367,7 +420,9 @@ int decrypt_file(DecryptFileState *s, const uint8_t *data,
             if (s->dec_buf_pos >= ENCRYPTED_FILE_HEADER_SIZE) {
                 if (memcmp(s->dec_buf, encrypted_file_magic, 4) != 0)
                     return -1;
-                memcpy(s->iv, s->dec_buf + 4, AES_BLOCK_SIZE);
+                memcpy(s->iv, s->dec_buf + 4, AES_DECRYPT_BLOCK_SIZE);
+                if (decrypt_file_start(s) < 0)
+                    return -1;
                 s->dec_state = 1;
                 s->dec_buf_pos = 0;
             }
@@ -378,15 +433,16 @@ int decrypt_file(DecryptFileState *s, const uint8_t *data,
             s->dec_buf_pos += l;
             if (s->dec_buf_pos >= DEC_BUF_SIZE) {
                 /* keep one block in case it is the padding */
-                len = s->dec_buf_pos - AES_BLOCK_SIZE;
-                AES_cbc_encrypt(s->dec_buf, s->dec_buf, len,
-                                s->aes_state, s->iv, FALSE);
+                len = s->dec_buf_pos - AES_DECRYPT_BLOCK_SIZE;
+                if (decrypt_file_blocks(s, s->dec_buf, len) < 0)
+                    return -1;
                 ret = s->write_cb(s->opaque, s->dec_buf, len);
                 if (ret < 0)
                     return ret;
-                memcpy(s->dec_buf, s->dec_buf + s->dec_buf_pos - AES_BLOCK_SIZE,
-                       AES_BLOCK_SIZE);
-                s->dec_buf_pos = AES_BLOCK_SIZE;
+                memcpy(s->dec_buf,
+                       s->dec_buf + s->dec_buf_pos - AES_DECRYPT_BLOCK_SIZE,
+                       AES_DECRYPT_BLOCK_SIZE);
+                s->dec_buf_pos = AES_DECRYPT_BLOCK_SIZE;
             }
             break;
         default:
@@ -402,17 +458,26 @@ int decrypt_file(DecryptFileState *s, const uint8_t *data,
 int decrypt_file_flush(DecryptFileState *s)
 {
     int len, pad_len, ret;
+#ifndef USE_BUILTIN_CRYPTO
+    uint8_t final_block[AES_DECRYPT_BLOCK_SIZE];
+    int final_len;
+#endif
 
     if (s->dec_state != 1)
         return -1;
     len = s->dec_buf_pos;
     if (len == 0 || 
-        (len % AES_BLOCK_SIZE) != 0)
+        (len % AES_DECRYPT_BLOCK_SIZE) != 0)
         return -1;
-    AES_cbc_encrypt(s->dec_buf, s->dec_buf, len,
-                    s->aes_state, s->iv, FALSE);
+    if (decrypt_file_blocks(s, s->dec_buf, len) < 0)
+        return -1;
+#ifndef USE_BUILTIN_CRYPTO
+    if (EVP_DecryptFinal_ex(s->cipher_ctx, final_block, &final_len) != 1 ||
+        final_len != 0)
+        return -1;
+#endif
     pad_len = s->dec_buf[s->dec_buf_pos - 1];
-    if (pad_len < 1 || pad_len > AES_BLOCK_SIZE)
+    if (pad_len < 1 || pad_len > AES_DECRYPT_BLOCK_SIZE)
         return -1;
     len -= pad_len;
     if (len != 0) {
@@ -425,6 +490,9 @@ int decrypt_file_flush(DecryptFileState *s)
 
 void decrypt_file_end(DecryptFileState *s)
 {
+#ifndef USE_BUILTIN_CRYPTO
+    EVP_CIPHER_CTX_free(s->cipher_ctx);
+#endif
     free(s);
 }
 
@@ -471,7 +539,7 @@ static void fs_wget_file_on_load(void *opaque, int err, void *data, size_t size)
             ret = decrypt_file(s->dec_state, data, size);
             if (ret >= 0 && err == 0) {
                 /* handle the end of file */
-                decrypt_file_flush(s->dec_state);
+                ret = decrypt_file_flush(s->dec_state);
             }
         } else {
             ret = fs_wget_file_write_cb(s, data, size);
@@ -510,7 +578,7 @@ void fs_wget_file2(FSDevice *fs, FSFile *f, const char *url,
                    const char *user, const char *password,
                    FSFile *posted_file, uint64_t post_data_len,
                    FSWGetFileCB *cb, void *opaque,
-                   AES_KEY *aes_state)
+                   const AESDecryptKey *key)
 {
     FSWGetFileState *s;
     s = mallocz(sizeof(*s));
@@ -521,8 +589,8 @@ void fs_wget_file2(FSDevice *fs, FSFile *f, const char *url,
     s->opaque = opaque;
     s->posted_file = posted_file;
     s->read_pos = 0;
-    if (aes_state) {
-        s->dec_state = decrypt_file_init(aes_state, fs_wget_file_write_cb, s);
+    if (key) {
+        s->dec_state = decrypt_file_init(key, fs_wget_file_write_cb, s);
     }
     
     fs_wget2(url, user, password, fs_wget_file_read_cb, post_data_len,

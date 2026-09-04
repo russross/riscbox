@@ -27,11 +27,6 @@
 
 #ifdef USE_BUILTIN_CRYPTO
 #include "aes.h"
-#include "sha256.h"
-#else
-#include <openssl/aes.h>
-#include <openssl/sha.h>
-#include <openssl/evp.h>
 #endif
 #ifdef _WIN32
 #include <winsock2.h>
@@ -65,12 +60,27 @@ void fs_net_event_loop(FSNetEventLoopCompletionFunc *cb, void *opaque);
 
 /* crypto */
 
+#define AES_DECRYPT_BLOCK_SIZE 16
+#define AES_DECRYPT_KEY_SIZE 16
+
+#ifdef USE_BUILTIN_CRYPTO
+typedef struct {
+    AES_KEY state;
+} AESDecryptKey;
+#else
+typedef struct {
+    uint8_t bytes[AES_DECRYPT_KEY_SIZE];
+} AESDecryptKey;
+#endif
+
 extern const uint8_t encrypted_file_magic[4];
 
 typedef int DecryptFileCB(void *opaque, const uint8_t *data, size_t len);
 typedef struct DecryptFileState DecryptFileState;
 
-DecryptFileState *decrypt_file_init(AES_KEY *aes_state,
+void aes_decrypt_key_init(AESDecryptKey *key,
+                          const uint8_t bytes[AES_DECRYPT_KEY_SIZE]);
+DecryptFileState *decrypt_file_init(const AESDecryptKey *key,
                                     DecryptFileCB *write_cb,
                                     void *opaque);
 int decrypt_file(DecryptFileState *s, const uint8_t *data,
@@ -90,4 +100,4 @@ void fs_wget_file2(FSDevice *fs, FSFile *f, const char *url,
                    const char *user, const char *password,
                    FSFile *posted_file, uint64_t post_data_len,
                    FSWGetFileCB *cb, void *opaque,
-                   AES_KEY *aes_state);
+                   const AESDecryptKey *key);

@@ -85,7 +85,7 @@ typedef struct FSBaseURL {
     char *user;
     char *password;
     BOOL encrypted;
-    AES_KEY aes_state;
+    AESDecryptKey aes_key;
 } FSBaseURL;
 
 typedef struct FSINode {
@@ -259,7 +259,7 @@ static FSBaseURL *fs_net_set_base_url(FSDevice *fs1,
                                       const char *base_url_id,
                                       const char *url,
                                       const char *user, const char *password,
-                                      AES_KEY *aes_state);
+                                      const AESDecryptKey *aes_key);
 static void fs_cmd_close(FSDevice *fs, FSFile *f);
 static void fs_error_archive(FSOpenInfo *oi);
 #ifdef DUMP_CACHE_LOAD
@@ -860,7 +860,8 @@ static int fs_open_wget(FSDevice *fs1, FSINode *n, FSOpenWgetEnum open_type)
         bu = n->u.reg.base_url;
         url = compose_path(bu->url, fname);
         if (bu->encrypted) {
-            oi->dec_state = decrypt_file_init(&bu->aes_state, fs_open_write_cb, oi);
+            oi->dec_state = decrypt_file_init(&bu->aes_key,
+                                              fs_open_write_cb, oi);
         }
         oi->xhr = fs_wget(url, bu->user, bu->password, oi, fs_open_cb, FALSE);
     }
@@ -1614,7 +1615,7 @@ static FSBaseURL *fs_net_set_base_url(FSDevice *fs1,
                                       const char *base_url_id,
                                       const char *url,
                                       const char *user, const char *password,
-                                      AES_KEY *aes_state)
+                                      const AESDecryptKey *aes_key)
 {
     FSDeviceMem *fs = (FSDeviceMem *)fs1;
     FSBaseURL *bu;
@@ -1641,9 +1642,9 @@ static FSBaseURL *fs_net_set_base_url(FSDevice *fs1,
         bu->password = strdup(password);
     else
         bu->password = NULL;
-    if (aes_state) {
+    if (aes_key) {
         bu->encrypted = TRUE;
-        bu->aes_state = *aes_state;
+        bu->aes_key = *aes_key;
     } else {
         bu->encrypted = FALSE;
     }
@@ -2443,7 +2444,7 @@ typedef struct CmdXHRState {
     FSFile *root_fd;
     FSFile *fd;
     FSFile *post_fd;
-    AES_KEY aes_state;
+    AESDecryptKey aes_key;
 } CmdXHRState;
 
 static void fs_cmd_xhr_on_load(FSDevice *fs, FSFile *f, int64_t size,
@@ -2479,7 +2480,7 @@ static int fs_cmd_xhr(FSDevice *fs, FSFile *f,
     int err, aes_key_len;
     CmdXHRState *s;
     char *name;
-    AES_KEY *paes_state;
+    AESDecryptKey *decrypt_key;
     uint8_t aes_key[FS_KEY_LEN];
     uint32_t flags;
     FSCMDRequest *req;
@@ -2556,10 +2557,10 @@ static int fs_cmd_xhr(FSDevice *fs, FSFile *f,
     s->fd = fd;
     s->post_fd = post_fd;
     if (aes_key_len != 0) {
-        AES_set_decrypt_key(aes_key, FS_KEY_LEN * 8, &s->aes_state);
-        paes_state = &s->aes_state;
+        aes_decrypt_key_init(&s->aes_key, aes_key);
+        decrypt_key = &s->aes_key;
     } else {
-        paes_state = NULL;
+        decrypt_key = NULL;
     }
 
     req = mallocz(sizeof(*req));
@@ -2570,7 +2571,7 @@ static int fs_cmd_xhr(FSDevice *fs, FSFile *f,
     f->req = req;
     
     fs_wget_file2(fs, fd, url, user, password, post_fd, post_data_len,
-                  fs_cmd_xhr_on_load, s, paes_state);
+                  fs_cmd_xhr_on_load, s, decrypt_key);
     return 0;
  fail1:
     if (fd)
@@ -2618,7 +2619,7 @@ static int fs_cmd_set_base_url(FSDevice *fs, const char *p)
     char url[1024], base_url_id[1024];
     char user_buf[128], *user;
     char password_buf[128], *password;
-    AES_KEY aes_state, *paes_state;
+    AESDecryptKey decrypt_key, *selected_key;
     uint8_t aes_key[FS_KEY_LEN];
     int aes_key_len;
     
@@ -2646,14 +2647,14 @@ static int fs_cmd_set_base_url(FSDevice *fs, const char *p)
     if (aes_key_len != 0) {
         if (aes_key_len != FS_KEY_LEN)
             goto fail;
-        AES_set_decrypt_key(aes_key, FS_KEY_LEN * 8, &aes_state);
-        paes_state = &aes_state;
+        aes_decrypt_key_init(&decrypt_key, aes_key);
+        selected_key = &decrypt_key;
     } else {
-        paes_state = NULL;
+        selected_key = NULL;
     }
 
     fs_net_set_base_url(fs, base_url_id, url, user, password,
-                        paes_state);
+                        selected_key);
     return 0;
  fail:
     return -P9_EINVAL;

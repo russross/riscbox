@@ -1123,6 +1123,11 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
                 case 2: /* lr.w */                                      \
                     if (rs2 != 0)                                       \
                         goto illegal_insn;                              \
+                    if (addr & ((size / 8) - 1)) {                      \
+                        s->pending_exception = CAUSE_MISALIGNED_LOAD;   \
+                        s->pending_tval = addr;                          \
+                        goto mmu_exception;                             \
+                    }                                                   \
                     if (target_read_u ## size(s, &rval, addr))          \
                         goto mmu_exception;                             \
                     val = (int## size ## _t)rval;                       \
@@ -1130,6 +1135,11 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
                     s->load_res_valid = TRUE;                           \
                     break;                                              \
                 case 3: /* sc.w */                                      \
+                    if (addr & ((size / 8) - 1)) {                      \
+                        s->pending_exception = CAUSE_MISALIGNED_STORE;  \
+                        s->pending_tval = addr;                          \
+                        goto mmu_exception;                             \
+                    }                                                   \
                     if (s->load_res_valid && s->load_res == addr) {     \
                         if (target_write_u ## size(s, addr, s->reg[rs2])) \
                             goto mmu_exception;                         \

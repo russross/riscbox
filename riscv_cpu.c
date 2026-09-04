@@ -622,6 +622,20 @@ static void set_mstatus(RISCVCPUState *s, target_ulong val)
     s->mstatus = (s->mstatus & ~mask) | (val & mask);
 }
 
+static BOOL counter_access_enabled(RISCVCPUState *s, uint32_t counter_index)
+{
+    uint32_t mask;
+
+    if (s->priv == PRV_M)
+        return TRUE;
+    mask = 1 << counter_index;
+    if (!(s->mcounteren & mask))
+        return FALSE;
+    if (s->priv == PRV_U && !(s->scounteren & mask))
+        return FALSE;
+    return TRUE;
+}
+
 /* return -1 if invalid CSR. 0 if OK. 'will_write' indicate that the
    csr will be written after (used for CSR access check) */
 static int csr_read(RISCVCPUState *s, target_ulong *pval, uint32_t csr,
@@ -655,31 +669,13 @@ static int csr_read(RISCVCPUState *s, target_ulong *pval, uint32_t csr,
         break;
 #endif
     case 0xc00: /* ucycle */
-        {
-            uint32_t counteren;
-            if (s->priv < PRV_M) {
-                if (s->priv < PRV_S)
-                    counteren = s->scounteren;
-                else
-                    counteren = s->mcounteren;
-                if (((counteren >> (csr & 0x1f)) & 1) == 0)
-                    goto invalid_csr;
-            }
-        }
+        if (!counter_access_enabled(s, csr & 0x1f))
+            goto invalid_csr;
         val = (int64_t)s->cycle_counter;
         break;
     case 0xc02: /* uinstret */
-        {
-            uint32_t counteren;
-            if (s->priv < PRV_M) {
-                if (s->priv < PRV_S)
-                    counteren = s->scounteren;
-                else
-                    counteren = s->mcounteren;
-                if (((counteren >> (csr & 0x1f)) & 1) == 0)
-                    goto invalid_csr;
-            }
-        }
+        if (!counter_access_enabled(s, csr & 0x1f))
+            goto invalid_csr;
         val = (int64_t)s->minstret_counter;
         break;
     case 0x100:

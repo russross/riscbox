@@ -61,18 +61,20 @@ typedef struct RISCVMachine {
     int virtio_count;
 } RISCVMachine;
 
+/* Memory map following the QEMU 'virt' platform (hw/riscv/virt.c).
+   HTIF and the framebuffer are not part of the virt spec; they live in
+   the VIRT_PLATFORM_BUS expansion window (0x4000000-0x5ffffff). */
 #define LOW_RAM_SIZE   0x00010000 /* 64KB */
-#define RAM_BASE_ADDR  0x80000000
-#define CLINT_BASE_ADDR 0x02000000
-#define CLINT_SIZE      0x000c0000
-#define HTIF_BASE_ADDR 0x40008000
-#define IDE_BASE_ADDR  0x40009000
-#define VIRTIO_BASE_ADDR 0x40010000
+#define RAM_BASE_ADDR  0x80000000 /* VIRT_DRAM */
+#define CLINT_BASE_ADDR 0x02000000 /* VIRT_CLINT */
+#define CLINT_SIZE      0x00010000
+#define HTIF_BASE_ADDR 0x04000000
+#define VIRTIO_BASE_ADDR 0x10001000 /* VIRT_VIRTIO */
 #define VIRTIO_SIZE      0x1000
 #define VIRTIO_IRQ       1
-#define PLIC_BASE_ADDR 0x40100000
-#define PLIC_SIZE      0x00400000
-#define FRAMEBUFFER_BASE_ADDR 0x41000000
+#define PLIC_BASE_ADDR 0x0c000000 /* VIRT_PLIC */
+#define PLIC_SIZE      0x04000000
+#define FRAMEBUFFER_BASE_ADDR 0x04100000
 
 #define RTC_FREQ 10000000
 #define RTC_FREQ_DIV 16 /* arbitrary, relative to CPU freq to have a

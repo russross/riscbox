@@ -29,7 +29,8 @@ UART16550State *uart16550_init(PhysMemoryMap *map, uint64_t base_addr,
                                void *tx_opaque);
 BOOL uart16550_can_receive(UART16550State *s);
 
-/* Feed host input bytes into the receive FIFO. Drops on overflow. */
-void uart16550_receive(UART16550State *s, const uint8_t *buf, int len);
+/* Feed host input bytes into the receive FIFO. Returns the number of
+   bytes stored; the caller routes the remainder elsewhere. */
+int uart16550_receive(UART16550State *s, const uint8_t *buf, int len);
 
 #endif /* UART16550_H */

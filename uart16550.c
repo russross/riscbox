@@ -249,10 +249,11 @@ BOOL uart16550_can_receive(UART16550State *s)
     return s->rx_count < UART_RX_DEPTH;
 }
 
-void uart16550_receive(UART16550State *s, const uint8_t *buf, int len)
+int uart16550_receive(UART16550State *s, const uint8_t *buf, int len)
 {
     int i;
 
-    for (i = 0; i < len; i++)
+    for (i = 0; i < len && s->rx_count < UART_RX_DEPTH; i++)
         uart16550_push_rx(s, buf[i]);
+    return i;
 }

@@ -58,7 +58,7 @@ endif
 all: $(PROGS)
 
 EMU_OBJS:=virtio.o pci.o fs.o cutils.o iomem.o simplefb.o \
-    json.o machine.o temu.o
+    json.o machine.o temu.o uart16550.o
 
 ifdef CONFIG_SLIRP
 CFLAGS+=-DCONFIG_SLIRP

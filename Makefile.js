@@ -35,7 +35,7 @@ PROGS=js/riscvemu64.js js/riscvemu64-wasm.js
 all: $(PROGS)
 
 JS_OBJS=jsemu.js.o softfp.js.o virtio.js.o fs.js.o fs_net.js.o fs_wget.js.o fs_utils.js.o simplefb.js.o pci.js.o json.js.o block_net.js.o
-JS_OBJS+=iomem.js.o cutils.js.o aes.js.o sha256.js.o
+JS_OBJS+=iomem.js.o cutils.js.o aes.js.o sha256.js.o uart16550.js.o
 
 RISCVEMU64_OBJS=$(JS_OBJS) riscv_cpu64.js.o riscv_machine.js.o machine.js.o
 

@@ -756,6 +756,12 @@ static int csr_read(RISCVCPUState *s, target_ulong *pval, uint32_t csr,
     case 0xb02: /* minstret */
         val = (int64_t)s->minstret_counter;
         break;
+    case 0xf11: /* mvendorid: not implemented */
+    case 0xf12: /* marchid: not implemented */
+    case 0xf13: /* mimpid: not implemented */
+    case 0xf15: /* mconfigptr: no configuration string */
+        val = 0;
+        break;
     case 0xf14:
         val = s->mhartid;
         break;

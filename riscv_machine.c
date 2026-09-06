@@ -35,6 +35,7 @@
 #include "cutils.h"
 #include "iomem.h"
 #include "riscv_cpu.h"
+#include "uart16550.h"
 #include "virtio.h"
 #include "machine.h"
 
@@ -58,6 +59,8 @@ typedef struct RISCVMachine {
     VIRTIODevice *keyboard_dev;
     VIRTIODevice *mouse_dev;
 
+    UART16550State *uart_dev;
+
     int virtio_count;
 } RISCVMachine;
 
@@ -74,7 +77,20 @@ typedef struct RISCVMachine {
 #define VIRTIO_IRQ       1
 #define PLIC_BASE_ADDR 0x0c000000 /* VIRT_PLIC */
 #define PLIC_SIZE      0x04000000
+#define UART_BASE_ADDR 0x10000000 /* VIRT_UART0 */
+#define UART_SIZE      0x100
+#define UART_IRQ       10
+#define UART_CLOCK     3686400
 #define FRAMEBUFFER_BASE_ADDR 0x04100000
+
+/* UART_IRQ is reserved: map the n-th virtio device to its PLIC IRQ. */
+static int virtio_irq_num(int index)
+{
+    int irq_num = VIRTIO_IRQ + index;
+    if (irq_num >= UART_IRQ)
+        irq_num++;
+    return irq_num;
+}
 
 #define RTC_FREQ 10000000
 #define RTC_FREQ_DIV 16 /* arbitrary, relative to CPU freq to have a
@@ -314,11 +330,18 @@ static void plic_set_irq(void *opaque, int irq_num, int state)
     uint32_t mask;
 
     mask = 1 << (irq_num - 1);
-    if (state) 
+    if (state)
         s->plic_pending_irq |= mask;
     else
         s->plic_pending_irq &= ~mask;
     plic_update_mip(s);
+}
+
+static void uart_tx_func(void *opaque, const uint8_t *buf, int len)
+{
+    RISCVMachine *s = opaque;
+
+    s->common.console->write_data(s->common.console->opaque, buf, len);
 }
 
 static uint8_t *get_ram_ptr(RISCVMachine *s, uint64_t paddr, BOOL is_rw)
@@ -721,14 +744,23 @@ static int riscv_build_fdt(RISCVMachine *m, uint8_t *dst,
     fdt_prop_u32(s, "phandle", plic_phandle);
 
     fdt_end_node(s); /* plic */
-    
+
+    fdt_begin_node_num(s, "serial", UART_BASE_ADDR);
+    fdt_prop_str(s, "compatible", "ns16550a");
+    fdt_prop_tab_u64_2(s, "reg", UART_BASE_ADDR, UART_SIZE);
+    tab[0] = plic_phandle;
+    tab[1] = UART_IRQ;
+    fdt_prop_tab_u32(s, "interrupts-extended", tab, 2);
+    fdt_prop_u32(s, "clock-frequency", UART_CLOCK);
+    fdt_end_node(s); /* serial */
+
     for(i = 0; i < m->virtio_count; i++) {
         fdt_begin_node_num(s, "virtio", VIRTIO_BASE_ADDR + i * VIRTIO_SIZE);
         fdt_prop_str(s, "compatible", "virtio,mmio");
         fdt_prop_tab_u64_2(s, "reg", VIRTIO_BASE_ADDR + i * VIRTIO_SIZE,
                            VIRTIO_SIZE);
         tab[0] = plic_phandle;
-        tab[1] = VIRTIO_IRQ + i;
+        tab[1] = virtio_irq_num(i);
         fdt_prop_tab_u32(s, "interrupts-extended", tab, 2);
         fdt_end_node(s); /* virtio */
     }
@@ -749,6 +781,7 @@ static int riscv_build_fdt(RISCVMachine *m, uint8_t *dst,
 
     fdt_begin_node(s, "chosen");
     fdt_prop_str(s, "bootargs", cmd_line ? cmd_line : "");
+    fdt_prop_str(s, "stdout-path", "/soc/serial@10000000");
     if (kernel_size > 0) {
         fdt_prop_tab_u64(s, "riscv,kernel-start", kernel_start);
         fdt_prop_tab_u64(s, "riscv,kernel-end", kernel_start + kernel_size);
@@ -848,7 +881,7 @@ static VirtMachine *riscv_machine_init(const VirtMachineParams *p)
 {
     RISCVMachine *s;
     VIRTIODevice *blk_dev;
-    int irq_num, i, ram_flags;
+    int i, ram_flags;
     VIRTIOBusDef vbus_s, *vbus = &vbus_s;
 
 
@@ -893,50 +926,49 @@ static VirtMachine *riscv_machine_init(const VirtMachineParams *p)
                         s, htif_read, htif_write, DEVIO_SIZE32);
     s->common.console = p->console;
 
+    s->uart_dev = uart16550_init(s->mem_map, UART_BASE_ADDR,
+                                 &s->plic_irq[UART_IRQ],
+                                 uart_tx_func, s);
+
     memset(vbus, 0, sizeof(*vbus));
     vbus->mem_map = s->mem_map;
     vbus->addr = VIRTIO_BASE_ADDR;
-    irq_num = VIRTIO_IRQ;
-    
+
     /* virtio console */
     if (p->console) {
-        vbus->irq = &s->plic_irq[irq_num];
+        vbus->irq = &s->plic_irq[virtio_irq_num(s->virtio_count)];
         s->common.console_dev = virtio_console_init(vbus, p->console);
         vbus->addr += VIRTIO_SIZE;
-        irq_num++;
         s->virtio_count++;
     }
     
     /* virtio net device */
     for(i = 0; i < p->eth_count; i++) {
-        vbus->irq = &s->plic_irq[irq_num];
+        vbus->irq = &s->plic_irq[virtio_irq_num(s->virtio_count)];
         virtio_net_init(vbus, p->tab_eth[i].net);
         s->common.net = p->tab_eth[i].net;
         vbus->addr += VIRTIO_SIZE;
-        irq_num++;
         s->virtio_count++;
     }
 
     /* virtio block device */
     for(i = 0; i < p->drive_count; i++) {
-        vbus->irq = &s->plic_irq[irq_num];
+        vbus->irq = &s->plic_irq[virtio_irq_num(s->virtio_count)];
         blk_dev = virtio_block_init(vbus, p->tab_drive[i].block_dev);
         (void)blk_dev;
         vbus->addr += VIRTIO_SIZE;
-        irq_num++;
         s->virtio_count++;
     }
 
     /* virtio filesystem */
     for(i = 0; i < p->fs_count; i++) {
         VIRTIODevice *fs_dev;
-        vbus->irq = &s->plic_irq[irq_num];
+        vbus->irq = &s->plic_irq[virtio_irq_num(s->virtio_count)];
         fs_dev = virtio_9p_init(vbus, p->tab_fs[i].fs_dev,
                                 p->tab_fs[i].tag);
         (void)fs_dev;
         //        virtio_set_debug(fs_dev, VIRTIO_DEBUG_9P);
         vbus->addr += VIRTIO_SIZE;
-        irq_num++;
         s->virtio_count++;
     }
 
@@ -958,18 +990,16 @@ static VirtMachine *riscv_machine_init(const VirtMachineParams *p)
 
     if (p->input_device) {
         if (!strcmp(p->input_device, "virtio")) {
-            vbus->irq = &s->plic_irq[irq_num];
+            vbus->irq = &s->plic_irq[virtio_irq_num(s->virtio_count)];
             s->keyboard_dev = virtio_input_init(vbus,
                                                 VIRTIO_INPUT_TYPE_KEYBOARD);
             vbus->addr += VIRTIO_SIZE;
-            irq_num++;
             s->virtio_count++;
 
-            vbus->irq = &s->plic_irq[irq_num];
+            vbus->irq = &s->plic_irq[virtio_irq_num(s->virtio_count)];
             s->mouse_dev = virtio_input_init(vbus,
                                              VIRTIO_INPUT_TYPE_TABLET);
             vbus->addr += VIRTIO_SIZE;
-            irq_num++;
             s->virtio_count++;
         } else {
             vm_error("unsupported input device: %s\n", p->input_device);

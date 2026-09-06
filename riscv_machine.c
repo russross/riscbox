@@ -670,11 +670,28 @@ static int riscv_build_fdt(RISCVMachine *m, uint8_t *dst,
     strcpy(isa_string, "rv64");
     q = isa_string + 4;
     for(i = 0; i < 26; i++) {
+        if (i == 'S' - 'A' || i == 'U' - 'A')
+            continue; /* privilege modes are not ISA extensions */
         if (misa & (1 << i))
             *q++ = 'a' + i;
     }
     *q = '\0';
     fdt_prop_str(s, "riscv,isa", isa_string);
+
+    /* Modern kernels enumerate extensions from riscv,isa-extensions. */
+    {
+        static const char ext_letters[] = "imafdc";
+        char ext_list[sizeof(ext_letters) * 2];
+        char *r = ext_list;
+        size_t j;
+        for(j = 0; j < sizeof(ext_letters) - 1; j++) {
+            if (misa & (1 << (ext_letters[j] - 'a'))) {
+                *r++ = ext_letters[j];
+                *r++ = '\0';
+            }
+        }
+        fdt_prop(s, "riscv,isa-extensions", ext_list, r - ext_list);
+    }
     
     fdt_prop_str(s, "mmu-type", "riscv,sv39");
     fdt_prop_u32(s, "clock-frequency", 2000000000);

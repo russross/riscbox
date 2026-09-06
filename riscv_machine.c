@@ -490,6 +490,22 @@ static void fdt_prop_tab_u64_2(FDTState *s, const char *prop_name,
     fdt_prop_tab_u32(s, prop_name, tab, 4);
 }
 
+static void fdt_prop_tab_u64_4(FDTState *s, const char *prop_name,
+                               uint64_t v0, uint64_t v1,
+                               uint64_t v2, uint64_t v3)
+{
+    uint32_t tab[8];
+    tab[0] = v0 >> 32;
+    tab[1] = v0;
+    tab[2] = v1 >> 32;
+    tab[3] = v1;
+    tab[4] = v2 >> 32;
+    tab[5] = v2;
+    tab[6] = v3 >> 32;
+    tab[7] = v3;
+    fdt_prop_tab_u32(s, prop_name, tab, 8);
+}
+
 static void fdt_prop_str(FDTState *s, const char *prop_name,
                          const char *str)
 {
@@ -664,6 +680,8 @@ static int riscv_build_fdt(RISCVMachine *m, uint8_t *dst,
 
     fdt_begin_node(s, "htif");
     fdt_prop_str(s, "compatible", "ucb,htif0");
+    /* OpenSBI binds reg[0] as fromhost and reg[1] as tohost */
+    fdt_prop_tab_u64_4(s, "reg", HTIF_BASE_ADDR + 8, 8, HTIF_BASE_ADDR, 8);
     fdt_end_node(s); /* htif */
 
     fdt_begin_node(s, "soc");

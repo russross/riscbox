@@ -534,6 +534,12 @@ static EthernetDevice *slirp_open(void)
 #define MAX_EXEC_CYCLE 500000
 #define MAX_SLEEP_TIME 10 /* in ms */
 
+/* Staged serial input: host bytes that did not fit into the UART
+   receive FIFO. Delivered as the guest reads. */
+#define SERIAL_PENDING_SIZE 128
+static uint8_t serial_pending_buf[SERIAL_PENDING_SIZE];
+static int serial_pending_len;
+
 void virt_machine_run(VirtMachine *m)
 {
     fd_set rfds, wfds, efds;
@@ -585,8 +591,11 @@ void virt_machine_run(VirtMachine *m)
             int ret, len, n;
             ret = m->console->read_data(m->console->opaque, buf, sizeof(buf));
             if (ret > 0) {
-                /* serial console first, overflow to virtio console */
-                n = vm_serial_receive(m, buf, ret);
+                /* stage for the serial console first */
+                n = min_int(ret, SERIAL_PENDING_SIZE - serial_pending_len);
+                memcpy(serial_pending_buf + serial_pending_len, buf, n);
+                serial_pending_len += n;
+                /* flood overflow keeps the old virtio fallback */
                 if (n < ret && m->console_dev) {
                     len = virtio_console_get_write_len(m->console_dev);
                     len = min_int(len, ret - n);
@@ -595,6 +604,16 @@ void virt_machine_run(VirtMachine *m)
                                                   buf + n, len);
                     }
                 }
+            }
+        }
+        /* deliver staged bytes to the serial console */
+        if (serial_pending_len > 0) {
+            int n = vm_serial_receive(m, serial_pending_buf,
+                                      serial_pending_len);
+            if (n > 0) {
+                memmove(serial_pending_buf, serial_pending_buf + n,
+                        serial_pending_len - n);
+                serial_pending_len -= n;
             }
         }
 #endif

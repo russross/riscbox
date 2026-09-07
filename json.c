@@ -269,6 +269,7 @@ void json_free(JSONValue val)
             for(i = 0; i < array->len; i++) {
                 json_free(array->tab[i]);
             }
+            free(array->tab);
             free(array);
         }
         break;
@@ -283,6 +284,7 @@ void json_free(JSONValue val)
                 json_free(f->name);
                 json_free(f->value);
             }
+            free(obj->props);
             free(obj);
         }
         break;
@@ -365,33 +367,48 @@ JSONValue json_parse_value2(const char **pp)
             }
             if (*p == '"') {
                 tag = parse_string(&p);
-                if (json_is_error(tag))
+                if (json_is_error(tag)) {
+                    json_free(val);
                     return tag;
+                }
             } else if (is_ident_first(*p)) {
-                if (parse_ident(buf, sizeof(buf), &p) < 0)
-                    goto invalid_prop;
+                if (parse_ident(buf, sizeof(buf), &p) < 0) {
+                    json_free(val);
+                    return json_error_new("Invalid property name");
+                }
                 tag = json_string_new(buf);
             } else {
-                goto invalid_prop;
+                json_free(val);
+                return json_error_new("Invalid property name");
             }
             //            printf("property: %s\n", json_get_str(tag));
             if (tag.u.str->len == 0) {
-            invalid_prop:
+                json_free(tag);
+                json_free(val);
                 return json_error_new("Invalid property name");
             }
             skip_spaces(&p);
             if (*p != ':') {
+                json_free(tag);
+                json_free(val);
                 return json_error_new("':' expected");
             }
             p++;
             
             val1 = json_parse_value2(&p);
+            if (json_is_error(val1)) {
+                json_free(tag);
+                json_free(val);
+                return val1;
+            }
             json_object_set(val, tag.u.str->data, val1);
+            json_free(tag);
 
             skip_spaces(&p);
             if (*p == ',') {
                 p++;
             } else if (*p != '}') {
+                json_free(val);
                 return json_error_new("expecting ',' or '}'");
             }
         }
@@ -408,18 +425,23 @@ JSONValue json_parse_value2(const char **pp)
                 break;
             }
             val1 = json_parse_value2(&p);
+            if (json_is_error(val1)) {
+                json_free(val);
+                return val1;
+            }
             json_array_set(val, idx++, val1);
 
             skip_spaces(&p);
             if (*p == ',') {
                 p++;
             } else if (*p != ']') {
+                json_free(val);
                 return json_error_new("expecting ',' or ']'");
             }
         }
     } else if (is_ident_first(*p)) {
         if (parse_ident(buf, sizeof(buf), &p) < 0)
-            goto unknown_id;
+            return json_error_new("identifier too long");
         if (!strcmp(buf, "null")) {
             val = json_null_new();
         } else if (!strcmp(buf, "true")) {
@@ -427,7 +449,6 @@ JSONValue json_parse_value2(const char **pp)
         } else if (!strcmp(buf, "false")) {
             val = json_bool_new(FALSE);
         } else {
-        unknown_id:
             return json_error_new("unknown identifier: '%s'", buf);
         }
     } else {

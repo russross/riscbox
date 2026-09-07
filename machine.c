@@ -192,11 +192,10 @@ static int virt_machine_parse_config(VirtMachineParams *p,
     if (version != VM_CONFIG_VERSION) {
         if (version > VM_CONFIG_VERSION) {
             vm_error("The emulator is too old to run this VM: please upgrade\n");
-            return -1;
         } else {
             vm_error("The VM configuration file is too old for this emulator version: please upgrade the VM configuration file\n");
-            return -1;
         }
+        goto tag_fail;
     }
     
     if (vm_get_str(cfg, "machine", &str) < 0)
@@ -266,7 +265,7 @@ static int virt_machine_parse_config(VirtMachineParams *p,
             break;
         if (p->drive_count >= MAX_DRIVE_DEVICE) {
             vm_error("Too many drives\n");
-            return -1;
+            goto tag_fail;
         }
         if (vm_get_str(obj, "file", &str) < 0)
             goto tag_fail;
@@ -284,7 +283,7 @@ static int virt_machine_parse_config(VirtMachineParams *p,
             break;
         if (p->fs_count >= MAX_DRIVE_DEVICE) {
             vm_error("Too many filesystems\n");
-            return -1;
+            goto tag_fail;
         }
         if (vm_get_str(obj, "file", &str) < 0)
             goto tag_fail;
@@ -309,7 +308,7 @@ static int virt_machine_parse_config(VirtMachineParams *p,
             break;
         if (p->eth_count >= MAX_ETH_DEVICE) {
             vm_error("Too many ethernet interfaces\n");
-            return -1;
+            goto tag_fail;
         }
         if (vm_get_str(obj, "driver", &str) < 0)
             goto tag_fail;

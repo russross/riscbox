@@ -178,7 +178,7 @@ PHYS_MEM_READ_WRITE(64, uint64_t)
 
 #define SV39_LEVELS 3
 #define SV39_VPN_BITS 9
-#define SV39_VADDR_SHIFT (64 - (PG_SHIFT + SV39_LEVELS * SV39_VPN_BITS))
+#define SV39_VADDR_BITS (PG_SHIFT + SV39_LEVELS * SV39_VPN_BITS)
 
 #define ACCESS_READ  0
 #define ACCESS_WRITE 1
@@ -192,7 +192,7 @@ static int get_phys_addr(RISCVCPUState *s,
 {
     int pte_idx, xwr, priv;
     int need_write, vaddr_shift, i;
-    target_ulong pte_addr, pte, vaddr_mask, paddr;
+    target_ulong pte_addr, pte, vaddr_mask, paddr, vaddr_high;
 
     if ((s->mstatus & MSTATUS_MPRV) && access != ACCESS_CODE) {
         /* use previous priviledge */
@@ -211,8 +211,9 @@ static int get_phys_addr(RISCVCPUState *s,
         return 0;
     }
 
-    if ((target_ulong)(((target_long)vaddr << SV39_VADDR_SHIFT) >>
-                       SV39_VADDR_SHIFT) != vaddr)
+    vaddr_high = vaddr >> (SV39_VADDR_BITS - 1);
+    if (vaddr_high != 0 &&
+        vaddr_high != (target_ulong)-1 >> (SV39_VADDR_BITS - 1))
         return -1;
 
     pte_addr = (s->satp & SATP_PPN_MASK) << PG_SHIFT;
@@ -1119,9 +1120,10 @@ static __exception int raise_interrupt(RISCVCPUState *s)
 static inline int32_t sext(int32_t val, int n)
 {
     uint32_t sign_mask = (uint32_t)1 << (n - 1);
+    uint32_t uval = val;
 
-    return (int32_t)((uint32_t)val & (sign_mask - 1)) -
-        (int32_t)((uint32_t)val & sign_mask);
+    return (int32_t)((int64_t)(uval & (sign_mask - 1)) -
+                     (int64_t)(uval & sign_mask));
 }
 
 static inline uint32_t get_field1(uint32_t val, int src_pos, 

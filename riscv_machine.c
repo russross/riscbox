@@ -611,9 +611,8 @@ static int fdt_output_size(FDTState *s)
 {
     int pos;
 
-    pos = sizeof(struct fdt_header) + s->tab_len * sizeof(uint32_t);
-    pos = (pos + 7) & ~7;
-    pos += sizeof(struct fdt_reserve_entry) + s->string_table_len;
+    pos = sizeof(struct fdt_header) + sizeof(struct fdt_reserve_entry);
+    pos += s->tab_len * sizeof(uint32_t) + s->string_table_len;
     return (pos + 7) & ~7;
 }
 
@@ -641,19 +640,15 @@ static int fdt_output(FDTState *s, uint8_t *dst)
 
     pos = sizeof(struct fdt_header);
 
-    h->off_dt_struct = cpu_to_be32(pos);
-    memcpy(dst + pos, s->tab, dt_struct_size);
-    pos += dt_struct_size;
-
-    /* align to 8 */
-    while ((pos & 7) != 0) {
-        dst[pos++] = 0;
-    }
     h->off_mem_rsvmap = cpu_to_be32(pos);
     re = (struct fdt_reserve_entry *)(dst + pos);
     re->address = 0; /* no reserved entry */
     re->size = 0;
     pos += sizeof(struct fdt_reserve_entry);
+
+    h->off_dt_struct = cpu_to_be32(pos);
+    memcpy(dst + pos, s->tab, dt_struct_size);
+    pos += dt_struct_size;
 
     h->off_dt_strings = cpu_to_be32(pos);
     memcpy(dst + pos, s->string_table, dt_strings_size);

@@ -56,7 +56,7 @@ static inline intx_t glue(div, XLEN)(intx_t a, intx_t b)
 {
     if (b == 0) {
         return -1;
-    } else if (a == ((intx_t)1 << (XLEN - 1)) && b == -1) {
+    } else if (a == (intx_t)((uintx_t)1 << (XLEN - 1)) && b == -1) {
         return a;
     } else {
         return a / b;
@@ -76,7 +76,7 @@ static inline intx_t glue(rem, XLEN)(intx_t a, intx_t b)
 {
     if (b == 0) {
         return a;
-    } else if (a == ((intx_t)1 << (XLEN - 1)) && b == -1) {
+    } else if (a == (intx_t)((uintx_t)1 << (XLEN - 1)) && b == -1) {
         return 0;
     } else {
         return a % b;
@@ -863,7 +863,7 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
                 funct3 = (insn >> 12) & 7;
                 switch(funct3) {
                 case 0: /* mul */
-                    val = (intx_t)((intx_t)val * (intx_t)val2);
+                    val = (uintx_t)val * (uintx_t)val2;
                     break;
                 case 1: /* mulh */
                     val = (intx_t)glue(mulh, XLEN)(val, val2);

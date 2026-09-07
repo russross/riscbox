@@ -28,10 +28,6 @@
 #ifdef USE_BUILTIN_CRYPTO
 #include "aes.h"
 #endif
-#ifdef _WIN32
-#include <winsock2.h>
-#endif
-
 #define LOG() printf("%s:%d\n", __func__, __LINE__)
 
 /* XHR */

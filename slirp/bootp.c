@@ -203,8 +203,7 @@ static void bootp_reply(Slirp *slirp, const struct bootp_t *bp)
     } else {
         bc = find_addr(slirp, &daddr.sin_addr, bp->bp_hwaddr);
         if (!bc) {
-            /* if never assigned, behaves as if it was already
-               assigned (windows fix because it remembers its address) */
+            /* If never assigned, behave as if the client retained its address. */
             goto new_addr;
         }
     }

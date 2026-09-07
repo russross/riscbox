@@ -84,15 +84,6 @@ static void sdl_update(FBDevice *fb_dev, void *opaque,
     SDL_UpdateRect(screen, r.x, r.y, r.w, r.h);
 }
 
-#if defined(_WIN32)
-
-static int sdl_get_keycode(const SDL_KeyboardEvent *ev)
-{
-    return ev->keysym.scancode;
-}
-
-#else
-
 /* we assume Xorg is used with a PC keyboard. Return 0 if no keycode found. */
 static int sdl_get_keycode(const SDL_KeyboardEvent *ev)
 {
@@ -107,8 +98,6 @@ static int sdl_get_keycode(const SDL_KeyboardEvent *ev)
     }
     return keycode;
 }
-
-#endif
 
 /* release all pressed keys */
 static void sdl_reset_keys(VirtMachine *m)
@@ -272,4 +261,3 @@ void sdl_init(int width, int height)
 
     sdl_hide_cursor();
 }
-

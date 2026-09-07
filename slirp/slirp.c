@@ -43,60 +43,6 @@ static int do_slowtimo;
 static struct in_addr dns_addr;
 static u_int dns_addr_time;
 
-#ifdef _WIN32
-
-int get_dns_addr(struct in_addr *pdns_addr)
-{
-    FIXED_INFO *FixedInfo=NULL;
-    ULONG    BufLen;
-    DWORD    ret;
-    IP_ADDR_STRING *pIPAddr;
-    struct in_addr tmp_addr;
-
-    if (dns_addr.s_addr != 0 && (curtime - dns_addr_time) < 1000) {
-        *pdns_addr = dns_addr;
-        return 0;
-    }
-
-    FixedInfo = (FIXED_INFO *)GlobalAlloc(GPTR, sizeof(FIXED_INFO));
-    BufLen = sizeof(FIXED_INFO);
-
-    if (ERROR_BUFFER_OVERFLOW == GetNetworkParams(FixedInfo, &BufLen)) {
-        if (FixedInfo) {
-            GlobalFree(FixedInfo);
-            FixedInfo = NULL;
-        }
-        FixedInfo = GlobalAlloc(GPTR, BufLen);
-    }
-
-    if ((ret = GetNetworkParams(FixedInfo, &BufLen)) != ERROR_SUCCESS) {
-        printf("GetNetworkParams failed. ret = %08x\n", (u_int)ret );
-        if (FixedInfo) {
-            GlobalFree(FixedInfo);
-            FixedInfo = NULL;
-        }
-        return -1;
-    }
-
-    pIPAddr = &(FixedInfo->DnsServerList);
-    inet_aton(pIPAddr->IpAddress.String, &tmp_addr);
-    *pdns_addr = tmp_addr;
-    dns_addr = tmp_addr;
-    dns_addr_time = curtime;
-    if (FixedInfo) {
-        GlobalFree(FixedInfo);
-        FixedInfo = NULL;
-    }
-    return 0;
-}
-
-static void winsock_cleanup(void)
-{
-    WSACleanup();
-}
-
-#else
-
 static struct stat dns_addr_stat;
 
 int get_dns_addr(struct in_addr *pdns_addr)
@@ -164,24 +110,14 @@ int get_dns_addr(struct in_addr *pdns_addr)
     return 0;
 }
 
-#endif
-
 static void slirp_init_once(void)
 {
     static int initialized;
-#ifdef _WIN32
-    WSADATA Data;
-#endif
 
     if (initialized) {
         return;
     }
     initialized = 1;
-
-#ifdef _WIN32
-    WSAStartup(MAKEWORD(2,0), &Data);
-    atexit(winsock_cleanup);
-#endif
 
     loopback_addr.s_addr = htonl(INADDR_LOOPBACK);
 }

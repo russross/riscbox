@@ -27,20 +27,11 @@
 CONFIG_FS_NET=y
 # SDL support (optional)
 CONFIG_SDL=y
-# win32 build (not usable yet)
-#CONFIG_WIN32=y
 # user space network redirector
 CONFIG_SLIRP=y
 
-ifdef CONFIG_WIN32
-CROSS_PREFIX=i686-w64-mingw32-
-EXE=.exe
-else
-CROSS_PREFIX=
-EXE=
-endif
-CC=$(CROSS_PREFIX)gcc
-STRIP=$(CROSS_PREFIX)strip
+CC=clang
+STRIP=strip
 CFLAGS=-O2 -Wall -g -D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE -MMD
 CFLAGS+=-D_GNU_SOURCE -DCONFIG_VERSION=\"$(shell cat VERSION)\"
 LDFLAGS=
@@ -48,11 +39,9 @@ LDFLAGS=
 bindir=/usr/local/bin
 INSTALL=install
 
-PROGS+= temu$(EXE)
-ifndef CONFIG_WIN32
+PROGS+= temu
 ifdef CONFIG_FS_NET
 PROGS+=build_filelist splitimg
-endif
 endif
 
 all: $(PROGS)
@@ -65,29 +54,21 @@ CFLAGS+=-DCONFIG_SLIRP
 EMU_OBJS+=$(addprefix slirp/, bootp.o ip_icmp.o mbuf.o slirp.o tcp_output.o cksum.o ip_input.o misc.o socket.o tcp_subr.o udp.o if.o ip_output.o sbuf.o tcp_input.o tcp_timer.o)
 endif
 
-ifndef CONFIG_WIN32
 EMU_OBJS+=fs_disk.o
 EMU_LIBS=-lrt
-endif
 ifdef CONFIG_FS_NET
 CFLAGS+=-DCONFIG_FS_NET
 EMU_OBJS+=fs_net.o fs_wget.o fs_utils.o block_net.o
 EMU_LIBS+=-lcurl -lcrypto
-ifdef CONFIG_WIN32
-EMU_LIBS+=-lwsock32
-endif # CONFIG_WIN32
 endif # CONFIG_FS_NET
 ifdef CONFIG_SDL
 EMU_LIBS+=-lSDL
 EMU_OBJS+=sdl.o
 CFLAGS+=-DCONFIG_SDL
-ifdef CONFIG_WIN32
-LDFLAGS+=-mwindows
-endif
 endif
 
 EMU_OBJS+=riscv_machine.o softfp.o riscv_cpu64.o
-temu$(EXE): $(EMU_OBJS)
+temu: $(EMU_OBJS)
 	$(CC) $(LDFLAGS) -o $@ $^ $(EMU_LIBS)
 
 riscv_cpu64.o: riscv_cpu.c

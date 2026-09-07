@@ -5,29 +5,10 @@
 #include "../cutils.h"
 #include "slirp_config.h"
 
-#ifdef _WIN32
-# include <inttypes.h>
-
-typedef char *caddr_t;
-
-# include <windows.h>
-# include <winsock2.h>
-# include <ws2tcpip.h>
-# include <sys/timeb.h>
-# include <iphlpapi.h>
-
-# define EWOULDBLOCK WSAEWOULDBLOCK
-# define EINPROGRESS WSAEINPROGRESS
-# define ENOTCONN WSAENOTCONN
-# define EHOSTUNREACH WSAEHOSTUNREACH
-# define ENETUNREACH WSAENETUNREACH
-# define ECONNREFUSED WSAECONNREFUSED
-#else
-# define ioctlsocket ioctl
-# define closesocket(s) close(s)
-# if !defined(__HAIKU__)
-#  define O_BINARY 0
-# endif
+#define ioctlsocket ioctl
+#define closesocket(s) close(s)
+#if !defined(__HAIKU__)
+#define O_BINARY 0
 #endif
 
 #include <sys/types.h>
@@ -69,14 +50,10 @@ typedef char *caddr_t;
 # include <strings.h>
 #endif
 
-#ifndef _WIN32
 #include <sys/uio.h>
-#endif
 
-#ifndef _WIN32
 #include <netinet/in.h>
 #include <arpa/inet.h>
-#endif
 
 /* Systems lacking strdup() definition in <string.h>. */
 #if defined(ultrix)
@@ -101,9 +78,7 @@ int inet_aton(const char *cp, struct in_addr *ia);
 #ifdef HAVE_SYS_SIGNAL_H
 # include <sys/signal.h>
 #endif
-#ifndef _WIN32
 #include <sys/socket.h>
-#endif
 
 #if defined(HAVE_SYS_IOCTL_H)
 # include <sys/ioctl.h>
@@ -244,9 +219,7 @@ void if_start(struct ttys *);
 
 void lprint(const char *, ...) __attribute__((format(printf, 1, 2)));
 
-#ifndef _WIN32
 #include <netdb.h>
-#endif
 
 #define DEFAULT_BAUD 115200
 
@@ -300,14 +273,7 @@ struct tcpcb *tcp_drop(struct tcpcb *tp, int err);
 #define MAX_MRU 16384
 #endif
 
-#ifndef _WIN32
 #define min(x,y) ((x) < (y) ? (x) : (y))
 #define max(x,y) ((x) > (y) ? (x) : (y))
-#endif
-
-#ifdef _WIN32
-#undef errno
-#define errno (WSAGetLastError())
-#endif
 
 #endif

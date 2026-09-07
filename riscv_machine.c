@@ -721,7 +721,7 @@ static uint8_t *riscv_build_fdt(RISCVMachine *m, int *pfdt_size,
     }
     strcpy(q, "_zicbop_ziccamoa_ziccif_zicclsm_ziccrse_zicntr_zicond_zicsr"
               "_zifencei_zihintntl_zihintpause_zihpm_zimop_za64rs_zawrs"
-              "_zcmop_zba_zbb_zbs_sstc_svadu");
+              "_zcb_zcmop_zba_zbb_zbs_sstc_svadu");
     fdt_prop_str(s, "riscv,isa", isa_string);
     fdt_prop_str(s, "riscv,isa-base", "rv64i");
 
@@ -732,7 +732,7 @@ static uint8_t *riscv_build_fdt(RISCVMachine *m, int *pfdt_size,
             "zicbop", "ziccamoa", "ziccif", "zicclsm", "ziccrse",
             "zicntr", "zicond", "zicsr", "zifencei", "zihintntl",
             "zihintpause", "zihpm", "zimop", "za64rs", "zawrs",
-            "zcmop", "zba", "zbb", "zbs", "sstc", "svadu",
+            "zcb", "zcmop", "zba", "zbb", "zbs", "sstc", "svadu",
         };
         char ext_list[192];
         char *r = ext_list;

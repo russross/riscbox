@@ -375,6 +375,49 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
                     s->reg[rd] = (int64_t)rval;
                 }
                 break;
+            case 4: /* Zcb loads and stores */
+                funct3 = (insn >> 10) & 7;
+                rs1 = ((insn >> 7) & 7) | 8;
+                imm = get_field1(insn, 6, 0, 0) |
+                    get_field1(insn, 5, 1, 1);
+                addr = s->reg[rs1] + imm;
+                switch(funct3) {
+                case 0: /* c.lbu */
+                    {
+                        uint8_t rval;
+                        if (target_read_u8(s, &rval, addr))
+                            goto mmu_exception;
+                        s->reg[rd] = rval;
+                    }
+                    break;
+                case 1: /* c.lhu/c.lh */
+                    {
+                        uint16_t rval;
+                        addr = s->reg[rs1] +
+                            get_field1(insn, 5, 1, 1);
+                        if (target_read_u16(s, &rval, addr))
+                            goto mmu_exception;
+                        if (insn & (1 << 6))
+                            s->reg[rd] = (int16_t)rval;
+                        else
+                            s->reg[rd] = rval;
+                    }
+                    break;
+                case 2: /* c.sb */
+                    if (target_write_u8(s, addr, s->reg[rd]))
+                        goto mmu_exception;
+                    break;
+                case 3: /* c.sh */
+                    if (insn & (1 << 6))
+                        goto illegal_insn;
+                    addr = s->reg[rs1] + get_field1(insn, 5, 1, 1);
+                    if (target_write_u16(s, addr, s->reg[rd]))
+                        goto mmu_exception;
+                    break;
+                default:
+                    goto illegal_insn;
+                }
+                break;
             case 5: /* c.fsd */
                 if (s->fs == 0)
                     goto illegal_insn;
@@ -495,6 +538,33 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
                         break;
                     case 5: /* c.addw */
                         s->reg[rd] = (int32_t)(s->reg[rd] + s->reg[rs2]);
+                        break;
+                    case 6: /* c.mul */
+                        s->reg[rd] *= s->reg[rs2];
+                        break;
+                    case 7: /* Zcb unary operations */
+                        switch((insn >> 2) & 7) {
+                        case 0: /* c.zext.b */
+                            s->reg[rd] = (uint8_t)s->reg[rd];
+                            break;
+                        case 1: /* c.sext.b */
+                            s->reg[rd] = (int8_t)s->reg[rd];
+                            break;
+                        case 2: /* c.zext.h */
+                            s->reg[rd] = (uint16_t)s->reg[rd];
+                            break;
+                        case 3: /* c.sext.h */
+                            s->reg[rd] = (int16_t)s->reg[rd];
+                            break;
+                        case 4: /* c.zext.w */
+                            s->reg[rd] = (uint32_t)s->reg[rd];
+                            break;
+                        case 5: /* c.not */
+                            s->reg[rd] = ~s->reg[rd];
+                            break;
+                        default:
+                            goto illegal_insn;
+                        }
                         break;
                     default:
                         goto illegal_insn;

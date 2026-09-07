@@ -143,8 +143,11 @@ static __attribute__((unused)) void cpu_abort(RISCVCPUState *s)
 #define PTE_U_MASK (1 << 4)
 #define PTE_A_MASK (1 << 6)
 #define PTE_D_MASK (1 << 7)
-#define PTE_HIGH_RESERVED_MASK ((uint64_t)0x3ff << 54)
-#define PTE_NONLEAF_RESERVED_MASK (PTE_U_MASK | PTE_A_MASK | PTE_D_MASK)
+#define PTE_PPN_MASK (((uint64_t)1 << 44) - 1)
+#define PTE_PBMT_MASK ((uint64_t)3 << 61)
+#define PTE_HIGH_RESERVED_MASK (((uint64_t)0x7f << 54) | ((uint64_t)1 << 63))
+#define PTE_NONLEAF_RESERVED_MASK \
+    (PTE_U_MASK | PTE_A_MASK | PTE_D_MASK | PTE_PBMT_MASK)
 
 #define SATP_MODE_SHIFT 60
 #define SATP_MODE_MASK 0xf
@@ -161,12 +164,14 @@ static __attribute__((unused)) void cpu_abort(RISCVCPUState *s)
 #define ACCESS_CODE  2
 
 #define MENVCFG_ADUE ((target_ulong)1 << 61)
+#define MENVCFG_PBMTE ((target_ulong)1 << 62)
 #define MENVCFG_STCE ((target_ulong)1 << 63)
 #define ENVCFG_CBIE  ((target_ulong)3 << 4)
 #define ENVCFG_CBCFE ((target_ulong)1 << 6)
 #define ENVCFG_CBZE  ((target_ulong)1 << 7)
 #define ENVCFG_CBO_MASK (ENVCFG_CBIE | ENVCFG_CBCFE | ENVCFG_CBZE)
-#define MENVCFG_MASK (ENVCFG_CBO_MASK | MENVCFG_ADUE | MENVCFG_STCE)
+#define MENVCFG_MASK \
+    (ENVCFG_CBO_MASK | MENVCFG_ADUE | MENVCFG_PBMTE | MENVCFG_STCE)
 
 #define PMP_CFG_R       (1 << 0)
 #define PMP_CFG_W       (1 << 1)
@@ -311,9 +316,13 @@ static TranslationResult get_phys_addr(RISCVCPUState *s,
         //printf("pte=0x%08" PRIx64 "\n", pte);
         if (!(pte & PTE_V_MASK) || (pte & PTE_HIGH_RESERVED_MASK))
             return TRANSLATE_PAGE_FAULT; /* invalid PTE */
-        paddr = (pte >> 10) << PG_SHIFT;
+        paddr = ((pte >> 10) & PTE_PPN_MASK) << PG_SHIFT;
         xwr = (pte >> 1) & 7;
         if (xwr != 0) {
+            if ((pte & PTE_PBMT_MASK) == PTE_PBMT_MASK ||
+                ((pte & PTE_PBMT_MASK) &&
+                 !(s->menvcfg & MENVCFG_PBMTE)))
+                return TRANSLATE_PAGE_FAULT;
             if (xwr == 2 || xwr == 6)
                 return TRANSLATE_PAGE_FAULT;
             vaddr_mask = ((target_ulong)1 << vaddr_shift) - 1;
@@ -1158,7 +1167,7 @@ static CSRWriteResult csr_write(RISCVCPUState *s, uint32_t csr,
             update_stimecmp_irq(s);
         else
             s->mip &= ~MIP_STIP;
-        if ((s->menvcfg ^ old) & MENVCFG_ADUE) {
+        if ((s->menvcfg ^ old) & (MENVCFG_ADUE | MENVCFG_PBMTE)) {
             tlb_flush_all(s);
             return CSR_WRITE_FLUSH_TLB;
         }

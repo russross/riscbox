@@ -937,6 +937,9 @@ static int csr_read(RISCVCPUState *s, target_ulong *pval, uint32_t csr,
     case 0x30a: /* menvcfg */
         val = s->menvcfg;
         break;
+    case 0x320: /* mcountinhibit: no counters can be inhibited */
+        val = 0;
+        break;
     case 0x3a0: /* pmpcfg0 */
         val = get_pmpcfg(s, 0);
         break;
@@ -1149,6 +1152,8 @@ static CSRWriteResult csr_write(RISCVCPUState *s, uint32_t csr,
             return CSR_WRITE_FLUSH_TLB;
         }
         return CSR_WRITE_INTERRUPT;
+    case 0x320: /* mcountinhibit: no counters can be inhibited */
+        break;
     case 0x3a0: /* pmpcfg0 */
         if (!set_pmpcfg(s, 0, val))
             break;

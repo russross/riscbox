@@ -179,6 +179,11 @@ static inline uintx_t glue(mulhsu, XLEN)(intx_t a, uintx_t b)
     case n+(24 << 2): case n+(25 << 2): case n+(26 << 2): case n+(27 << 2): \
     case n+(28 << 2): case n+(29 << 2): case n+(30 << 2): case n+(31 << 2): 
 
+#define MOP_R_MASK     0xb3c0707f
+#define MOP_R_MATCH    0x81c04073
+#define MOP_RR_MASK    0xb200707f
+#define MOP_RR_MATCH   0x82004073
+
 #define GET_PC() (target_ulong)((uintptr_t)code_ptr + code_to_pc_addend)
 #define GET_ELAPSED_CYCLES() (elapsed_cycles_addend - s->n_cycles)
 #define GET_CYCLE_COUNTER() (cycle_counter_addend - s->n_cycles)
@@ -439,10 +444,15 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
                         goto illegal_insn;
                     s->reg[2] = (intx_t)(s->reg[2] + imm);
                 } else if (rd != 0) {
-                    /* c.lui */
+                    /* c.lui or c.mop.n */
                     imm = sext(get_field1(insn, 12, 17, 17) |
                                get_field1(insn, 2, 12, 16), 18);
-                    s->reg[rd] = imm;
+                    if (imm == 0) {
+                        if ((rd & 1) == 0 || rd > 15)
+                            goto illegal_insn;
+                    } else {
+                        s->reg[rd] = imm;
+                    }
                 }
                 break;
             case 4: 
@@ -1003,6 +1013,13 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
             NEXT_INSN;
         case 0x73:
             funct3 = (insn >> 12) & 7;
+            if (funct3 == 4 &&
+                (((insn & MOP_R_MASK) == MOP_R_MATCH) ||
+                 ((insn & MOP_RR_MASK) == MOP_RR_MATCH))) {
+                if (rd != 0)
+                    s->reg[rd] = 0;
+                NEXT_INSN;
+            }
             imm = insn >> 20;
             if (funct3 & 4)
                 val = rs1;

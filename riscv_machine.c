@@ -681,7 +681,7 @@ static uint8_t *riscv_build_fdt(RISCVMachine *m, int *pfdt_size,
     uint8_t *dst;
     int size, i, cur_phandle, intc_phandle, plic_phandle, cpu_phandle;
     int syscon_phandle;
-    char isa_string[128], *q;
+    char isa_string[192], *q;
     uint32_t misa;
     uint32_t tab[4];
     FBDevice *fb_dev;
@@ -719,8 +719,9 @@ static uint8_t *riscv_build_fdt(RISCVMachine *m, int *pfdt_size,
         if (misa & (1 << bit))
             *q++ = single_letter_order[i];
     }
-    strcpy(q, "_sstc_svadu_zawrs_zba_zbb_zbs_zcmop_zicbop_zicntr_zicond_zicsr"
-              "_zifencei_zihintntl_zihintpause_zihpm_zimop");
+    strcpy(q, "_zicbop_ziccamoa_ziccif_zicclsm_ziccrse_zicntr_zicond_zicsr"
+              "_zifencei_zihintntl_zihintpause_zihpm_zimop_za64rs_zawrs"
+              "_zcmop_zba_zbb_zbs_sstc_svadu");
     fdt_prop_str(s, "riscv,isa", isa_string);
     fdt_prop_str(s, "riscv,isa-base", "rv64i");
 
@@ -728,11 +729,12 @@ static uint8_t *riscv_build_fdt(RISCVMachine *m, int *pfdt_size,
     {
         static const char ext_letters[] = "imafdcb";
         static const char *const ext_names[] = {
-            "sstc", "svadu", "zawrs", "zba", "zbb", "zbs",
-            "zcmop", "zicbop", "zicntr", "zicond", "zicsr",
-            "zifencei", "zihintntl", "zihintpause", "zihpm", "zimop",
+            "zicbop", "ziccamoa", "ziccif", "zicclsm", "ziccrse",
+            "zicntr", "zicond", "zicsr", "zifencei", "zihintntl",
+            "zihintpause", "zihpm", "zimop", "za64rs", "zawrs",
+            "zcmop", "zba", "zbb", "zbs", "sstc", "svadu",
         };
-        char ext_list[128];
+        char ext_list[192];
         char *r = ext_list;
         size_t j;
         for(j = 0; j < sizeof(ext_letters) - 1; j++) {

@@ -719,7 +719,7 @@ static uint8_t *riscv_build_fdt(RISCVMachine *m, int *pfdt_size,
         if (misa & (1 << bit))
             *q++ = single_letter_order[i];
     }
-    strcpy(q, "_sstc_svadu");
+    strcpy(q, "_sstc_svadu_zicond");
     fdt_prop_str(s, "riscv,isa", isa_string);
     fdt_prop_str(s, "riscv,isa-base", "rv64i");
 
@@ -727,7 +727,8 @@ static uint8_t *riscv_build_fdt(RISCVMachine *m, int *pfdt_size,
     {
         static const char ext_letters[] = "imafdc";
         static const char *const ext_names[] = {
-            "sstc", "svadu", "zicntr", "zicsr", "zifencei", "zihpm",
+            "sstc", "svadu", "zicntr", "zicond", "zicsr", "zifencei",
+            "zihpm",
         };
         char ext_list[sizeof(ext_letters) * 2 + 64];
         char *r = ext_list;

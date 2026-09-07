@@ -894,42 +894,56 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
                     goto illegal_insn;
                 }
             } else {
-                if (imm & ~0x20)
-                    goto illegal_insn;
-                funct3 = ((insn >> 12) & 7) | ((insn >> (30 - 3)) & (1 << 3));
-                switch(funct3) {
-                case 0: /* add */
-                    val = (intx_t)(val + val2);
-                    break;
-                case 0 | 8: /* sub */
-                    val = (intx_t)(val - val2);
-                    break;
-                case 1: /* sll */
-                    val = (intx_t)(val << (val2 & (XLEN - 1)));
-                    break;
-                case 2: /* slt */
-                    val = (target_long)val < (target_long)val2;
-                    break;
-                case 3: /* sltu */
-                    val = val < val2;
-                    break;
-                case 4: /* xor */
-                    val = val ^ val2;
-                    break;
-                case 5: /* srl */
-                    val = (intx_t)((uintx_t)val >> (val2 & (XLEN - 1)));
-                    break;
-                case 5 | 8: /* sra */
-                    val = (intx_t)val >> (val2 & (XLEN - 1));
-                    break;
-                case 6: /* or */
-                    val = val | val2;
-                    break;
-                case 7: /* and */
-                    val = val & val2;
-                    break;
-                default:
-                    goto illegal_insn;
+                funct3 = (insn >> 12) & 7;
+                if (imm & ~0x20) {
+                    if (imm != 7)
+                        goto illegal_insn;
+                    switch(funct3) {
+                    case 5: /* czero.eqz */
+                        val = val2 == 0 ? 0 : val;
+                        break;
+                    case 7: /* czero.nez */
+                        val = val2 != 0 ? 0 : val;
+                        break;
+                    default:
+                        goto illegal_insn;
+                    }
+                } else {
+                    funct3 |= (insn >> (30 - 3)) & (1 << 3);
+                    switch(funct3) {
+                    case 0: /* add */
+                        val = (intx_t)(val + val2);
+                        break;
+                    case 0 | 8: /* sub */
+                        val = (intx_t)(val - val2);
+                        break;
+                    case 1: /* sll */
+                        val = (intx_t)(val << (val2 & (XLEN - 1)));
+                        break;
+                    case 2: /* slt */
+                        val = (target_long)val < (target_long)val2;
+                        break;
+                    case 3: /* sltu */
+                        val = val < val2;
+                        break;
+                    case 4: /* xor */
+                        val = val ^ val2;
+                        break;
+                    case 5: /* srl */
+                        val = (intx_t)((uintx_t)val >> (val2 & (XLEN - 1)));
+                        break;
+                    case 5 | 8: /* sra */
+                        val = (intx_t)val >> (val2 & (XLEN - 1));
+                        break;
+                    case 6: /* or */
+                        val = val | val2;
+                        break;
+                    case 7: /* and */
+                        val = val & val2;
+                        break;
+                    default:
+                        goto illegal_insn;
+                    }
                 }
             }
             if (rd != 0)

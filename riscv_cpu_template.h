@@ -1410,6 +1410,56 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
                 if (insn != 0x0000100f)
                     goto illegal_insn;
                 break;
+            case 2: /* cbo.inval/cbo.clean/cbo.flush/cbo.zero */
+                {
+                    PhysMemoryRange *pr;
+                    TranslationResult translation_result;
+                    int access;
+
+                    imm = insn >> 20;
+                    if (rd != 0 || (imm > 2 && imm != 4))
+                        goto illegal_insn;
+                    if (s->priv != PRV_M) {
+                        if ((imm == 0 && !(s->menvcfg & ENVCFG_CBIE)) ||
+                            ((imm == 1 || imm == 2) &&
+                             !(s->menvcfg & ENVCFG_CBCFE)) ||
+                            (imm == 4 && !(s->menvcfg & ENVCFG_CBZE)))
+                            goto illegal_insn;
+                        if (s->priv == PRV_U &&
+                            ((imm == 0 && !(s->senvcfg & ENVCFG_CBIE)) ||
+                             ((imm == 1 || imm == 2) &&
+                              !(s->senvcfg & ENVCFG_CBCFE)) ||
+                             (imm == 4 && !(s->senvcfg & ENVCFG_CBZE))))
+                            goto illegal_insn;
+                    }
+                    val = s->reg[rs1];
+                    addr = val & ~(target_ulong)63;
+                    access = imm == 4 ? ACCESS_WRITE : ACCESS_READ;
+                    translation_result = get_phys_addr(s, &val2, addr, 64,
+                                                       access);
+                    if (translation_result != TRANSLATE_OK) {
+                        s->pending_exception =
+                            translation_result == TRANSLATE_ACCESS_FAULT ?
+                            CAUSE_FAULT_STORE : CAUSE_STORE_PAGE_FAULT;
+                        s->pending_tval = val;
+                        goto mmu_exception;
+                    }
+                    pr = get_phys_mem_range(s->mem_map, val2);
+                    if (!pr || !pr->is_ram || pr->size < 64 ||
+                        val2 - pr->addr > pr->size - 64 ||
+                        (imm == 4 &&
+                         (pr->devram_flags & DEVRAM_FLAG_ROM))) {
+                        s->pending_exception = CAUSE_FAULT_STORE;
+                        s->pending_tval = val;
+                        goto mmu_exception;
+                    }
+                    if (imm == 4) {
+                        phys_mem_set_dirty_bit(pr, val2 - pr->addr);
+                        memset(pr->phys_mem + (uintptr_t)(val2 - pr->addr),
+                               0, 64);
+                    }
+                }
+                break;
             default:
                 goto illegal_insn;
             }

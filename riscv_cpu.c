@@ -162,7 +162,11 @@ static __attribute__((unused)) void cpu_abort(RISCVCPUState *s)
 
 #define MENVCFG_ADUE ((target_ulong)1 << 61)
 #define MENVCFG_STCE ((target_ulong)1 << 63)
-#define MENVCFG_MASK (MENVCFG_ADUE | MENVCFG_STCE)
+#define ENVCFG_CBIE  ((target_ulong)3 << 4)
+#define ENVCFG_CBCFE ((target_ulong)1 << 6)
+#define ENVCFG_CBZE  ((target_ulong)1 << 7)
+#define ENVCFG_CBO_MASK (ENVCFG_CBIE | ENVCFG_CBCFE | ENVCFG_CBZE)
+#define MENVCFG_MASK (ENVCFG_CBO_MASK | MENVCFG_ADUE | MENVCFG_STCE)
 
 #define PMP_CFG_R       (1 << 0)
 #define PMP_CFG_W       (1 << 1)
@@ -888,8 +892,8 @@ static int csr_read(RISCVCPUState *s, target_ulong *pval, uint32_t csr,
     case 0x106:
         val = s->scounteren;
         break;
-    case 0x10a: /* senvcfg: no S-mode features implemented */
-        val = 0;
+    case 0x10a: /* senvcfg */
+        val = s->senvcfg;
         break;
     case 0x140:
         val = s->sscratch;
@@ -1069,7 +1073,11 @@ static CSRWriteResult csr_write(RISCVCPUState *s, uint32_t csr,
     case 0x106:
         s->scounteren = val & COUNTEREN_MASK;
         break;
-    case 0x10a: /* senvcfg: hardwired to zero */
+    case 0x10a: /* senvcfg */
+        val &= ENVCFG_CBO_MASK;
+        if ((val & ENVCFG_CBIE) == ((target_ulong)2 << 4))
+            val &= ~ENVCFG_CBIE;
+        s->senvcfg = val;
         break;
     case 0x140:
         s->sscratch = val;
@@ -1140,7 +1148,10 @@ static CSRWriteResult csr_write(RISCVCPUState *s, uint32_t csr,
         break;
     case 0x30a: /* menvcfg */
         old = s->menvcfg;
-        s->menvcfg = val & MENVCFG_MASK;
+        val &= MENVCFG_MASK;
+        if ((val & ENVCFG_CBIE) == ((target_ulong)2 << 4))
+            val &= ~ENVCFG_CBIE;
+        s->menvcfg = val;
         if (s->menvcfg == old)
             break;
         if (s->menvcfg & MENVCFG_STCE)

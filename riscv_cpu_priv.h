@@ -188,6 +188,7 @@ struct RISCVCPUState {
     target_ulong sepc;
     target_ulong scause;
     target_ulong stval;
+    target_ulong senvcfg;
     uint64_t satp; /* currently 64 bit physical addresses max */
     uint32_t scounteren;
 

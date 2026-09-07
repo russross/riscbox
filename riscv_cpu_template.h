@@ -241,6 +241,7 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
        for emscripten */
     for(;;) {
         if (unlikely(code_ptr >= code_end)) {
+            int code_span;
             uint32_t tlb_idx;
             uint16_t insn_high;
             target_ulong fetch_addr;
@@ -269,11 +270,14 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
                 ptr = (uint8_t *)(s->tlb_code[tlb_idx].mem_addend +
                                   (uintptr_t)fetch_addr);
             } else {
-                if (unlikely(target_read_insn_slow(s, &ptr, fetch_addr)))
+                if (unlikely(target_read_insn_slow(s, &ptr, &code_span,
+                                                   fetch_addr)))
                     goto mmu_exception;
             }
             code_ptr = ptr;
-            code_end = ptr + (PG_MASK - 1 - (fetch_addr & PG_MASK));
+            if (s->tlb_code[tlb_idx].vaddr == (fetch_addr & ~PG_MASK))
+                code_span = (PG_MASK + 1) - (fetch_addr & PG_MASK);
+            code_end = ptr + code_span - sizeof(uint16_t);
             code_to_pc_addend = fetch_addr - (uintptr_t)code_ptr;
             if (unlikely(code_ptr >= code_end)) {
                 /* instruction is potentially half way between two
@@ -1187,7 +1191,7 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
                             goto mmu_exception;                         \
                         val = 0;                                        \
                     } else {                                            \
-                        if (target_write_check(s, addr))                 \
+                        if (target_write_check(s, addr, size / 8))       \
                             goto mmu_exception;                         \
                         val = 1;                                        \
                     }                                                   \

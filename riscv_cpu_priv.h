@@ -55,6 +55,7 @@ typedef uint64_t fp_uint;
 typedef uint64_t mem_uint_t;
 
 #define TLB_SIZE 256
+#define PMP_ENTRY_COUNT 16
 
 #define CAUSE_MISALIGNED_FETCH    0x0
 #define CAUSE_FAULT_FETCH         0x1
@@ -176,6 +177,8 @@ struct RISCVCPUState {
     uint32_t medeleg;
     uint32_t mideleg;
     uint32_t mcounteren;
+    uint8_t pmpcfg[PMP_ENTRY_COUNT];
+    target_ulong pmpaddr[PMP_ENTRY_COUNT];
     
     target_ulong stvec;
     target_ulong sscratch;

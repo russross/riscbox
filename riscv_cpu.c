@@ -160,6 +160,10 @@ static __attribute__((unused)) void cpu_abort(RISCVCPUState *s)
 #define ACCESS_WRITE 1
 #define ACCESS_CODE  2
 
+#define MENVCFG_ADUE ((target_ulong)1 << 61)
+#define MENVCFG_STCE ((target_ulong)1 << 63)
+#define MENVCFG_MASK (MENVCFG_ADUE | MENVCFG_STCE)
+
 #define PMP_CFG_R       (1 << 0)
 #define PMP_CFG_W       (1 << 1)
 #define PMP_CFG_X       (1 << 2)
@@ -328,6 +332,8 @@ static TranslationResult get_phys_addr(RISCVCPUState *s,
                 return TRANSLATE_PAGE_FAULT;
             need_write = !(pte & PTE_A_MASK) ||
                 (!(pte & PTE_D_MASK) && access == ACCESS_WRITE);
+            if (need_write && !(s->menvcfg & MENVCFG_ADUE))
+                return TRANSLATE_PAGE_FAULT;
             pte |= PTE_A_MASK;
             if (access == ACCESS_WRITE)
                 pte |= PTE_D_MASK;
@@ -814,6 +820,12 @@ static BOOL set_pmpaddr(RISCVCPUState *s, int entry, target_ulong val)
     return TRUE;
 }
 
+static void update_stimecmp_irq(RISCVCPUState *s)
+{
+    if (s->get_time)
+        riscv_cpu_update_time(s, s->get_time(s->time_opaque));
+}
+
 /* return -1 if invalid CSR. 0 if OK. 'will_write' indicate that the
    csr will be written after (used for CSR access check) */
 static int csr_read(RISCVCPUState *s, target_ulong *pval, uint32_t csr,
@@ -826,6 +838,9 @@ static int csr_read(RISCVCPUState *s, target_ulong *pval, uint32_t csr,
     if (s->priv < ((csr >> 8) & 3))
         return -1; /* not enough priviledge */
     if (csr == 0x180 && s->priv == PRV_S && (s->mstatus & MSTATUS_TVM))
+        return -1;
+    if (csr == 0x14d && s->priv != PRV_M &&
+        (!(s->menvcfg & MENVCFG_STCE) || !(s->mcounteren & (1 << 1))))
         return -1;
     
     switch(csr) {
@@ -891,6 +906,9 @@ static int csr_read(RISCVCPUState *s, target_ulong *pval, uint32_t csr,
     case 0x144: /* sip */
         val = s->mip & s->mideleg;
         break;
+    case 0x14d: /* stimecmp */
+        val = s->stimecmp;
+        break;
     case 0x180:
         val = s->satp;
         break;
@@ -916,8 +934,8 @@ static int csr_read(RISCVCPUState *s, target_ulong *pval, uint32_t csr,
     case 0x306:
         val = s->mcounteren;
         break;
-    case 0x30a: /* menvcfg: no M-mode features implemented */
-        val = 0;
+    case 0x30a: /* menvcfg */
+        val = s->menvcfg;
         break;
     case 0x3a0: /* pmpcfg0 */
         val = get_pmpcfg(s, 0);
@@ -999,12 +1017,13 @@ typedef enum {
     CSR_WRITE_OK,
     CSR_WRITE_FLUSH_TLB,
     CSR_WRITE_MINSTRET,
+    CSR_WRITE_INTERRUPT,
 } CSRWriteResult;
 
 static CSRWriteResult csr_write(RISCVCPUState *s, uint32_t csr,
                                 target_ulong val)
 {
-    target_ulong mask;
+    target_ulong mask, old;
 
     if (csr == 0x180 && s->priv == PRV_S && (s->mstatus & MSTATUS_TVM))
         return CSR_WRITE_ERROR;
@@ -1059,8 +1078,18 @@ static CSRWriteResult csr_write(RISCVCPUState *s, uint32_t csr,
         break;
     case 0x144: /* sip */
         mask = s->mideleg;
+        if (s->menvcfg & MENVCFG_STCE)
+            mask &= ~MIP_STIP;
         s->mip = (s->mip & ~mask) | (val & mask);
         break;
+    case 0x14d: /* stimecmp */
+        if (s->priv != PRV_M &&
+            (!(s->menvcfg & MENVCFG_STCE) ||
+             !(s->mcounteren & (1 << 1))))
+            return CSR_WRITE_ERROR;
+        s->stimecmp = val;
+        update_stimecmp_irq(s);
+        return CSR_WRITE_INTERRUPT;
     case 0x180:
         /* no ASID implemented */
         {
@@ -1098,8 +1127,20 @@ static CSRWriteResult csr_write(RISCVCPUState *s, uint32_t csr,
     case 0x306:
         s->mcounteren = val & COUNTEREN_MASK;
         break;
-    case 0x30a: /* menvcfg: hardwired to zero */
-        break;
+    case 0x30a: /* menvcfg */
+        old = s->menvcfg;
+        s->menvcfg = val & MENVCFG_MASK;
+        if (s->menvcfg == old)
+            break;
+        if (s->menvcfg & MENVCFG_STCE)
+            update_stimecmp_irq(s);
+        else
+            s->mip &= ~MIP_STIP;
+        if ((s->menvcfg ^ old) & MENVCFG_ADUE) {
+            tlb_flush_all(s);
+            return CSR_WRITE_FLUSH_TLB;
+        }
+        return CSR_WRITE_INTERRUPT;
     case 0x3a0: /* pmpcfg0 */
         if (!set_pmpcfg(s, 0, val))
             break;
@@ -1130,6 +1171,8 @@ static CSRWriteResult csr_write(RISCVCPUState *s, uint32_t csr,
         break;
     case 0x344:
         mask = MIP_SSIP | MIP_STIP;
+        if (s->menvcfg & MENVCFG_STCE)
+            mask &= ~MIP_STIP;
         s->mip = (s->mip & ~mask) | (val & mask);
         break;
     default:
@@ -1397,6 +1440,7 @@ static RISCVCPUState *glue(riscv_cpu_init, MAX_XLEN)(PhysMemoryMap *mem_map)
     s->pc = 0x1000;
     s->priv = PRV_M;
     s->mstatus = 0;
+    s->stimecmp = UINT64_MAX;
     s->misa |= MCPUID_SUPER | MCPUID_USER | MCPUID_I | MCPUID_M | MCPUID_A;
 #if FLEN >= 32
     s->misa |= MCPUID_F;
@@ -1449,4 +1493,24 @@ void riscv_cpu_set_time_source(RISCVCPUState *s,
 {
     s->get_time = get_time;
     s->time_opaque = opaque;
+}
+
+void riscv_cpu_update_time(RISCVCPUState *s, uint64_t time)
+{
+    if (!(s->menvcfg & MENVCFG_STCE))
+        return;
+    if (time >= s->stimecmp) {
+        s->mip |= MIP_STIP;
+        if (s->power_down_flag && (s->mip & s->mie) != 0)
+            s->power_down_flag = FALSE;
+    } else {
+        s->mip &= ~MIP_STIP;
+    }
+}
+
+uint64_t riscv_cpu_get_stimecmp(RISCVCPUState *s)
+{
+    if (!(s->menvcfg & MENVCFG_STCE))
+        return UINT64_MAX;
+    return s->stimecmp;
 }

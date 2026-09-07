@@ -177,6 +177,8 @@ struct RISCVCPUState {
     uint32_t medeleg;
     uint32_t mideleg;
     uint32_t mcounteren;
+    target_ulong menvcfg;
+    uint64_t stimecmp;
     uint8_t pmpcfg[PMP_ENTRY_COUNT];
     target_ulong pmpaddr[PMP_ENTRY_COUNT];
     

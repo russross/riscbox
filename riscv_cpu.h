@@ -68,6 +68,8 @@ RISCVCPUState *riscv_cpu_init(PhysMemoryMap *mem_map);
 void riscv_cpu_set_time_source(RISCVCPUState *s,
                                RISCVCPUTimeFunc *get_time,
                                void *opaque);
+void riscv_cpu_update_time(RISCVCPUState *s, uint64_t time);
+uint64_t riscv_cpu_get_stimecmp(RISCVCPUState *s);
 static inline void riscv_cpu_end(RISCVCPUState *s)
 {
     const RISCVCPUClass *c = ((RISCVCPUCommonState *)s)->class_ptr;

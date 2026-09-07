@@ -719,16 +719,15 @@ static uint8_t *riscv_build_fdt(RISCVMachine *m, int *pfdt_size,
         if (misa & (1 << bit))
             *q++ = single_letter_order[i];
     }
-    *q = '\0';
+    strcpy(q, "_sstc_svadu");
     fdt_prop_str(s, "riscv,isa", isa_string);
     fdt_prop_str(s, "riscv,isa-base", "rv64i");
 
-    /* Modern kernels enumerate extensions from riscv,isa-extensions.
-       Bare 'i' implies zicntr, zicsr, zifencei and zihpm. */
+    /* Modern kernels enumerate extensions from riscv,isa-extensions. */
     {
         static const char ext_letters[] = "imafdc";
-        static const char *const ext_implied[] = {
-            "zicntr", "zicsr", "zifencei", "zihpm",
+        static const char *const ext_names[] = {
+            "sstc", "svadu", "zicntr", "zicsr", "zifencei", "zihpm",
         };
         char ext_list[sizeof(ext_letters) * 2 + 64];
         char *r = ext_list;
@@ -739,12 +738,10 @@ static uint8_t *riscv_build_fdt(RISCVMachine *m, int *pfdt_size,
                 *r++ = '\0';
             }
         }
-        if (misa & (1 << ('I' - 'A'))) {
-            for(j = 0; j < sizeof(ext_implied) / sizeof(ext_implied[0]); j++) {
-                size_t len = strlen(ext_implied[j]) + 1;
-                memcpy(r, ext_implied[j], len);
-                r += len;
-            }
+        for(j = 0; j < sizeof(ext_names) / sizeof(ext_names[0]); j++) {
+            size_t len = strlen(ext_names[j]) + 1;
+            memcpy(r, ext_names[j], len);
+            r += len;
         }
         fdt_prop(s, "riscv,isa-extensions", ext_list, r - ext_list);
     }
@@ -1160,26 +1157,37 @@ static void riscv_machine_end(VirtMachine *s1)
     free(s);
 }
 
+static int limit_timer_delay(int delay, uint64_t compare, uint64_t now)
+{
+    uint64_t delay_ms;
+
+    if (compare <= now)
+        return 0;
+    delay_ms = (compare - now) / (RTC_FREQ / 1000);
+    if (delay_ms < (uint64_t)delay)
+        return delay_ms;
+    return delay;
+}
+
 /* in ms */
 static int riscv_machine_get_sleep_duration(VirtMachine *s1, int delay)
 {
     RISCVMachine *m = (RISCVMachine *)s1;
     RISCVCPUState *s = m->cpu_state;
-    int64_t delay1;
+    uint64_t now;
     
-    /* wait for an event: the only asynchronous event is the RTC timer */
+    now = rtc_get_time(m);
     if (!(riscv_cpu_get_mip(s) & MIP_MTIP)) {
-        delay1 = m->timecmp - rtc_get_time(m);
-        if (delay1 <= 0) {
+        if (m->timecmp <= now) {
             riscv_cpu_set_mip(s, MIP_MTIP);
             delay = 0;
         } else {
-            /* convert delay to ms */
-            delay1 = delay1 / (RTC_FREQ / 1000);
-            if (delay1 < delay)
-                delay = delay1;
+            delay = limit_timer_delay(delay, m->timecmp, now);
         }
     }
+    riscv_cpu_update_time(s, now);
+    if (!(riscv_cpu_get_mip(s) & MIP_STIP))
+        delay = limit_timer_delay(delay, riscv_cpu_get_stimecmp(s), now);
     if (!riscv_cpu_get_power_down(s))
         delay = 0;
     return delay;

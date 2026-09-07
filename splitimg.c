@@ -39,7 +39,7 @@ int main(int argc, char **argv)
     if ((optind + 1) >= argc) {
         printf("splitimg version " CONFIG_VERSION ", Copyright (c) 2011-2016 Fabrice Bellard\n"
                "usage: splitimg infile outpath [blocksize]\n"
-               "Create a multi-file disk image for the RISCVEMU HTTP block device\n"
+               "Create a multi-file disk image for the Riscbox HTTP block device\n"
                "\n"
                "outpath must be a directory\n"
                "blocksize is the block size in KB\n");

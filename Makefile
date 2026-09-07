@@ -1,5 +1,5 @@
 #
-# TinyEMU
+# Riscbox
 # 
 # Copyright (c) 2016-2018 Fabrice Bellard
 #
@@ -44,7 +44,7 @@ DEBUG_LDFLAGS=-fsanitize=address,undefined -fno-sanitize-recover=all
 bindir=/usr/local/bin
 INSTALL=install
 
-PROGS+= temu
+PROGS+= riscbox
 ifdef CONFIG_FS_NET
 PROGS+=build_filelist splitimg
 endif
@@ -53,13 +53,13 @@ all: release
 
 release: $(PROGS)
 
-debug: temu-debug
+debug: riscbox-debug
 
 wasm:
 	$(MAKE) -f Makefile.js
 
 EMU_OBJS:=virtio.o pci.o fs.o cutils.o iomem.o simplefb.o \
-    json.o machine.o temu.o uart16550.o
+    json.o machine.o riscbox.o uart16550.o
 
 ifdef CONFIG_SLIRP
 CPPFLAGS+=-DCONFIG_SLIRP
@@ -82,13 +82,13 @@ endif
 EMU_OBJS+=riscv_machine.o softfp.o riscv_cpu64.o
 DEBUG_OBJS:=$(addprefix build/debug/,$(EMU_OBJS))
 
-temu: $(EMU_OBJS)
+riscbox: $(EMU_OBJS)
 	$(CC) $(LDFLAGS) -o $@ $^ $(EMU_LIBS)
 
 riscv_cpu64.o: riscv_cpu.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
-temu-debug: $(DEBUG_OBJS)
+riscbox-debug: $(DEBUG_OBJS)
 	$(CC) $(DEBUG_LDFLAGS) -o $@ $^ $(EMU_LIBS)
 
 build/debug/riscv_cpu64.o: riscv_cpu.c
@@ -114,8 +114,8 @@ install: $(PROGS)
 
 clean:
 	rm -rf build
-	rm -f *.o *.d *~ $(PROGS) temu-debug slirp/*.o slirp/*.d slirp/*~
-	rm -f js/riscvemu64-wasm.js js/riscvemu64-wasm.wasm
+	rm -f *.o *.d *~ $(PROGS) riscbox-debug slirp/*.o slirp/*.d slirp/*~
+	rm -f js/riscbox-wasm.js js/riscbox-wasm.wasm
 
 -include $(wildcard *.d)
 -include $(wildcard slirp/*.d)

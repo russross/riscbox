@@ -208,9 +208,12 @@ static void init_vm_fs(void *arg)
     VirtMachineParams *p = s->p;
 
     if (p->fs_count > 0) {
+        char *filename;
+
         assert(p->fs_count == 1);
-        p->tab_fs[0].fs_dev = fs_net_init(p->tab_fs[0].filename,
-                                          init_vm_drive, s);
+        filename = get_file_path(p->cfg_filename, p->tab_fs[0].filename);
+        p->tab_fs[0].fs_dev = fs_net_init(filename, init_vm_drive, s);
+        free(filename);
         if (s->pwd) {
             fs_net_set_pwd(p->tab_fs[0].fs_dev, s->pwd);
         }
@@ -225,11 +228,14 @@ static void init_vm_drive(void *arg)
     VirtMachineParams *p = s->p;
 
     if (p->drive_count > 0) {
+        char *filename;
+
         assert(p->drive_count == 1);
+        filename = get_file_path(p->cfg_filename, p->tab_drive[0].filename);
         p->tab_drive[0].block_dev =
-            block_device_init_http(p->tab_drive[0].filename,
-                                   131072,
+            block_device_init_http(filename, 131072,
                                    init_vm, s);
+        free(filename);
     } else {
         init_vm(s);
     }

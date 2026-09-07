@@ -1,5 +1,5 @@
 #
-# TinyEMU emulator
+# Riscbox emulator
 # 
 # Copyright (c) 2016-2018 Fabrice Bellard
 #
@@ -22,7 +22,7 @@
 # THE SOFTWARE.
 #
 
-# Build the WebAssembly version of TinyEMU
+# Build the WebAssembly version of Riscbox
 EMCC=emcc
 EMCPPFLAGS=-D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE -DCONFIG_FS_NET
 EMCFLAGS=-O3 -Wall -Wextra -Werror -Wformat=2 -Wshadow -MMD \
@@ -34,7 +34,7 @@ EMLDFLAGS=-O3 -s NO_EXIT_RUNTIME=1 -s NO_FILESYSTEM=1 \
     --js-library js/lib.js
 
 WASM_DIR=build/wasm
-PROGS=js/riscvemu64-wasm.js
+PROGS=js/riscbox-wasm.js
 
 all: $(PROGS)
 
@@ -42,11 +42,11 @@ JS_OBJS=jsemu.o softfp.o virtio.o fs.o fs_net.o fs_wget.o fs_utils.o \
     simplefb.o pci.o json.o block_net.o iomem.o cutils.o aes.o sha256.o \
     uart16550.o
 
-RISCVEMU64_OBJS=$(addprefix $(WASM_DIR)/,$(JS_OBJS) riscv_cpu64.o \
+RISCBOX_OBJS=$(addprefix $(WASM_DIR)/,$(JS_OBJS) riscv_cpu64.o \
     riscv_machine.o machine.o)
 
-js/riscvemu64-wasm.js: $(RISCVEMU64_OBJS) js/lib.js
-	$(EMCC) $(EMLDFLAGS) -o $@ $(RISCVEMU64_OBJS)
+js/riscbox-wasm.js: $(RISCBOX_OBJS) js/lib.js
+	$(EMCC) $(EMLDFLAGS) -o $@ $(RISCBOX_OBJS)
 
 $(WASM_DIR)/riscv_cpu64.o: riscv_cpu.c
 	mkdir -p $(@D)
@@ -58,7 +58,7 @@ $(WASM_DIR)/%.o: %.c
 
 clean:
 	rm -rf $(WASM_DIR)
-	rm -f js/riscvemu64-wasm.js js/riscvemu64-wasm.wasm
+	rm -f js/riscbox-wasm.js js/riscbox-wasm.wasm
 
 -include $(wildcard $(WASM_DIR)/*.d)
 

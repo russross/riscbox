@@ -1,11 +1,12 @@
 *.o
 *.d
-*.md
+AGENTS.md
+.agents/
 build_filelist
 splitimg
-temu
-temu-debug
+riscbox
+riscbox-debug
 build/
-js/riscvemu64-wasm.js
-js/riscvemu64-wasm.wasm
+js/riscbox-wasm.js
+js/riscbox-wasm.wasm
 image

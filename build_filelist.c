@@ -1,5 +1,5 @@
 /*
- * File list builder for RISCVEMU network filesystem
+ * File list builder for the Riscbox network filesystem
  * 
  * Copyright (c) 2017 Fabrice Bellard
  *

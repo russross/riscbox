@@ -1,6 +1,7 @@
 #!/bin/sh
+set -eu
 #
-# RISCVEMU Ethernet bridge and NAT configuration (run with sudo)
+# Riscbox Ethernet bridge and NAT configuration (run with sudo)
 #
 # Copyright (c) 2017 Fabrice Bellard
 #
@@ -24,20 +25,21 @@
 #
 
 # host network interface connected to Internet (change it)
-internet_ifname="enp0s20f0u1"
+internet_ifname=${INTERNET_IFNAME:-enp0s20f0u1}
+tap_owner=${SUDO_USER:-$USER}
 
 # setup bridge interface
 ip link add br0 type bridge
 # create and add tap0 interface to bridge
-ip tuntap add dev tap0 mode tap user $USER
+ip tuntap add dev tap0 mode tap user "$tap_owner"
 ip link set tap0 master br0
 
 ip link set dev br0 up
 ip link set dev tap0 up
-ifconfig br0 192.168.3.1
+ip address add 192.168.3.1/24 dev br0
 
 # setup NAT to access to Internet
 echo 1 > /proc/sys/net/ipv4/ip_forward
 # delete forwarding reject rule if present
 #iptables -D FORWARD 1
-iptables -t nat -A POSTROUTING -o $internet_ifname -j MASQUERADE 
+iptables -t nat -A POSTROUTING -o "$internet_ifname" -j MASQUERADE

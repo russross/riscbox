@@ -899,7 +899,7 @@ static uint8_t *riscv_build_fdt(RISCVMachine *m, int *pfdt_size,
 #if 0
     {
         FILE *f;
-        f = fopen("/tmp/riscvemu.dtb", "wb");
+        f = fopen("/tmp/riscbox.dtb", "wb");
         fwrite(dst, 1, size, f);
         fclose(f);
     }

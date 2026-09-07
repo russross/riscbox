@@ -1,5 +1,5 @@
 /*
- * TinyEMU
+ * Riscbox
  * 
  * Copyright (c) 2016-2018 Fabrice Bellard
  *
@@ -615,8 +615,9 @@ static struct option options[] = {
 
 void help(void)
 {
-    printf("temu version " CONFIG_VERSION ", Copyright (c) 2016-2018 Fabrice Bellard\n"
-           "usage: riscvemu [options] config_file\n"
+    printf("riscbox version " CONFIG_VERSION
+           ", based on TinyEMU by Fabrice Bellard\n"
+           "usage: riscbox [options] config_file\n"
            "options are:\n"
            "-m ram_size       set the RAM size in MB\n"
            "-rw               allow write access to the disk image (default=snapshot)\n"
@@ -746,12 +747,12 @@ int main(int argc, char **argv)
 
     for(i = 0; i < p->fs_count; i++) {
         FSDevice *fs;
-        const char *fs_path;
+        char *fname;
 
-        fs_path = p->tab_fs[i].filename;
+        fname = get_file_path(p->cfg_filename, p->tab_fs[i].filename);
 #ifdef CONFIG_FS_NET
-        if (is_url(fs_path)) {
-            fs = fs_net_init(fs_path, NULL, NULL);
+        if (is_url(fname)) {
+            fs = fs_net_init(fname, NULL, NULL);
             if (!fs)
                 exit(1);
             if (build_preload_file)
@@ -760,15 +761,13 @@ int main(int argc, char **argv)
         } else
 #endif
         {
-            char *fname;
-            fname = get_file_path(p->cfg_filename, fs_path);
             fs = fs_disk_init(fname);
             if (!fs) {
                 fprintf(stderr, "%s: must be a directory\n", fname);
                 exit(1);
             }
-            free(fname);
         }
+        free(fname);
         p->tab_fs[i].fs_dev = fs;
     }
 

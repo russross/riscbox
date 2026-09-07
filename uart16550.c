@@ -1,15 +1,5 @@
-/* 16550A UART emulation.
- *
- * The transmitter completes instantly: THR writes are delivered to the
- * host at once, so LSR_THRE and LSR_TEMT always read set. This matches
- * a real 16550A running at infinite baud: status and interrupt
- * semantics are exact, only wall-clock timing is not modeled. In
- * particular the TX-empty interrupt stays asserted while IER_ETBEI is
- * set, exactly as on hardware, so drivers must clear ETBEI when idle
- * as they do on silicon.
- */
+/* 16550A UART emulation */
 #include <stdlib.h>
-#include <string.h>
 #include <assert.h>
 
 #include "cutils.h"
@@ -33,11 +23,14 @@
 #define UART_IIR_RLS 0x06 /* receiver line status */
 #define UART_IIR_RDA 0x04 /* received data available */
 #define UART_IIR_THRE 0x02 /* transmitter holding register empty */
+#define UART_IIR_CTI 0x0c /* receive timeout */
 #define UART_IIR_FIFO_ENABLED 0xc0
 
 #define UART_FCR_ENABLE_FIFO 0x01
 #define UART_FCR_CLEAR_RCVR 0x02
 #define UART_FCR_CLEAR_XMIT 0x04
+#define UART_FCR_TRIGGER_MASK 0xc0
+#define UART_FCR_STORE_MASK 0xc9
 
 #define UART_LCR_DLAB 0x80
 
@@ -48,19 +41,50 @@
 #define UART_LSR_THRE 0x20 /* transmitter holding register empty */
 #define UART_LSR_TEMT 0x40 /* transmitter empty */
 
-/* Fixed modem status with no modem attached: CTS, DSR and DCD
-   asserted, as on a looped-back cable. */
-#define UART_MSR_FIXED 0xb0
+#define UART_MSR_FIXED 0xb0 /* CTS, DSR and DCD */
 
 #define UART_RX_DEPTH 16
+
+struct UART16550State {
+    IRQSignal *irq;
+    UART16550TxFunc *tx_func;
+    void *tx_opaque;
+    uint8_t dll, dlm;
+    uint8_t ier, fcr, lcr, mcr, scr;
+    uint8_t rx_fifo[UART_RX_DEPTH];
+    int rx_head, rx_count;
+    BOOL rx_overrun;
+    BOOL thr_ipending;
+};
+
+static int uart16550_rx_capacity(UART16550State *s)
+{
+    if (s->fcr & UART_FCR_ENABLE_FIFO)
+        return UART_RX_DEPTH;
+    return 1;
+}
+
+static int uart16550_rx_trigger(UART16550State *s)
+{
+    static const uint8_t trigger[4] = { 1, 4, 8, 14 };
+
+    if (!(s->fcr & UART_FCR_ENABLE_FIFO))
+        return 1;
+    return trigger[(s->fcr & UART_FCR_TRIGGER_MASK) >> 6];
+}
 
 static int uart16550_pending_id(UART16550State *s)
 {
     if ((s->ier & UART_IER_RLSI) && s->rx_overrun)
         return UART_IIR_RLS;
-    if ((s->ier & UART_IER_ERBFI) && s->rx_count > 0)
-        return UART_IIR_RDA;
-    if (s->ier & UART_IER_ETBEI)
+    if (s->ier & UART_IER_ERBFI) {
+        if (s->rx_count >= uart16550_rx_trigger(s))
+            return UART_IIR_RDA;
+        /* Character timing is not modeled; expose a partial FIFO as timed out. */
+        if (s->rx_count > 0)
+            return UART_IIR_CTI;
+    }
+    if ((s->ier & UART_IER_ETBEI) && s->thr_ipending)
         return UART_IIR_THRE;
     return UART_IIR_NO_INT;
 }
@@ -85,7 +109,7 @@ static uint8_t uart16550_pop_rx(UART16550State *s)
 
 static void uart16550_push_rx(UART16550State *s, uint8_t val)
 {
-    if (s->rx_count >= UART_RX_DEPTH) {
+    if (s->rx_count >= uart16550_rx_capacity(s)) {
         s->rx_overrun = TRUE;
     } else {
         s->rx_fifo[(s->rx_head + s->rx_count) % UART_RX_DEPTH] = val;
@@ -152,6 +176,10 @@ static uint32_t uart16550_read(void *opaque, uint32_t offset,
         val = id;
         if (s->fcr & UART_FCR_ENABLE_FIFO)
             val |= UART_IIR_FIFO_ENABLED;
+        if (id == UART_IIR_THRE) {
+            s->thr_ipending = FALSE;
+            uart16550_update_irq(s);
+        }
         break;
     case UART_LCR_OFFSET:
         val = s->lcr;
@@ -182,6 +210,8 @@ static void uart16550_write(void *opaque, uint32_t offset, uint32_t val,
 {
     UART16550State *s = opaque;
     uint8_t ch;
+    uint8_t old_ier;
+    uint8_t new_fcr;
 
     assert(size_log2 == 0);
     if (offset >= 8)
@@ -198,27 +228,39 @@ static void uart16550_write(void *opaque, uint32_t offset, uint32_t val,
         ch = val;
         if (s->mcr & UART_MCR_LOOP)
             uart16550_push_rx(s, ch);
-        else
+        else if (s->tx_func)
             s->tx_func(s->tx_opaque, &ch, 1);
+        s->thr_ipending = TRUE;
+        uart16550_update_irq(s);
         break;
     case UART_IER_OFFSET:
-        s->ier = val;
+        old_ier = s->ier;
+        s->ier = val & 0x0f;
+        if (!(old_ier & UART_IER_ETBEI) && (s->ier & UART_IER_ETBEI))
+            s->thr_ipending = TRUE;
+        else if (!(s->ier & UART_IER_ETBEI))
+            s->thr_ipending = FALSE;
         uart16550_update_irq(s);
         break;
     case UART_IIR_OFFSET:
-        s->fcr = val;
+        new_fcr = val & UART_FCR_STORE_MASK;
+        if ((s->fcr ^ new_fcr) & UART_FCR_ENABLE_FIFO)
+            val |= UART_FCR_CLEAR_RCVR | UART_FCR_CLEAR_XMIT;
+        s->fcr = new_fcr;
         if (val & UART_FCR_CLEAR_RCVR) {
             s->rx_head = 0;
             s->rx_count = 0;
             s->rx_overrun = FALSE;
-            uart16550_update_irq(s);
         }
+        if (val & UART_FCR_CLEAR_XMIT)
+            s->thr_ipending = TRUE;
+        uart16550_update_irq(s);
         break;
     case UART_LCR_OFFSET:
         s->lcr = val;
         break;
     case UART_MCR_OFFSET:
-        s->mcr = val;
+        s->mcr = val & 0x1f;
         break;
     case UART_SCR_OFFSET:
         s->scr = val;
@@ -229,33 +271,37 @@ static void uart16550_write(void *opaque, uint32_t offset, uint32_t val,
 }
 
 UART16550State *uart16550_init(PhysMemoryMap *map, uint64_t base_addr,
-                               IRQSignal *irq, UART16550TxFunc *tx_func,
-                               void *tx_opaque)
+                               uint64_t region_size, IRQSignal *irq,
+                               UART16550TxFunc *tx_func, void *tx_opaque)
 {
     UART16550State *s;
 
     s = mallocz(sizeof(*s));
-    s->base_addr = base_addr;
     s->irq = irq;
     s->tx_func = tx_func;
     s->tx_opaque = tx_opaque;
-    cpu_register_device(map, base_addr, 8, s,
+    cpu_register_device(map, base_addr, region_size, s,
                         uart16550_read, uart16550_write, DEVIO_SIZE8);
     return s;
+}
+
+void uart16550_end(UART16550State *s)
+{
+    free(s);
 }
 
 int uart16550_receive_space(UART16550State *s)
 {
     if (s->mcr & UART_MCR_LOOP)
-        return 0; /* in loopback mode, accept no host input */
-    return UART_RX_DEPTH - s->rx_count;
+        return 0;
+    return uart16550_rx_capacity(s) - s->rx_count;
 }
 
 int uart16550_receive(UART16550State *s, const uint8_t *buf, int len)
 {
     int i;
 
-    for (i = 0; i < len && s->rx_count < UART_RX_DEPTH; i++)
+    for (i = 0; i < len && uart16550_receive_space(s) > 0; i++)
         uart16550_push_rx(s, buf[i]);
     return i;
 }

@@ -234,6 +234,29 @@ static int virt_machine_parse_config(VirtMachineParams *p,
     if (str) {
         p->cmdline = cmdline_subst(str);
     }
+
+    if (vm_get_str_opt(cfg, "console", &str) < 0)
+        goto tag_fail;
+    if (str) {
+        if (!strcmp(str, "virtio")) {
+            p->console_type = VM_CONSOLE_VIRTIO;
+        } else if (!strcmp(str, "uart")) {
+            p->console_type = VM_CONSOLE_UART;
+        } else {
+            vm_error("console: expected 'virtio' or 'uart'\n");
+            goto tag_fail;
+        }
+    }
+
+    tag_name = "uart_output";
+    el = json_object_get(cfg, tag_name);
+    if (!json_is_undefined(el)) {
+        if (el.type != JSON_BOOL) {
+            vm_error("%s: boolean expected\n", tag_name);
+            goto tag_fail;
+        }
+        p->uart_output = el.u.b;
+    }
     
     for(;;) {
         snprintf(buf1, sizeof(buf1), "drive%d", p->drive_count);
@@ -348,7 +371,6 @@ static void config_additional_file_load(VMConfigLoadState *s);
 static void config_additional_file_load_cb(void *opaque,
                                            uint8_t *buf, int buf_len);
 
-/* XXX: win32, URL */
 char *get_file_path(const char *base_filename, const char *filename)
 {
     int len, len1;
@@ -560,6 +582,7 @@ VirtMachine *virt_machine_init(const VirtMachineParams *p)
 void virt_machine_set_defaults(VirtMachineParams *p)
 {
     memset(p, 0, sizeof(*p));
+    p->console_type = VM_CONSOLE_VIRTIO;
 }
 
 void virt_machine_end(VirtMachine *s)

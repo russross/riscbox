@@ -88,7 +88,7 @@ struct socket * tcp_listen(Slirp *, uint32_t, u_int, uint32_t, u_int,
 void soisfconnecting(register struct socket *);
 void soisfconnected(register struct socket *);
 void sofwdrain(struct socket *);
-struct iovec; /* For win32 */
+struct iovec;
 size_t sopreprbuf(struct socket *so, struct iovec *iov, int *np);
 int soreadbuf(struct socket *so, const char *buf, int size);
 

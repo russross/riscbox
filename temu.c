@@ -529,7 +529,7 @@ void virt_machine_run(VirtMachine *m)
     fd_set rfds, wfds, efds;
     int fd_max, ret, delay;
     struct timeval tv;
-    int stdin_fd;
+    int stdin_fd = -1;
     
     delay = virt_machine_get_sleep_duration(m, MAX_SLEEP_TIME);
     
@@ -538,19 +538,19 @@ void virt_machine_run(VirtMachine *m)
     FD_ZERO(&wfds);
     FD_ZERO(&efds);
     fd_max = -1;
-    /* Take host input only while the UART FIFO has space; the rest
-       waits in the host pipe, as with hardware flow control. */
-    if (vm_serial_receive_space(m) > 0) {
+    if (m->console) {
         STDIODevice *s = m->console->opaque;
-        stdin_fd = s->stdin_fd;
-        FD_SET(stdin_fd, &rfds);
-        fd_max = stdin_fd;
 
         if (s->resize_pending) {
             int width, height;
             console_get_size(s, &width, &height);
-            virtio_console_resize_event(m->console_dev, width, height);
+            vm_console_resize(m, width, height);
             s->resize_pending = FALSE;
+        }
+        if (vm_console_receive_space(m) > 0) {
+            stdin_fd = s->stdin_fd;
+            FD_SET(stdin_fd, &rfds);
+            fd_max = stdin_fd;
         }
     }
     if (m->net) {
@@ -565,18 +565,15 @@ void virt_machine_run(VirtMachine *m)
     if (m->net) {
         m->net->select_poll(m->net, &rfds, &wfds, &efds, ret);
     }
-    if (ret > 0) {
-        if (FD_ISSET(stdin_fd, &rfds)) {
-            uint8_t buf[128];
-            int ret, space;
-            space = vm_serial_receive_space(m);
-            ret = m->console->read_data(m->console->opaque, buf,
-                                        min_int(space, (int)sizeof(buf)));
-            if (ret > 0) {
-                /* fits by construction; the device drops any excess */
-                vm_serial_receive(m, buf, ret);
-            }
-        }
+    if (ret > 0 && stdin_fd >= 0 && FD_ISSET(stdin_fd, &rfds)) {
+        uint8_t buf[128];
+        int len, space;
+
+        space = vm_console_receive_space(m);
+        len = m->console->read_data(m->console->opaque, buf,
+                                    min_int(space, (int)sizeof(buf)));
+        if (len > 0)
+            vm_console_receive(m, buf, len);
     }
 
 #ifdef CONFIG_SDL

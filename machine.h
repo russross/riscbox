@@ -54,6 +54,11 @@ typedef enum {
     VM_FILE_COUNT,
 } VMFileTypeEnum;
 
+typedef enum {
+    VM_CONSOLE_VIRTIO,
+    VM_CONSOLE_UART,
+} VMConsoleType;
+
 typedef struct {
     char *filename;
     uint8_t *buf;
@@ -91,6 +96,8 @@ typedef struct {
     char *display_device; /* NULL means no display */
     int width, height; /* graphic width & height */
     CharacterDevice *console;
+    VMConsoleType console_type;
+    BOOL uart_output;
     VMDriveEntry tab_drive[MAX_DRIVE_DEVICE];
     int drive_count;
     VMFSEntry tab_fs[MAX_FS_DEVICE];
@@ -110,7 +117,6 @@ typedef struct VirtMachine {
     /* network */
     EthernetDevice *net;
     /* console */
-    VIRTIODevice *console_dev;
     CharacterDevice *console;
     /* graphics */
     FBDevice *fb_dev;
@@ -125,8 +131,9 @@ struct VirtMachineClass {
     void (*vm_send_mouse_event)(VirtMachine *s1, int dx, int dy, int dz,
                                 unsigned int buttons);
     void (*vm_send_key_event)(VirtMachine *s1, BOOL is_down, uint16_t key_code);
-    int (*vm_serial_receive_space)(VirtMachine *s);
-    int (*vm_serial_receive)(VirtMachine *s, const uint8_t *buf, int len);
+    int (*vm_console_receive_space)(VirtMachine *s);
+    int (*vm_console_receive)(VirtMachine *s, const uint8_t *buf, int len);
+    void (*vm_console_resize)(VirtMachine *s, int width, int height);
 };
 
 extern const VirtMachineClass riscv_machine_class;
@@ -166,13 +173,18 @@ static inline void vm_send_key_event(VirtMachine *s1, BOOL is_down, uint16_t key
 {
     s1->vmc->vm_send_key_event(s1, is_down, key_code);
 }
-static inline int vm_serial_receive_space(VirtMachine *s)
+static inline int vm_console_receive_space(VirtMachine *s)
 {
-    return s->vmc->vm_serial_receive_space(s);
+    return s->vmc->vm_console_receive_space(s);
 }
-static inline int vm_serial_receive(VirtMachine *s, const uint8_t *buf, int len)
+static inline int vm_console_receive(VirtMachine *s,
+                                     const uint8_t *buf, int len)
 {
-    return s->vmc->vm_serial_receive(s, buf, len);
+    return s->vmc->vm_console_receive(s, buf, len);
+}
+static inline void vm_console_resize(VirtMachine *s, int width, int height)
+{
+    s->vmc->vm_console_resize(s, width, height);
 }
 
 /* gui */

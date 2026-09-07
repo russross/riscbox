@@ -1284,17 +1284,6 @@ static int virtio_console_recv_request(VIRTIODevice *s, int queue_idx,
     return 0;
 }
 
-BOOL virtio_console_can_write_data(VIRTIODevice *s)
-{
-    QueueState *qs = &s->queue[0];
-    uint16_t avail_idx;
-
-    if (!qs->ready)
-        return FALSE;
-    avail_idx = virtio_read16(s, qs->avail_addr + 2);
-    return qs->last_avail_idx != avail_idx;
-}
-
 int virtio_console_get_write_len(VIRTIODevice *s)
 {
     int queue_idx = 0;
@@ -2647,4 +2636,3 @@ VIRTIODevice *virtio_9p_init(VIRTIOBusDef *bus, FSDevice *fs,
     
     return (VIRTIODevice *)s;
 }
-

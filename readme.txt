@@ -12,7 +12,7 @@ TinyEMU System Emulator by Fabrice Bellard
   - 32/64 bit floating point instructions
   - Compressed instructions
 
-- VirtIO console, network, block device, input and 9P filesystem
+- 16550A UART and VirtIO console, network, block device, input and 9P filesystem
 
 - Graphical display with SDL
 
@@ -135,15 +135,23 @@ The floating point emulation is bit exact and supports all the
 specified instructions for 32 and 64 bit floating point
 numbers. It uses the new SoftFP library.
 
-4.3) HTIF console
+4.3) Consoles
 
-The standard HTIF console uses registers at variable addresses which
-are deduced by loading specific ELF symbols. TinyEMU does not rely on
-an ELF loader, so it is much simpler to use registers at fixed
-addresses (0x40008000). A small modification was made in the
-"riscv-pk" boot loader to support it. The HTIF console is only used to
-display boot messages and to power off the virtual system. The OS
-should use the VirtIO console.
+The RISC-V virt machine always exposes its 16550A UART at 0x10000000,
+as on QEMU's virt platform. The host terminal is connected to the
+VirtIO console by default. Set the following top-level configuration
+property to use the UART for both input and output instead:
+
+  console: "uart"
+
+This mode does not create a VirtIO console and is suitable for systems
+such as xv6. With the default VirtIO console, UART output can also be
+copied to the host terminal for firmware and early kernel messages:
+
+  uart_output: true
+
+Input still goes only to the selected console. If the guest writes to
+both devices, output from both appears on the terminal.
 
 4.4) Javascript version
 

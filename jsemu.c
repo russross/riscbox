@@ -308,19 +308,22 @@ void virt_machine_run(void *opaque)
     int delay, i;
     FBDevice *fb_dev;
     
-    if (m->console_dev && virtio_console_can_write_data(m->console_dev)) {
+    if (m->console) {
         uint8_t buf[128];
         int ret, len;
-        len = virtio_console_get_write_len(m->console_dev);
-        len = min_int(len, sizeof(buf));
-        ret = m->console->read_data(m->console->opaque, buf, len);
-        if (ret > 0)
-            virtio_console_write_data(m->console_dev, buf, ret);
+
         if (console_resize_pending) {
             int w, h;
             console_get_size(&w, &h);
-            virtio_console_resize_event(m->console_dev, w, h);
+            vm_console_resize(m, w, h);
             console_resize_pending = FALSE;
+        }
+        len = vm_console_receive_space(m);
+        len = min_int(len, (int)sizeof(buf));
+        if (len > 0) {
+            ret = m->console->read_data(m->console->opaque, buf, len);
+            if (ret > 0)
+                vm_console_receive(m, buf, ret);
         }
     }
 
@@ -346,4 +349,3 @@ void virt_machine_run(void *opaque)
         emscripten_async_call(virt_machine_run, m, MAX_SLEEP_TIME);
     }
 }
-

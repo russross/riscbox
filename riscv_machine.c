@@ -52,7 +52,9 @@ typedef struct RISCVMachine {
     uint64_t timecmp;
     uint32_t msip;
     /* PLIC */
-    uint32_t plic_pending_irq, plic_served_irq;
+    uint32_t plic_level_irq;
+    uint32_t plic_pending_irq;
+    uint32_t plic_claimed_irq[2];
     /* contexts: 0 is M-mode, 1 is S-mode */
     uint32_t plic_priority[32];
     uint32_t plic_enable[2];
@@ -63,6 +65,9 @@ typedef struct RISCVMachine {
     VIRTIODevice *mouse_dev;
 
     UART16550State *uart_dev;
+    VIRTIODevice *virtio_console_dev;
+    VMConsoleType console_type;
+    BOOL uart_output;
 
     int virtio_count;
 } RISCVMachine;
@@ -72,6 +77,9 @@ typedef struct RISCVMachine {
    the VIRT_PLATFORM_BUS expansion window (0x4000000-0x5ffffff). */
 #define LOW_RAM_SIZE   0x00010000 /* 64KB */
 #define RAM_BASE_ADDR  0x80000000 /* VIRT_DRAM */
+#define KERNEL_LOAD_OFFSET 0x00200000
+#define FDT_ALIGN 0x00200000
+#define FDT_MAX_OFFSET 0x40000000
 #define TEST_BASE_ADDR 0x00100000 /* VIRT_TEST */
 #define TEST_SIZE      0x00001000
 #define CLINT_BASE_ADDR 0x02000000 /* VIRT_CLINT */
@@ -128,10 +136,9 @@ static uint64_t rtc_get_time_for_cpu(void *opaque)
 }
 
 /* SiFive test finisher, as on QEMU virt: a 32-bit register at offset
-   0 whose low half selects pass, fail or reset. */
+   0 whose low half selects pass or fail. */
 #define TEST_FINISHER_FAIL 0x3333
 #define TEST_FINISHER_PASS 0x5555
-#define TEST_FINISHER_RESET 0x7777
 
 static uint32_t test_read(void *opaque, uint32_t offset,
                           int size_log2)
@@ -155,9 +162,6 @@ static void test_write(void *opaque, uint32_t offset, uint32_t val,
         exit(1);
     case TEST_FINISHER_PASS:
         printf("\nPower off.\n");
-        exit(0);
-    case TEST_FINISHER_RESET:
-        printf("\nReset.\n");
         exit(0);
     default:
         break;
@@ -231,30 +235,39 @@ static void clint_write(void *opaque, uint32_t offset, uint32_t val,
 #define PLIC_CONTEXT_THRESHOLD 0x0
 #define PLIC_CONTEXT_CLAIM 0x4
 
-/* lowest claimable irq for a context, 0 if none. PLIC sources are
-   1-based: source N lives in bit N. */
-static int plic_claimable_irq(RISCVMachine *s, int context)
+static int plic_find_irq(RISCVMachine *s, int context, BOOL check_threshold)
 {
     uint32_t mask;
-    int i;
-    mask = s->plic_pending_irq & ~s->plic_served_irq &
-        s->plic_enable[context];
+    uint32_t best_priority;
+    int best_irq, i;
+
+    mask = s->plic_pending_irq & s->plic_enable[context];
+    best_irq = 0;
+    best_priority = 0;
     for(i = 1; i < 32; i++) {
-        if ((mask & (1 << i)) &&
-            s->plic_priority[i] > s->plic_threshold[context])
-            return i;
+        uint32_t priority;
+
+        if (!(mask & (UINT32_C(1) << i)))
+            continue;
+        priority = s->plic_priority[i];
+        if (check_threshold && priority <= s->plic_threshold[context])
+            continue;
+        if (priority > best_priority) {
+            best_irq = i;
+            best_priority = priority;
+        }
     }
-    return 0;
+    return best_irq;
 }
 
 static void plic_update_mip(RISCVMachine *s)
 {
     RISCVCPUState *cpu = s->cpu_state;
-    if (plic_claimable_irq(s, 0))
+    if (plic_find_irq(s, 0, TRUE))
         riscv_cpu_set_mip(cpu, MIP_MEIP);
     else
         riscv_cpu_reset_mip(cpu, MIP_MEIP);
-    if (plic_claimable_irq(s, 1))
+    if (plic_find_irq(s, 1, TRUE))
         riscv_cpu_set_mip(cpu, MIP_SEIP);
     else
         riscv_cpu_reset_mip(cpu, MIP_SEIP);
@@ -262,20 +275,32 @@ static void plic_update_mip(RISCVMachine *s)
 
 static uint32_t plic_claim(RISCVMachine *s, int context)
 {
-    int irq = plic_claimable_irq(s, context);
+    uint32_t mask;
+    int irq;
+
+    irq = plic_find_irq(s, context, FALSE);
     if (irq != 0) {
-        s->plic_served_irq |= 1 << irq;
+        mask = UINT32_C(1) << irq;
+        s->plic_pending_irq &= ~mask;
+        s->plic_claimed_irq[context] |= mask;
         plic_update_mip(s);
     }
     return irq;
 }
 
-static void plic_complete(RISCVMachine *s, uint32_t val)
+static void plic_complete(RISCVMachine *s, int context, uint32_t irq)
 {
-    if (val >= 1 && val < 32) {
-        s->plic_served_irq &= ~(1 << val);
-        plic_update_mip(s);
-    }
+    uint32_t mask;
+
+    if (irq < 1 || irq >= 32)
+        return;
+    mask = UINT32_C(1) << irq;
+    if (!(s->plic_claimed_irq[context] & mask))
+        return;
+    s->plic_claimed_irq[context] &= ~mask;
+    if (s->plic_level_irq & mask)
+        s->plic_pending_irq |= mask;
+    plic_update_mip(s);
 }
 
 static uint32_t plic_read(void *opaque, uint32_t offset, int size_log2)
@@ -320,12 +345,12 @@ static void plic_write(void *opaque, uint32_t offset, uint32_t val,
         return;
     }
     if (offset == PLIC_ENABLE_BASE) {
-        s->plic_enable[0] = val;
+        s->plic_enable[0] = val & ~UINT32_C(1);
         plic_update_mip(s);
         return;
     }
     if (offset == PLIC_ENABLE_BASE + PLIC_ENABLE_SIZE) {
-        s->plic_enable[1] = val;
+        s->plic_enable[1] = val & ~UINT32_C(1);
         plic_update_mip(s);
         return;
     }
@@ -337,7 +362,7 @@ static void plic_write(void *opaque, uint32_t offset, uint32_t val,
             s->plic_threshold[context] = val & 7;
             plic_update_mip(s);
         } else if (offset == PLIC_CONTEXT_CLAIM) {
-            plic_complete(s, val);
+            plic_complete(s, context, val);
         }
     }
 }
@@ -347,11 +372,15 @@ static void plic_set_irq(void *opaque, int irq_num, int state)
     RISCVMachine *s = opaque;
     uint32_t mask;
 
-    mask = 1 << irq_num;
-    if (state)
-        s->plic_pending_irq |= mask;
-    else
-        s->plic_pending_irq &= ~mask;
+    mask = UINT32_C(1) << irq_num;
+    if (state) {
+        s->plic_level_irq |= mask;
+        if (!(s->plic_claimed_irq[0] & mask) &&
+            !(s->plic_claimed_irq[1] & mask))
+            s->plic_pending_irq |= mask;
+    } else {
+        s->plic_level_irq &= ~mask;
+    }
     plic_update_mip(s);
 }
 
@@ -359,6 +388,10 @@ static void uart_tx_func(void *opaque, const uint8_t *buf, int len)
 {
     RISCVMachine *s = opaque;
 
+    if (!s->common.console)
+        return;
+    if (s->console_type != VM_CONSOLE_UART && !s->uart_output)
+        return;
     s->common.console->write_data(s->common.console->opaque, buf, len);
 }
 
@@ -573,8 +606,18 @@ static void fdt_prop_tab_str(FDTState *s, const char *prop_name,
     free(tab);
 }
 
-/* write the FDT to 'dst1'. return the FDT size in bytes */
-int fdt_output(FDTState *s, uint8_t *dst)
+static int fdt_output_size(FDTState *s)
+{
+    int pos;
+
+    pos = sizeof(struct fdt_header) + s->tab_len * sizeof(uint32_t);
+    pos = (pos + 7) & ~7;
+    pos += sizeof(struct fdt_reserve_entry) + s->string_table_len;
+    return (pos + 7) & ~7;
+}
+
+/* write the FDT to 'dst'. return the FDT size in bytes */
+static int fdt_output(FDTState *s, uint8_t *dst)
 {
     struct fdt_header *h;
     struct fdt_reserve_entry *re;
@@ -583,8 +626,6 @@ int fdt_output(FDTState *s, uint8_t *dst)
     int pos;
 
     assert(s->open_node_count == 0);
-    
-    fdt_put32(s, FDT_END);
     
     dt_struct_size = s->tab_len * sizeof(uint32_t);
     dt_strings_size = s->string_table_len;
@@ -636,11 +677,12 @@ void fdt_end(FDTState *s)
 /* Canonical single-letter ISA order from the RISC-V DT bindings. */
 static const char single_letter_order[] = "iemafdqcbkjpvh";
 
-static int riscv_build_fdt(RISCVMachine *m, uint8_t *dst,
-                           uint64_t initrd_start, uint64_t initrd_size,
-                           const char *cmd_line)
+static uint8_t *riscv_build_fdt(RISCVMachine *m, int *pfdt_size,
+                                uint64_t initrd_start, uint64_t initrd_size,
+                                const char *cmd_line)
 {
     FDTState *s;
+    uint8_t *dst;
     int size, i, cur_phandle, intc_phandle, plic_phandle, cpu_phandle;
     int syscon_phandle;
     char isa_string[128], *q;
@@ -827,13 +869,6 @@ static int riscv_build_fdt(RISCVMachine *m, uint8_t *dst,
     
     fdt_end_node(s); /* soc */
 
-    fdt_begin_node(s, "reboot");
-    fdt_prop_str(s, "compatible", "syscon-reboot");
-    fdt_prop_u32(s, "regmap", syscon_phandle);
-    fdt_prop_u32(s, "offset", 0);
-    fdt_prop_u32(s, "value", TEST_FINISHER_RESET);
-    fdt_end_node(s); /* reboot */
-
     fdt_begin_node(s, "poweroff");
     fdt_prop_str(s, "compatible", "syscon-poweroff");
     fdt_prop_u32(s, "regmap", syscon_phandle);
@@ -853,6 +888,8 @@ static int riscv_build_fdt(RISCVMachine *m, uint8_t *dst,
     
     fdt_end_node(s); /* / */
 
+    fdt_put32(s, FDT_END);
+    dst = malloc(fdt_output_size(s));
     size = fdt_output(s, dst);
 #if 0
     {
@@ -863,7 +900,8 @@ static int riscv_build_fdt(RISCVMachine *m, uint8_t *dst,
     }
 #endif
     fdt_end(s);
-    return size;
+    *pfdt_size = size;
+    return dst;
 }
 
 static void copy_bios(RISCVMachine *s, const uint8_t *buf, int buf_len,
@@ -871,58 +909,83 @@ static void copy_bios(RISCVMachine *s, const uint8_t *buf, int buf_len,
                       const uint8_t *initrd_buf, int initrd_buf_len,
                       const char *cmd_line)
 {
-    uint64_t fdt_addr, align, kernel_base, kernel_end, initrd_base;
+    uint64_t bios_end, fdt_addr, fdt_limit, fdt_offset;
+    uint64_t initrd_base, initrd_end, kernel_base, kernel_end;
+    uint8_t *fdt_buf;
     uint8_t *ram_ptr, *low_ptr;
     uint32_t *q;
     uint64_t *qd;
+    int fdt_size;
 
-    if (buf_len > s->ram_size) {
+    bios_end = buf_len;
+    if (bios_end > s->ram_size) {
         vm_error("BIOS too big\n");
         exit(1);
     }
 
-    ram_ptr = get_ram_ptr(s, RAM_BASE_ADDR, TRUE);
-    memcpy(ram_ptr, buf, buf_len);
-
-    /* The kernel load address matches the FW_JUMP default next address:
-       2 MB above the firmware load address. */
     kernel_base = 0;
+    kernel_end = bios_end;
     if (kernel_buf_len > 0) {
-        /* copy the kernel if present */
-        align = 2 << 20; /* 2 MB page align */
-        kernel_base = (buf_len + align - 1) & ~(align - 1);
-        memcpy(ram_ptr + kernel_base, kernel_buf, kernel_buf_len);
-        if (kernel_buf_len + kernel_base > s->ram_size) {
-            vm_error("kernel too big");
+        kernel_base = KERNEL_LOAD_OFFSET;
+        if (bios_end > kernel_base) {
+            vm_error("BIOS overlaps the kernel load address\n");
+            exit(1);
+        }
+        kernel_end = kernel_base + kernel_buf_len;
+        if (kernel_end > s->ram_size) {
+            vm_error("kernel too big\n");
             exit(1);
         }
     }
 
     initrd_base = 0;
+    initrd_end = 0;
     if (initrd_buf_len > 0) {
         /* same allocation as QEMU */
         initrd_base = s->ram_size / 2;
         if (initrd_base > (128 << 20))
             initrd_base = 128 << 20;
-        memcpy(ram_ptr + initrd_base, initrd_buf, initrd_buf_len);
-        if (initrd_buf_len + initrd_base > s->ram_size) {
-            vm_error("initrd too big");
+        initrd_end = initrd_base + initrd_buf_len;
+        if (kernel_end > initrd_base) {
+            vm_error("kernel overlaps initrd\n");
+            exit(1);
+        }
+        if (initrd_end > s->ram_size) {
+            vm_error("initrd too big\n");
             exit(1);
         }
     }
 
-    /* Place the FDT in DRAM just past the kernel so fw_jump passes it
-       to the next stage in a1 without overlap. */
-    kernel_end = kernel_base + kernel_buf_len;
-    fdt_addr = RAM_BASE_ADDR + ((kernel_end + 7) & ~7);
-    if (fdt_addr + 8192 > RAM_BASE_ADDR + s->ram_size) {
-        vm_error("not enough RAM for the device tree");
+    fdt_buf = riscv_build_fdt(s, &fdt_size,
+                              RAM_BASE_ADDR + initrd_base, initrd_buf_len,
+                              cmd_line);
+    /* Keep the FDT high in RAM and below 3 GB, as on QEMU virt. */
+    fdt_limit = s->ram_size;
+    if (fdt_limit > FDT_MAX_OFFSET)
+        fdt_limit = FDT_MAX_OFFSET;
+    if ((uint64_t)fdt_size > fdt_limit) {
+        free(fdt_buf);
+        vm_error("not enough RAM for the device tree\n");
         exit(1);
     }
+    fdt_offset = (fdt_limit - fdt_size) & ~(FDT_ALIGN - 1);
+    if (fdt_offset < kernel_end ||
+        (initrd_buf_len > 0 && initrd_base < fdt_offset + fdt_size &&
+         fdt_offset < initrd_end)) {
+        free(fdt_buf);
+        vm_error("not enough RAM for the device tree\n");
+        exit(1);
+    }
+    fdt_addr = RAM_BASE_ADDR + fdt_offset;
 
-    riscv_build_fdt(s, ram_ptr + (fdt_addr - RAM_BASE_ADDR),
-                    RAM_BASE_ADDR + initrd_base, initrd_buf_len,
-                    cmd_line);
+    ram_ptr = get_ram_ptr(s, RAM_BASE_ADDR, TRUE);
+    memcpy(ram_ptr, buf, buf_len);
+    if (kernel_buf_len > 0)
+        memcpy(ram_ptr + kernel_base, kernel_buf, kernel_buf_len);
+    if (initrd_buf_len > 0)
+        memcpy(ram_ptr + initrd_base, initrd_buf, initrd_buf_len);
+    memcpy(ram_ptr + fdt_offset, fdt_buf, fdt_size);
+    free(fdt_buf);
 
     /* Reset vector at 0x1000, as on QEMU virt: enter the firmware at
        RAM_BASE_ADDR with a0 = mhartid and a1 = FDT address. The
@@ -995,8 +1058,10 @@ static VirtMachine *riscv_machine_init(const VirtMachineParams *p)
     cpu_register_device(s->mem_map, TEST_BASE_ADDR, TEST_SIZE,
                         s, test_read, test_write, DEVIO_SIZE32);
     s->common.console = p->console;
+    s->console_type = p->console_type;
+    s->uart_output = p->uart_output;
 
-    s->uart_dev = uart16550_init(s->mem_map, UART_BASE_ADDR,
+    s->uart_dev = uart16550_init(s->mem_map, UART_BASE_ADDR, UART_SIZE,
                                  &s->plic_irq[UART_IRQ],
                                  uart_tx_func, s);
 
@@ -1005,9 +1070,9 @@ static VirtMachine *riscv_machine_init(const VirtMachineParams *p)
     vbus->addr = VIRTIO_BASE_ADDR;
 
     /* virtio console */
-    if (p->console) {
+    if (p->console && p->console_type == VM_CONSOLE_VIRTIO) {
         vbus->irq = &s->plic_irq[virtio_irq_num(s->virtio_count)];
-        s->common.console_dev = virtio_console_init(vbus, p->console);
+        s->virtio_console_dev = virtio_console_init(vbus, p->console);
         vbus->addr += VIRTIO_SIZE;
         s->virtio_count++;
     }
@@ -1095,6 +1160,7 @@ static void riscv_machine_end(VirtMachine *s1)
     /* XXX: stop all */
     riscv_cpu_end(s->cpu_state);
     phys_mem_map_end(s->mem_map);
+    uart16550_end(s->uart_dev);
     free(s);
 }
 
@@ -1138,17 +1204,37 @@ static void riscv_vm_send_key_event(VirtMachine *s1, BOOL is_down,
     }
 }
 
-static int riscv_vm_serial_receive_space(VirtMachine *s1)
+static int riscv_vm_console_receive_space(VirtMachine *s1)
 {
     RISCVMachine *s = (RISCVMachine *)s1;
-    return uart16550_receive_space(s->uart_dev);
+
+    if (!s->common.console)
+        return 0;
+    if (s->console_type == VM_CONSOLE_UART)
+        return uart16550_receive_space(s->uart_dev);
+    if (s->virtio_console_dev)
+        return virtio_console_get_write_len(s->virtio_console_dev);
+    return 0;
 }
 
-static int riscv_vm_serial_receive(VirtMachine *s1,
-                                   const uint8_t *buf, int len)
+static int riscv_vm_console_receive(VirtMachine *s1,
+                                    const uint8_t *buf, int len)
 {
     RISCVMachine *s = (RISCVMachine *)s1;
-    return uart16550_receive(s->uart_dev, buf, len);
+
+    if (s->console_type == VM_CONSOLE_UART)
+        return uart16550_receive(s->uart_dev, buf, len);
+    if (s->virtio_console_dev)
+        return virtio_console_write_data(s->virtio_console_dev, buf, len);
+    return 0;
+}
+
+static void riscv_vm_console_resize(VirtMachine *s1, int width, int height)
+{
+    RISCVMachine *s = (RISCVMachine *)s1;
+
+    if (s->console_type == VM_CONSOLE_VIRTIO && s->virtio_console_dev)
+        virtio_console_resize_event(s->virtio_console_dev, width, height);
 }
 
 static BOOL riscv_vm_mouse_is_absolute(VirtMachine *s)
@@ -1173,6 +1259,7 @@ const VirtMachineClass riscv_machine_class = {
     riscv_vm_mouse_is_absolute,
     riscv_vm_send_mouse_event,
     riscv_vm_send_key_event,
-    riscv_vm_serial_receive_space,
-    riscv_vm_serial_receive,
+    riscv_vm_console_receive_space,
+    riscv_vm_console_receive,
+    riscv_vm_console_resize,
 };

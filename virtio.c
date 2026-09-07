@@ -291,7 +291,7 @@ static void virtio_init(VIRTIODevice *s, VIRTIOBusDef *bus,
     }
 
     s->device_id = device_id;
-    s->vendor_id = 0xffff;
+    s->vendor_id = 0x554d4551; /* "QEMU" */
     s->config_space_size = config_space_size;
     s->device_recv = device_recv;
     virtio_reset(s);

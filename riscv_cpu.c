@@ -1050,7 +1050,11 @@ static CSRWriteResult csr_write(RISCVCPUState *s, uint32_t csr,
         break;
 #endif
     case 0x100: /* sstatus */
+        old = s->mstatus;
         set_mstatus(s, (s->mstatus & ~SSTATUS_MASK) | (val & SSTATUS_MASK));
+        if (!(old & MSTATUS_SIE) && (s->mstatus & MSTATUS_SIE) &&
+            (s->mip & s->mie & s->mideleg))
+            return CSR_WRITE_INTERRUPT;
         break;
     case 0x104: /* sie */
         mask = s->mideleg;
@@ -1105,7 +1109,11 @@ static CSRWriteResult csr_write(RISCVCPUState *s, uint32_t csr,
         return CSR_WRITE_FLUSH_TLB;
         
     case 0x300:
+        old = s->mstatus;
         set_mstatus(s, val);
+        if (!(old & MSTATUS_MIE) && (s->mstatus & MSTATUS_MIE) &&
+            (s->mip & s->mie & ~s->mideleg))
+            return CSR_WRITE_INTERRUPT;
         break;
     case 0x301: /* misa */
         break;
@@ -1287,10 +1295,9 @@ static void handle_sret(RISCVCPUState *s)
 {
     int spp, spie;
     spp = (s->mstatus >> MSTATUS_SPP_SHIFT) & 1;
-    /* set the IE state to previous IE state */
     spie = (s->mstatus >> MSTATUS_SPIE_SHIFT) & 1;
-    s->mstatus = (s->mstatus & ~(1 << spp)) |
-        (spie << spp);
+    s->mstatus = (s->mstatus & ~MSTATUS_SIE) |
+        (spie ? MSTATUS_SIE : 0);
     /* set SPIE to 1 */
     s->mstatus |= MSTATUS_SPIE;
     /* set SPP to U */
@@ -1304,10 +1311,9 @@ static void handle_mret(RISCVCPUState *s)
 {
     int mpp, mpie;
     mpp = (s->mstatus >> MSTATUS_MPP_SHIFT) & 3;
-    /* set the IE state to previous IE state */
     mpie = (s->mstatus >> MSTATUS_MPIE_SHIFT) & 1;
-    s->mstatus = (s->mstatus & ~(1 << mpp)) |
-        (mpie << mpp);
+    s->mstatus = (s->mstatus & ~MSTATUS_MIE) |
+        (mpie ? MSTATUS_MIE : 0);
     /* set MPIE to 1 */
     s->mstatus |= MSTATUS_MPIE;
     /* set MPP to U */

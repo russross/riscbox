@@ -27,7 +27,10 @@ struct UART16550State {
 UART16550State *uart16550_init(PhysMemoryMap *map, uint64_t base_addr,
                                IRQSignal *irq, UART16550TxFunc *tx_func,
                                void *tx_opaque);
-BOOL uart16550_can_receive(UART16550State *s);
+
+/* Free bytes in the receive FIFO. Host input must not exceed this;
+   bytes beyond it wait in the host pipe, as with hardware flow. */
+int uart16550_receive_space(UART16550State *s);
 
 /* Feed host input bytes into the receive FIFO. Returns the number of
    bytes stored; the caller routes the remainder elsewhere. */

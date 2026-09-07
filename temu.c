@@ -534,12 +534,6 @@ static EthernetDevice *slirp_open(void)
 #define MAX_EXEC_CYCLE 500000
 #define MAX_SLEEP_TIME 10 /* in ms */
 
-/* Staged serial input: host bytes that did not fit into the UART
-   receive FIFO. Delivered as the guest reads. */
-#define SERIAL_PENDING_SIZE 128
-static uint8_t serial_pending_buf[SERIAL_PENDING_SIZE];
-static int serial_pending_len;
-
 void virt_machine_run(VirtMachine *m)
 {
     fd_set rfds, wfds, efds;
@@ -557,8 +551,9 @@ void virt_machine_run(VirtMachine *m)
     FD_ZERO(&efds);
     fd_max = -1;
 #ifndef _WIN32
-    if ((m->console_dev && virtio_console_can_write_data(m->console_dev)) ||
-        vm_serial_can_receive(m)) {
+    /* Take host input only while the UART FIFO has space; the rest
+       waits in the host pipe, as with hardware flow control. */
+    if (vm_serial_receive_space(m) > 0) {
         STDIODevice *s = m->console->opaque;
         stdin_fd = s->stdin_fd;
         FD_SET(stdin_fd, &rfds);
@@ -588,32 +583,13 @@ void virt_machine_run(VirtMachine *m)
 #ifndef _WIN32
         if (FD_ISSET(stdin_fd, &rfds)) {
             uint8_t buf[128];
-            int ret, len, n;
-            ret = m->console->read_data(m->console->opaque, buf, sizeof(buf));
+            int ret, space;
+            space = vm_serial_receive_space(m);
+            ret = m->console->read_data(m->console->opaque, buf,
+                                        min_int(space, (int)sizeof(buf)));
             if (ret > 0) {
-                /* stage for the serial console first */
-                n = min_int(ret, SERIAL_PENDING_SIZE - serial_pending_len);
-                memcpy(serial_pending_buf + serial_pending_len, buf, n);
-                serial_pending_len += n;
-                /* flood overflow keeps the old virtio fallback */
-                if (n < ret && m->console_dev) {
-                    len = virtio_console_get_write_len(m->console_dev);
-                    len = min_int(len, ret - n);
-                    if (len > 0) {
-                        virtio_console_write_data(m->console_dev,
-                                                  buf + n, len);
-                    }
-                }
-            }
-        }
-        /* deliver staged bytes to the serial console */
-        if (serial_pending_len > 0) {
-            int n = vm_serial_receive(m, serial_pending_buf,
-                                      serial_pending_len);
-            if (n > 0) {
-                memmove(serial_pending_buf, serial_pending_buf + n,
-                        serial_pending_len - n);
-                serial_pending_len -= n;
+                /* fits by construction; the device drops any excess */
+                vm_serial_receive(m, buf, ret);
             }
         }
 #endif

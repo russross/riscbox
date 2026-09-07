@@ -1085,10 +1085,10 @@ static void riscv_vm_send_key_event(VirtMachine *s1, BOOL is_down,
     }
 }
 
-static BOOL riscv_vm_serial_can_receive(VirtMachine *s1)
+static int riscv_vm_serial_receive_space(VirtMachine *s1)
 {
     RISCVMachine *s = (RISCVMachine *)s1;
-    return uart16550_can_receive(s->uart_dev);
+    return uart16550_receive_space(s->uart_dev);
 }
 
 static int riscv_vm_serial_receive(VirtMachine *s1,
@@ -1120,6 +1120,6 @@ const VirtMachineClass riscv_machine_class = {
     riscv_vm_mouse_is_absolute,
     riscv_vm_send_mouse_event,
     riscv_vm_send_key_event,
-    riscv_vm_serial_can_receive,
+    riscv_vm_serial_receive_space,
     riscv_vm_serial_receive,
 };

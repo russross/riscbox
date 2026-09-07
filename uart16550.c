@@ -244,9 +244,11 @@ UART16550State *uart16550_init(PhysMemoryMap *map, uint64_t base_addr,
     return s;
 }
 
-BOOL uart16550_can_receive(UART16550State *s)
+int uart16550_receive_space(UART16550State *s)
 {
-    return s->rx_count < UART_RX_DEPTH;
+    if (s->mcr & UART_MCR_LOOP)
+        return 0; /* in loopback mode, accept no host input */
+    return UART_RX_DEPTH - s->rx_count;
 }
 
 int uart16550_receive(UART16550State *s, const uint8_t *buf, int len)

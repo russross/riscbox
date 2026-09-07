@@ -125,7 +125,7 @@ struct VirtMachineClass {
     void (*vm_send_mouse_event)(VirtMachine *s1, int dx, int dy, int dz,
                                 unsigned int buttons);
     void (*vm_send_key_event)(VirtMachine *s1, BOOL is_down, uint16_t key_code);
-    BOOL (*vm_serial_can_receive)(VirtMachine *s);
+    int (*vm_serial_receive_space)(VirtMachine *s);
     int (*vm_serial_receive)(VirtMachine *s, const uint8_t *buf, int len);
 };
 
@@ -166,9 +166,9 @@ static inline void vm_send_key_event(VirtMachine *s1, BOOL is_down, uint16_t key
 {
     s1->vmc->vm_send_key_event(s1, is_down, key_code);
 }
-static inline BOOL vm_serial_can_receive(VirtMachine *s)
+static inline int vm_serial_receive_space(VirtMachine *s)
 {
-    return s->vmc->vm_serial_can_receive(s);
+    return s->vmc->vm_serial_receive_space(s);
 }
 static inline int vm_serial_receive(VirtMachine *s, const uint8_t *buf, int len)
 {

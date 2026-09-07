@@ -710,7 +710,6 @@ void fdt_end(FDTState *s)
 static const char single_letter_order[] = "iemafdqcbkjpvh";
 
 static int riscv_build_fdt(RISCVMachine *m, uint8_t *dst,
-                           uint64_t kernel_start, uint64_t kernel_size,
                            uint64_t initrd_start, uint64_t initrd_size,
                            const char *cmd_line)
 {
@@ -900,15 +899,10 @@ static int riscv_build_fdt(RISCVMachine *m, uint8_t *dst,
     fdt_begin_node(s, "chosen");
     fdt_prop_str(s, "bootargs", cmd_line ? cmd_line : "");
     fdt_prop_str(s, "stdout-path", "/soc/serial@10000000");
-    if (kernel_size > 0) {
-        fdt_prop_tab_u64(s, "riscv,kernel-start", kernel_start);
-        fdt_prop_tab_u64(s, "riscv,kernel-end", kernel_start + kernel_size);
-    }
     if (initrd_size > 0) {
         fdt_prop_tab_u64(s, "linux,initrd-start", initrd_start);
         fdt_prop_tab_u64(s, "linux,initrd-end", initrd_start + initrd_size);
     }
-    
 
     fdt_end_node(s); /* chosen */
     
@@ -932,9 +926,10 @@ static void copy_bios(RISCVMachine *s, const uint8_t *buf, int buf_len,
                       const uint8_t *initrd_buf, int initrd_buf_len,
                       const char *cmd_line)
 {
-    uint32_t fdt_addr, align, kernel_base, initrd_base;
-    uint8_t *ram_ptr;
+    uint64_t fdt_addr, align, kernel_base, kernel_end, initrd_base;
+    uint8_t *ram_ptr, *low_ptr;
     uint32_t *q;
+    uint64_t *qd;
 
     if (buf_len > s->ram_size) {
         vm_error("BIOS too big\n");
@@ -944,6 +939,8 @@ static void copy_bios(RISCVMachine *s, const uint8_t *buf, int buf_len,
     ram_ptr = get_ram_ptr(s, RAM_BASE_ADDR, TRUE);
     memcpy(ram_ptr, buf, buf_len);
 
+    /* The kernel load address matches the FW_JUMP default next address:
+       2 MB above the firmware load address. */
     kernel_base = 0;
     if (kernel_buf_len > 0) {
         /* copy the kernel if present */
@@ -968,24 +965,34 @@ static void copy_bios(RISCVMachine *s, const uint8_t *buf, int buf_len,
             exit(1);
         }
     }
-    
-    ram_ptr = get_ram_ptr(s, 0, TRUE);
-    
-    fdt_addr = 0x1000 + 8 * 8;
 
-    riscv_build_fdt(s, ram_ptr + fdt_addr,
-                    RAM_BASE_ADDR + kernel_base, kernel_buf_len,
+    /* Place the FDT in DRAM just past the kernel so fw_jump passes it
+       to the next stage in a1 without overlap. */
+    kernel_end = kernel_base + kernel_buf_len;
+    fdt_addr = RAM_BASE_ADDR + ((kernel_end + 7) & ~7);
+    if (fdt_addr + 8192 > RAM_BASE_ADDR + s->ram_size) {
+        vm_error("not enough RAM for the device tree");
+        exit(1);
+    }
+
+    riscv_build_fdt(s, ram_ptr + (fdt_addr - RAM_BASE_ADDR),
                     RAM_BASE_ADDR + initrd_base, initrd_buf_len,
                     cmd_line);
 
-    /* jump_addr = 0x80000000 */
-    
-    q = (uint32_t *)(ram_ptr + 0x1000);
-    q[0] = 0x297 + 0x80000000 - 0x1000; /* auipc t0, jump_addr */
-    q[1] = 0x597; /* auipc a1, dtb */
-    q[2] = 0x58593 + ((fdt_addr - 4) << 20); /* addi a1, a1, dtb */
-    q[3] = 0xf1402573; /* csrr a0, mhartid */
-    q[4] = 0x00028067; /* jalr zero, t0, jump_addr */
+    /* Reset vector at 0x1000, as on QEMU virt: enter the firmware at
+       RAM_BASE_ADDR with a0 = mhartid and a1 = FDT address. The
+       targets are loaded from literals so any 64-bit address works. */
+    low_ptr = get_ram_ptr(s, 0, TRUE);
+    q = (uint32_t *)(low_ptr + 0x1000);
+    q[0] = 0x00000297; /* auipc t0, 0 */
+    q[1] = 0x0182b283; /* ld t0, 24(t0) */
+    q[2] = 0x00000597; /* auipc a1, 0 */
+    q[3] = 0x0185b583; /* ld a1, 24(a1) */
+    q[4] = 0xf1402573; /* csrr a0, mhartid */
+    q[5] = 0x00028067; /* jalr zero, 0(t0) */
+    qd = (uint64_t *)(low_ptr + 0x1018);
+    qd[0] = RAM_BASE_ADDR;
+    qd[1] = fdt_addr;
 }
 
 static void riscv_flush_tlb_write_range(void *opaque, uint8_t *ram_addr,

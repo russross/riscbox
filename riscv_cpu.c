@@ -695,6 +695,9 @@ static int csr_read(RISCVCPUState *s, target_ulong *pval, uint32_t csr,
     case 0x106:
         val = s->scounteren;
         break;
+    case 0x10a: /* senvcfg: no S-mode features implemented */
+        val = 0;
+        break;
     case 0x140:
         val = s->sscratch;
         break;
@@ -734,6 +737,9 @@ static int csr_read(RISCVCPUState *s, target_ulong *pval, uint32_t csr,
         break;
     case 0x306:
         val = s->mcounteren;
+        break;
+    case 0x30a: /* menvcfg: no M-mode features implemented */
+        val = 0;
         break;
     case 0x340:
         val = s->mscratch;
@@ -849,6 +855,8 @@ static CSRWriteResult csr_write(RISCVCPUState *s, uint32_t csr,
     case 0x106:
         s->scounteren = val & COUNTEREN_MASK;
         break;
+    case 0x10a: /* senvcfg: hardwired to zero */
+        break;
     case 0x140:
         s->sscratch = val;
         break;
@@ -901,6 +909,8 @@ static CSRWriteResult csr_write(RISCVCPUState *s, uint32_t csr,
         break;
     case 0x306:
         s->mcounteren = val & COUNTEREN_MASK;
+        break;
+    case 0x30a: /* menvcfg: hardwired to zero */
         break;
     case 0xb00: /* mcycle */
         s->cycle_counter = val;

@@ -145,9 +145,10 @@ static __attribute__((unused)) void cpu_abort(RISCVCPUState *s)
 #define PTE_D_MASK (1 << 7)
 #define PTE_PPN_MASK (((uint64_t)1 << 44) - 1)
 #define PTE_PBMT_MASK ((uint64_t)3 << 61)
-#define PTE_HIGH_RESERVED_MASK (((uint64_t)0x7f << 54) | ((uint64_t)1 << 63))
+#define PTE_N_MASK ((uint64_t)1 << 63)
+#define PTE_HIGH_RESERVED_MASK ((uint64_t)0x7f << 54)
 #define PTE_NONLEAF_RESERVED_MASK \
-    (PTE_U_MASK | PTE_A_MASK | PTE_D_MASK | PTE_PBMT_MASK)
+    (PTE_U_MASK | PTE_A_MASK | PTE_D_MASK | PTE_PBMT_MASK | PTE_N_MASK)
 
 #define SATP_MODE_SHIFT 60
 #define SATP_MODE_MASK 0xf
@@ -323,6 +324,13 @@ static TranslationResult get_phys_addr(RISCVCPUState *s,
                 ((pte & PTE_PBMT_MASK) &&
                  !(s->menvcfg & MENVCFG_PBMTE)))
                 return TRANSLATE_PAGE_FAULT;
+            if (pte & PTE_N_MASK) {
+                if (i != SV39_LEVELS - 1 ||
+                    ((paddr >> PG_SHIFT) & 0xf) != 8)
+                    return TRANSLATE_PAGE_FAULT;
+                paddr = (paddr & ~((target_ulong)0xf << PG_SHIFT)) |
+                    (vaddr & ((target_ulong)0xf << PG_SHIFT));
+            }
             if (xwr == 2 || xwr == 6)
                 return TRANSLATE_PAGE_FAULT;
             vaddr_mask = ((target_ulong)1 << vaddr_shift) - 1;

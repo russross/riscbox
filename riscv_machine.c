@@ -723,7 +723,7 @@ static uint8_t *riscv_build_fdt(RISCVMachine *m, int *pfdt_size,
               "_zicond_zicsr_zifencei_zihintntl_zihintpause_zihpm_zimop"
               "_za64rs_zawrs"
               "_zcb_zcmop_zba_zbb_zbs_ssccptr_sscounterenw_sstc_sstvala"
-              "_sstvecd_ssu64xl_svadu_svinval_svpbmt");
+              "_sstvecd_ssu64xl_svadu_svinval_svnapot_svpbmt");
     fdt_prop_str(s, "riscv,isa", isa_string);
     fdt_prop_str(s, "riscv,isa-base", "rv64i");
 
@@ -736,7 +736,7 @@ static uint8_t *riscv_build_fdt(RISCVMachine *m, int *pfdt_size,
             "zihintntl", "zihintpause", "zihpm", "zimop", "za64rs", "zawrs",
             "zcb", "zcmop", "zba", "zbb", "zbs", "ssccptr",
             "sscounterenw", "sstc", "sstvala", "sstvecd", "ssu64xl",
-            "svadu", "svinval", "svpbmt",
+            "svadu", "svinval", "svnapot", "svpbmt",
         };
         char ext_list[256];
         char *r = ext_list;

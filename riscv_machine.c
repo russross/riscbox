@@ -637,7 +637,7 @@ static int riscv_build_fdt(RISCVMachine *m, uint8_t *dst,
                            const char *cmd_line)
 {
     FDTState *s;
-    int size, i, cur_phandle, intc_phandle, plic_phandle;
+    int size, i, cur_phandle, intc_phandle, plic_phandle, cpu_phandle;
     char isa_string[128], *q;
     uint32_t misa;
     uint32_t tab[4];
@@ -650,8 +650,8 @@ static int riscv_build_fdt(RISCVMachine *m, uint8_t *dst,
     fdt_begin_node(s, "");
     fdt_prop_u32(s, "#address-cells", 2);
     fdt_prop_u32(s, "#size-cells", 2);
-    fdt_prop_str(s, "compatible", "ucbbar,riscvemu-bar_dev");
-    fdt_prop_str(s, "model", "ucbbar,riscvemu-bare");
+    fdt_prop_str(s, "compatible", "riscv-virtio");
+    fdt_prop_str(s, "model", "riscv-virtio,qemu");
 
     /* CPU list */
     fdt_begin_node(s, "cpus");
@@ -677,11 +677,16 @@ static int riscv_build_fdt(RISCVMachine *m, uint8_t *dst,
     }
     *q = '\0';
     fdt_prop_str(s, "riscv,isa", isa_string);
+    fdt_prop_str(s, "riscv,isa-base", "rv64i");
 
-    /* Modern kernels enumerate extensions from riscv,isa-extensions. */
+    /* Modern kernels enumerate extensions from riscv,isa-extensions.
+       Bare 'i' implies zicntr, zicsr, zifencei and zihpm. */
     {
         static const char ext_letters[] = "imafdc";
-        char ext_list[sizeof(ext_letters) * 2];
+        static const char *const ext_implied[] = {
+            "zicntr", "zicsr", "zifencei", "zihpm",
+        };
+        char ext_list[sizeof(ext_letters) * 2 + 64];
         char *r = ext_list;
         size_t j;
         for(j = 0; j < sizeof(ext_letters) - 1; j++) {
@@ -690,11 +695,20 @@ static int riscv_build_fdt(RISCVMachine *m, uint8_t *dst,
                 *r++ = '\0';
             }
         }
+        if (misa & (1 << ('I' - 'A'))) {
+            for(j = 0; j < sizeof(ext_implied) / sizeof(ext_implied[0]); j++) {
+                size_t len = strlen(ext_implied[j]) + 1;
+                memcpy(r, ext_implied[j], len);
+                r += len;
+            }
+        }
         fdt_prop(s, "riscv,isa-extensions", ext_list, r - ext_list);
     }
     
     fdt_prop_str(s, "mmu-type", "riscv,sv39");
     fdt_prop_u32(s, "clock-frequency", 2000000000);
+    cpu_phandle = cur_phandle++;
+    fdt_prop_u32(s, "phandle", cpu_phandle);
 
     fdt_begin_node(s, "interrupt-controller");
     fdt_prop_u32(s, "#interrupt-cells", 1);
@@ -705,7 +719,15 @@ static int riscv_build_fdt(RISCVMachine *m, uint8_t *dst,
     fdt_end_node(s); /* interrupt-controller */
     
     fdt_end_node(s); /* cpu */
-    
+
+    fdt_begin_node(s, "cpu-map");
+    fdt_begin_node(s, "cluster0");
+    fdt_begin_node(s, "core0");
+    fdt_prop_u32(s, "cpu", cpu_phandle);
+    fdt_end_node(s); /* core0 */
+    fdt_end_node(s); /* cluster0 */
+    fdt_end_node(s); /* cpu-map */
+
     fdt_end_node(s); /* cpus */
 
     fdt_begin_node_num(s, "memory", RAM_BASE_ADDR);
@@ -727,12 +749,11 @@ static int riscv_build_fdt(RISCVMachine *m, uint8_t *dst,
     fdt_begin_node(s, "soc");
     fdt_prop_u32(s, "#address-cells", 2);
     fdt_prop_u32(s, "#size-cells", 2);
-    fdt_prop_tab_str(s, "compatible",
-                     "ucbbar,riscvemu-bar-soc", "simple-bus", NULL);
+    fdt_prop_str(s, "compatible", "simple-bus");
     fdt_prop(s, "ranges", NULL, 0);
 
     fdt_begin_node_num(s, "clint", CLINT_BASE_ADDR);
-    fdt_prop_str(s, "compatible", "riscv,clint0");
+    fdt_prop_tab_str(s, "compatible", "sifive,clint0", "riscv,clint0", NULL);
 
     tab[0] = intc_phandle;
     tab[1] = 3; /* M IPI irq */
@@ -744,10 +765,11 @@ static int riscv_build_fdt(RISCVMachine *m, uint8_t *dst,
     
     fdt_end_node(s); /* clint */
 
-    fdt_begin_node_num(s, "plic", PLIC_BASE_ADDR);
+    fdt_begin_node_num(s, "interrupt-controller", PLIC_BASE_ADDR);
     fdt_prop_u32(s, "#interrupt-cells", 1);
     fdt_prop(s, "interrupt-controller", NULL, 0);
-    fdt_prop_str(s, "compatible", "riscv,plic0");
+    fdt_prop_tab_str(s, "compatible",
+                     "sifive,plic-1.0.0", "riscv,plic0", NULL);
     fdt_prop_u32(s, "riscv,ndev", 31);
     fdt_prop_tab_u64_2(s, "reg", PLIC_BASE_ADDR, PLIC_SIZE);
 

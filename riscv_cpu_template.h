@@ -1100,6 +1100,11 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
                         goto illegal_insn;
                     s->pending_exception = CAUSE_BREAKPOINT;
                     goto exception;
+                case 0x00d: /* wrs.nto */
+                case 0x01d: /* wrs.sto */
+                    if (insn & 0x000fff80)
+                        goto illegal_insn;
+                    break;
                 case 0x102: /* sret */
                     {
                         if (insn & 0x000fff80)

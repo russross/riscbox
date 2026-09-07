@@ -106,7 +106,7 @@ static inline uint64_t mulhsu64(int64_t a, uint64_t b)
 
 static inline uint64_t mulhu64(uint64_t a, uint64_t b)
 {
-    return ((int128_t)a * (int128_t)b) >> 64;
+    return ((uint128_t)a * (uint128_t)b) >> 64;
 }
 
 #else

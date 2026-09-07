@@ -50,8 +50,13 @@ typedef struct RISCVMachine {
     BOOL rtc_real_time;
     uint64_t rtc_start_time;
     uint64_t timecmp;
+    uint32_t msip;
     /* PLIC */
     uint32_t plic_pending_irq, plic_served_irq;
+    /* contexts: 0 is M-mode, 1 is S-mode */
+    uint32_t plic_priority[32];
+    uint32_t plic_enable[2];
+    uint32_t plic_threshold[2];
     IRQSignal plic_irq[32]; /* IRQ 0 is not used */
     /* HTIF */
     uint64_t htif_tohost, htif_fromhost;
@@ -223,6 +228,9 @@ static uint32_t clint_read(void *opaque, uint32_t offset, int size_log2)
 
     assert(size_log2 == 2);
     switch(offset) {
+    case 0x0:
+        val = m->msip;
+        break;
     case 0xbff8:
         val = rtc_get_time(m);
         break;
@@ -249,6 +257,13 @@ static void clint_write(void *opaque, uint32_t offset, uint32_t val,
 
     assert(size_log2 == 2);
     switch(offset) {
+    case 0x0:
+        m->msip = val & 1;
+        if (m->msip)
+            riscv_cpu_set_mip(m->cpu_state, MIP_MSIP);
+        else
+            riscv_cpu_reset_mip(m->cpu_state, MIP_MSIP);
+        break;
     case 0x4000:
         m->timecmp = (m->timecmp & ~0xffffffff) | val;
         riscv_cpu_reset_mip(m->cpu_state, MIP_MTIP);
@@ -262,65 +277,125 @@ static void clint_write(void *opaque, uint32_t offset, uint32_t val,
     }
 }
 
+/* Standard SiFive PLIC layout, two hart-0 contexts: 0 is M-mode,
+   1 is S-mode. */
+#define PLIC_PRIORITY_BASE 0x0
+#define PLIC_PENDING_BASE 0x1000
+#define PLIC_ENABLE_BASE 0x2000
+#define PLIC_ENABLE_SIZE 0x80
+#define PLIC_CONTEXT_BASE 0x200000
+#define PLIC_CONTEXT_SIZE 0x1000
+#define PLIC_CONTEXT_THRESHOLD 0x0
+#define PLIC_CONTEXT_CLAIM 0x4
+
+/* lowest claimable irq for a context, 0 if none. PLIC sources are
+   1-based: source N lives in bit N. */
+static int plic_claimable_irq(RISCVMachine *s, int context)
+{
+    uint32_t mask;
+    int i;
+    mask = s->plic_pending_irq & ~s->plic_served_irq &
+        s->plic_enable[context];
+    for(i = 1; i < 32; i++) {
+        if ((mask & (1 << i)) &&
+            s->plic_priority[i] > s->plic_threshold[context])
+            return i;
+    }
+    return 0;
+}
+
 static void plic_update_mip(RISCVMachine *s)
 {
     RISCVCPUState *cpu = s->cpu_state;
-    uint32_t mask;
-    mask = s->plic_pending_irq & ~s->plic_served_irq;
-    if (mask) {
-        riscv_cpu_set_mip(cpu, MIP_MEIP | MIP_SEIP);
-    } else {
-        riscv_cpu_reset_mip(cpu, MIP_MEIP | MIP_SEIP);
-    }
+    if (plic_claimable_irq(s, 0))
+        riscv_cpu_set_mip(cpu, MIP_MEIP);
+    else
+        riscv_cpu_reset_mip(cpu, MIP_MEIP);
+    if (plic_claimable_irq(s, 1))
+        riscv_cpu_set_mip(cpu, MIP_SEIP);
+    else
+        riscv_cpu_reset_mip(cpu, MIP_SEIP);
 }
 
-#define PLIC_HART_BASE 0x200000
-#define PLIC_HART_SIZE 0x1000
+static uint32_t plic_claim(RISCVMachine *s, int context)
+{
+    int irq = plic_claimable_irq(s, context);
+    if (irq != 0) {
+        s->plic_served_irq |= 1 << irq;
+        plic_update_mip(s);
+    }
+    return irq;
+}
+
+static void plic_complete(RISCVMachine *s, uint32_t val)
+{
+    if (val >= 1 && val < 32) {
+        s->plic_served_irq &= ~(1 << val);
+        plic_update_mip(s);
+    }
+}
 
 static uint32_t plic_read(void *opaque, uint32_t offset, int size_log2)
 {
     RISCVMachine *s = opaque;
-    uint32_t val, mask;
-    int i;
+    int context;
+
     assert(size_log2 == 2);
-    switch(offset) {
-    case PLIC_HART_BASE:
-        val = 0;
-        break;
-    case PLIC_HART_BASE + 4:
-        mask = s->plic_pending_irq & ~s->plic_served_irq;
-        if (mask != 0) {
-            i = ctz32(mask);
-            s->plic_served_irq |= 1 << i;
-            plic_update_mip(s);
-            val = i + 1;
-        } else {
-            val = 0;
-        }
-        break;
-    default:
-        val = 0;
-        break;
+    if (offset < PLIC_PRIORITY_BASE + 4 * 32 &&
+        (offset - PLIC_PRIORITY_BASE) % 4 == 0)
+        return s->plic_priority[(offset - PLIC_PRIORITY_BASE) / 4];
+    if (offset == PLIC_PENDING_BASE)
+        return s->plic_pending_irq;
+    if (offset == PLIC_ENABLE_BASE)
+        return s->plic_enable[0];
+    if (offset == PLIC_ENABLE_BASE + PLIC_ENABLE_SIZE)
+        return s->plic_enable[1];
+    if (offset >= PLIC_CONTEXT_BASE &&
+        offset < PLIC_CONTEXT_BASE + 2 * PLIC_CONTEXT_SIZE) {
+        context = (offset - PLIC_CONTEXT_BASE) / PLIC_CONTEXT_SIZE;
+        offset = (offset - PLIC_CONTEXT_BASE) % PLIC_CONTEXT_SIZE;
+        if (offset == PLIC_CONTEXT_THRESHOLD)
+            return s->plic_threshold[context];
+        if (offset == PLIC_CONTEXT_CLAIM)
+            return plic_claim(s, context);
     }
-    return val;
+    return 0;
 }
 
 static void plic_write(void *opaque, uint32_t offset, uint32_t val,
                        int size_log2)
 {
     RISCVMachine *s = opaque;
-    
+    int context;
+
     assert(size_log2 == 2);
-    switch(offset) {
-    case PLIC_HART_BASE + 4:
-        val--;
-        if (val < 32) {
-            s->plic_served_irq &= ~(1 << val);
+    if (offset >= PLIC_PRIORITY_BASE + 4 &&
+        offset < PLIC_PRIORITY_BASE + 4 * 32 &&
+        (offset - PLIC_PRIORITY_BASE) % 4 == 0) {
+        s->plic_priority[(offset - PLIC_PRIORITY_BASE) / 4] = val & 7;
+        plic_update_mip(s);
+        return;
+    }
+    if (offset == PLIC_ENABLE_BASE) {
+        s->plic_enable[0] = val;
+        plic_update_mip(s);
+        return;
+    }
+    if (offset == PLIC_ENABLE_BASE + PLIC_ENABLE_SIZE) {
+        s->plic_enable[1] = val;
+        plic_update_mip(s);
+        return;
+    }
+    if (offset >= PLIC_CONTEXT_BASE &&
+        offset < PLIC_CONTEXT_BASE + 2 * PLIC_CONTEXT_SIZE) {
+        context = (offset - PLIC_CONTEXT_BASE) / PLIC_CONTEXT_SIZE;
+        offset = (offset - PLIC_CONTEXT_BASE) % PLIC_CONTEXT_SIZE;
+        if (offset == PLIC_CONTEXT_THRESHOLD) {
+            s->plic_threshold[context] = val & 7;
             plic_update_mip(s);
+        } else if (offset == PLIC_CONTEXT_CLAIM) {
+            plic_complete(s, val);
         }
-        break;
-    default:
-        break;
     }
 }
 
@@ -329,7 +404,7 @@ static void plic_set_irq(void *opaque, int irq_num, int state)
     RISCVMachine *s = opaque;
     uint32_t mask;
 
-    mask = 1 << (irq_num - 1);
+    mask = 1 << irq_num;
     if (state)
         s->plic_pending_irq |= mask;
     else
@@ -631,6 +706,9 @@ void fdt_end(FDTState *s)
     free(s);
 }
 
+/* Canonical single-letter ISA order from the RISC-V DT bindings. */
+static const char single_letter_order[] = "iemafdqcbkjpvh";
+
 static int riscv_build_fdt(RISCVMachine *m, uint8_t *dst,
                            uint64_t kernel_start, uint64_t kernel_size,
                            uint64_t initrd_start, uint64_t initrd_size,
@@ -669,11 +747,12 @@ static int riscv_build_fdt(RISCVMachine *m, uint8_t *dst,
     misa = riscv_cpu_get_misa(m->cpu_state);
     strcpy(isa_string, "rv64");
     q = isa_string + 4;
-    for(i = 0; i < 26; i++) {
-        if (i == 'S' - 'A' || i == 'U' - 'A')
+    for(i = 0; single_letter_order[i] != '\0'; i++) {
+        int bit = single_letter_order[i] - 'a';
+        if (bit == 'S' - 'A' || bit == 'U' - 'A')
             continue; /* privilege modes are not ISA extensions */
-        if (misa & (1 << i))
-            *q++ = 'a' + i;
+        if (misa & (1 << bit))
+            *q++ = single_letter_order[i];
     }
     *q = '\0';
     fdt_prop_str(s, "riscv,isa", isa_string);
@@ -774,9 +853,9 @@ static int riscv_build_fdt(RISCVMachine *m, uint8_t *dst,
     fdt_prop_tab_u64_2(s, "reg", PLIC_BASE_ADDR, PLIC_SIZE);
 
     tab[0] = intc_phandle;
-    tab[1] = 9; /* S ext irq */
+    tab[1] = 11; /* M ext irq */
     tab[2] = intc_phandle;
-    tab[3] = 11; /* M ext irq */
+    tab[3] = 9; /* S ext irq */
     fdt_prop_tab_u32(s, "interrupts-extended", tab, 4);
 
     plic_phandle = cur_phandle++;

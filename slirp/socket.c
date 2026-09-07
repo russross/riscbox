@@ -78,15 +78,16 @@ sofree(struct socket *so)
 
 size_t sopreprbuf(struct socket *so, struct iovec *iov, int *np)
 {
-	int n, lss, total;
+	int n;
+	size_t lss, total;
 	struct sbuf *sb = &so->so_snd;
-	int len = sb->sb_datalen - sb->sb_cc;
-	int mss = so->so_tcpcb->t_maxseg;
+	size_t len = sb->sb_datalen - sb->sb_cc;
+	size_t mss = so->so_tcpcb->t_maxseg;
 
 	DEBUG_CALL("sopreprbuf");
 	DEBUG_ARG("so = %lx", (long )so);
 
-	if (len <= 0)
+	if (len == 0)
 		return 0;
 
 	iov[0].iov_base = sb->sb_wptr;
@@ -183,7 +184,7 @@ soread(struct socket *so)
 	 * a close will be detected on next iteration.
 	 * A return of -1 wont (shouldn't) happen, since it didn't happen above
 	 */
-	if (n == 2 && nn == iov[0].iov_len) {
+	if (n == 2 && nn >= 0 && (size_t)nn == iov[0].iov_len) {
             int ret;
             ret = recv(so->s, iov[1].iov_base, iov[1].iov_len,0);
             if (ret > 0)
@@ -214,10 +215,10 @@ int soreadbuf(struct socket *so, const char *buf, int size)
 	 * No need to check if there's enough room to read.
 	 * soread wouldn't have been called if there weren't
 	 */
-	if (sopreprbuf(so, iov, &n) < size)
+	if (size < 0 || sopreprbuf(so, iov, &n) < (size_t)size)
         goto err;
 
-    nn = min(iov[0].iov_len, copy);
+    nn = min(iov[0].iov_len, (size_t)copy);
     memcpy(iov[0].iov_base, buf, nn);
 
     copy -= nn;
@@ -340,7 +341,7 @@ sowrite(struct socket *so)
 {
 	int  n,nn;
 	struct sbuf *sb = &so->so_rcv;
-	int len = sb->sb_cc;
+	size_t len = sb->sb_cc;
 	struct iovec iov[2];
 
 	DEBUG_CALL("sowrite");
@@ -399,7 +400,7 @@ sowrite(struct socket *so)
 	}
 
 #ifndef HAVE_READV
-	if (n == 2 && nn == iov[0].iov_len) {
+	if (n == 2 && nn >= 0 && (size_t)nn == iov[0].iov_len) {
             int ret;
             ret = slirp_send(so, iov[1].iov_base, iov[1].iov_len,0);
             if (ret > 0)

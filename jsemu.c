@@ -50,7 +50,9 @@ extern void fb_refresh(void *opaque, void *data,
 extern void net_recv_packet(EthernetDevice *bs,
                             const uint8_t *buf, int len);
 
-static uint8_t console_fifo[1024];
+#define CONSOLE_FIFO_SIZE 1024
+
+static uint8_t console_fifo[CONSOLE_FIFO_SIZE];
 static int console_fifo_windex;
 static int console_fifo_rindex;
 static int console_fifo_count;
@@ -64,16 +66,18 @@ static BOOL global_carrier_state;
 static int console_read(void *opaque, uint8_t *buf, int len)
 {
     int out_len, l;
+
+    (void)opaque;
     len = min_int(len, console_fifo_count);
     console_fifo_count -= len;
     out_len = 0;
     while (len != 0) {
-        l = min_int(len, sizeof(console_fifo) - console_fifo_rindex);
+        l = min_int(len, CONSOLE_FIFO_SIZE - console_fifo_rindex);
         memcpy(buf + out_len, console_fifo + console_fifo_rindex, l);
         len -= l;
         out_len += l;
         console_fifo_rindex += l;
-        if (console_fifo_rindex == sizeof(console_fifo))
+        if (console_fifo_rindex == CONSOLE_FIFO_SIZE)
             console_fifo_rindex = 0;
     }
     return out_len;
@@ -82,9 +86,9 @@ static int console_read(void *opaque, uint8_t *buf, int len)
 /* called from JS */
 void console_queue_char(int c)
 {
-    if (console_fifo_count < sizeof(console_fifo)) {
+    if (console_fifo_count < CONSOLE_FIFO_SIZE) {
         console_fifo[console_fifo_windex] = c;
-        if (++console_fifo_windex == sizeof(console_fifo))
+        if (++console_fifo_windex == CONSOLE_FIFO_SIZE)
             console_fifo_windex = 0;
         console_fifo_count++;
     }
@@ -265,7 +269,6 @@ static void init_vm(void *arg)
 
     if (p->eth_count > 0) {
         EthernetDevice *net;
-        int i;
         assert(p->eth_count == 1);
         net = mallocz(sizeof(EthernetDevice));
         net->mac_addr[0] = 0x02;

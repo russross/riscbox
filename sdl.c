@@ -75,6 +75,9 @@ static void sdl_update(FBDevice *fb_dev, void *opaque,
                        int x, int y, int w, int h)
 {
     SDL_Rect r;
+
+    (void)fb_dev;
+    (void)opaque;
     //    printf("sdl_update: %d %d %d %d\n", x, y, w, h);
     r.x = x;
     r.y = y;

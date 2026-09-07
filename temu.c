@@ -94,6 +94,7 @@ static void term_init(BOOL allow_ctrlc)
 
 static void console_write(void *opaque, const uint8_t *buf, int len)
 {
+    (void)opaque;
     fwrite(buf, 1, len, stdout);
     fflush(stdout);
 }
@@ -150,6 +151,7 @@ static int console_read(void *opaque, uint8_t *buf, int len)
 
 static void term_resize_handler(int sig)
 {
+    (void)sig;
     if (global_stdio_device)
         global_stdio_device->resize_pending = TRUE;
 }
@@ -228,6 +230,9 @@ static int bf_read_async(BlockDevice *bs,
                          BlockDeviceCompletionFunc *cb, void *opaque)
 {
     BlockDeviceFile *bf = bs->opaque;
+
+    (void)cb;
+    (void)opaque;
     //    printf("bf_read_async: sector_num=%" PRId64 " n=%d\n", sector_num, n);
 #ifdef DUMP_BLOCK_READ
     {
@@ -238,6 +243,9 @@ static int bf_read_async(BlockDevice *bs,
     }
 #endif
     if (!bf->f)
+        return -1;
+    if (n < 0 || sector_num > (uint64_t)bf->nb_sectors ||
+        (uint64_t)n > (uint64_t)bf->nb_sectors - sector_num)
         return -1;
     if (bf->mode == BF_MODE_SNAPSHOT) {
         int i;
@@ -266,6 +274,11 @@ static int bf_write_async(BlockDevice *bs,
     BlockDeviceFile *bf = bs->opaque;
     int ret;
 
+    (void)cb;
+    (void)opaque;
+    if (n < 0 || sector_num > (uint64_t)bf->nb_sectors ||
+        (uint64_t)n > (uint64_t)bf->nb_sectors - sector_num)
+        return -1;
     switch(bf->mode) {
     case BF_MODE_RO:
         ret = -1; /* error */
@@ -278,8 +291,6 @@ static int bf_write_async(BlockDevice *bs,
     case BF_MODE_SNAPSHOT:
         {
             int i;
-            if ((sector_num + n) > bf->nb_sectors)
-                return -1;
             for(i = 0; i < n; i++) {
                 if (!bf->sector_table[sector_num]) {
                     bf->sector_table[sector_num] = malloc(SECTOR_SIZE);
@@ -359,6 +370,9 @@ static void tun_select_fill(EthernetDevice *net, int *pfd_max,
     TunState *s = net->opaque;
     int net_fd = s->fd;
 
+    (void)wfds;
+    (void)efds;
+    (void)pdelay;
     s->select_filled = net->device_can_write_packet(net);
     if (s->select_filled) {
         FD_SET(net_fd, rfds);
@@ -374,7 +388,9 @@ static void tun_select_poll(EthernetDevice *net,
     int net_fd = s->fd;
     uint8_t buf[2048];
     int ret;
-    
+
+    (void)wfds;
+    (void)efds;
     if (select_ret <= 0)
         return;
     if (s->select_filled && FD_ISSET(net_fd, rfds)) {
@@ -452,8 +468,8 @@ static Slirp *slirp_state;
 static void slirp_write_packet(EthernetDevice *net,
                                const uint8_t *buf, int len)
 {
-    Slirp *slirp_state = net->opaque;
-    slirp_input(slirp_state, buf, len);
+    Slirp *slirp = net->opaque;
+    slirp_input(slirp, buf, len);
 }
 
 int slirp_can_output(void *opaque)
@@ -472,16 +488,18 @@ static void slirp_select_fill1(EthernetDevice *net, int *pfd_max,
                                fd_set *rfds, fd_set *wfds, fd_set *efds,
                                int *pdelay)
 {
-    Slirp *slirp_state = net->opaque;
-    slirp_select_fill(slirp_state, pfd_max, rfds, wfds, efds);
+    Slirp *slirp = net->opaque;
+
+    (void)pdelay;
+    slirp_select_fill(slirp, pfd_max, rfds, wfds, efds);
 }
 
 static void slirp_select_poll1(EthernetDevice *net, 
                                fd_set *rfds, fd_set *wfds, fd_set *efds,
                                int select_ret)
 {
-    Slirp *slirp_state = net->opaque;
-    slirp_select_poll(slirp_state, rfds, wfds, efds, (select_ret <= 0));
+    Slirp *slirp = net->opaque;
+    slirp_select_poll(slirp, rfds, wfds, efds, (select_ret <= 0));
 }
 
 static EthernetDevice *slirp_open(void)
@@ -587,12 +605,12 @@ void virt_machine_run(VirtMachine *m)
 
 static struct option options[] = {
     { "help", no_argument, NULL, 'h' },
-    { "ctrlc", no_argument },
-    { "rw", no_argument },
-    { "ro", no_argument },
-    { "append", required_argument },
-    { "build-preload", required_argument },
-    { NULL },
+    { "ctrlc", no_argument, NULL, 0 },
+    { "rw", no_argument, NULL, 0 },
+    { "ro", no_argument, NULL, 0 },
+    { "append", required_argument, NULL, 0 },
+    { "build-preload", required_argument, NULL, 0 },
+    { NULL, 0, NULL, 0 },
 };
 
 void help(void)
@@ -616,11 +634,13 @@ static BOOL net_completed;
 
 static void net_start_cb(void *arg)
 {
+    (void)arg;
     net_completed = TRUE;
 }
 
 static BOOL net_poll_cb(void *arg)
 {
+    (void)arg;
     return net_completed;
 }
 
@@ -726,11 +746,12 @@ int main(int argc, char **argv)
 
     for(i = 0; i < p->fs_count; i++) {
         FSDevice *fs;
-        const char *path;
-        path = p->tab_fs[i].filename;
+        const char *fs_path;
+
+        fs_path = p->tab_fs[i].filename;
 #ifdef CONFIG_FS_NET
-        if (is_url(path)) {
-            fs = fs_net_init(path, NULL, NULL);
+        if (is_url(fs_path)) {
+            fs = fs_net_init(fs_path, NULL, NULL);
             if (!fs)
                 exit(1);
             if (build_preload_file)
@@ -740,7 +761,7 @@ int main(int argc, char **argv)
 #endif
         {
             char *fname;
-            fname = get_file_path(p->cfg_filename, path);
+            fname = get_file_path(p->cfg_filename, fs_path);
             fs = fs_disk_init(fname);
             if (!fs) {
                 fprintf(stderr, "%s: must be a directory\n", fname);

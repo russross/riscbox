@@ -251,7 +251,7 @@ static void bf_prefetch_group_onload(void *opaque, int err, void *data,
         exit(1);
     }
     block_bytes = bf->block_size * 512;
-    assert(size == block_bytes * req->n_block_num);
+    assert(size == (size_t)block_bytes * req->n_block_num);
     for(i = 0; i < req->n_block_num; i++) {
         b = req->tab_block[i];
         if (b) {
@@ -350,7 +350,8 @@ static void bf_update_block(CachedBlock *b, const uint8_t *data)
     b->state = CBLOCK_LOADED;
     
     /* continue I/O read/write if necessary */
-    if (b->block_num == bf->cur_block_num) {
+    if (bf->cur_block_num >= 0 &&
+        b->block_num == (unsigned int)bf->cur_block_num) {
         bf_rw_async1(bs, FALSE);
     }
 }
@@ -365,7 +366,7 @@ static void bf_read_onload(void *opaque, int err, void *data, size_t size)
         exit(1);
     }
     
-    assert(size == bf->block_size * 512);
+    assert(size == (size_t)bf->block_size * 512);
     bf_update_block(b, data);
 }
 

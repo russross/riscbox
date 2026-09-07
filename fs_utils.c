@@ -303,7 +303,7 @@ int parse_tag(char *buf, int buf_size, const char *str, const char *tag)
             break;
         q = tagname;
         while (*p != ':' && *p != '\n' && *p != '\0') {
-            if ((q - tagname) < sizeof(tagname) - 1)
+            if (q < tagname + sizeof(tagname) - 1)
                 *q++ = *p;
             p++;
         }

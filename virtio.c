@@ -214,6 +214,8 @@ static void virtio_pci_bar_set(void *opaque, int bar_num,
                                uint32_t addr, BOOL enabled)
 {
     VIRTIODevice *s = opaque;
+
+    (void)bar_num;
     phys_mem_set_addr(s->mem_range, addr, enabled);
 }
 
@@ -384,6 +386,8 @@ static int memcpy_to_from_queue(VIRTIODevice *s, uint8_t *buf,
     VIRTIODesc desc;
     int l, f_write_flag;
 
+    if (offset < 0 || count < 0)
+        return -1;
     if (count == 0)
         return 0;
 
@@ -408,7 +412,7 @@ static int memcpy_to_from_queue(VIRTIODevice *s, uint8_t *buf,
     for(;;) {
         if ((desc.flags & VRING_DESC_F_WRITE) != f_write_flag)
             return -1;
-        if (offset < desc.len)
+        if ((uint32_t)offset < desc.len)
             break;
         if (!(desc.flags & VRING_DESC_F_NEXT))
             return -1;
@@ -428,7 +432,7 @@ static int memcpy_to_from_queue(VIRTIODevice *s, uint8_t *buf,
             break;
         offset += l;
         buf += l;
-        if (offset == desc.len) {
+        if ((uint32_t)offset == desc.len) {
             if (!(desc.flags & VRING_DESC_F_NEXT))
                 return -1;
             desc_idx = desc.next;
@@ -1160,6 +1164,7 @@ static int virtio_net_recv_request(VIRTIODevice *s, int queue_idx,
     uint8_t *buf;
     int len;
 
+    (void)write_size;
     if (queue_idx == 1) {
         /* send to network */
         if (memcpy_from_queue(s, &h, queue_idx, desc_idx, 0, s1->header_size) < 0)
@@ -1218,6 +1223,8 @@ static void virtio_net_write_packet(EthernetDevice *es, const uint8_t *buf, int 
 
 static void virtio_net_set_carrier(EthernetDevice *es, BOOL carrier_state)
 {
+    (void)es;
+    (void)carrier_state;
 #if 0
     VIRTIODevice *s1 = es->device_opaque;
     VIRTIONetDevice *s = (VIRTIONetDevice *)s1;
@@ -1273,6 +1280,7 @@ static int virtio_console_recv_request(VIRTIODevice *s, int queue_idx,
     CharacterDevice *cs = s1->cs;
     uint8_t *buf;
 
+    (void)write_size;
     if (queue_idx == 1) {
         /* send to console */
         buf = malloc(read_size);
@@ -1396,6 +1404,8 @@ static int virtio_input_recv_request(VIRTIODevice *s, int queue_idx,
                                       int desc_idx, int read_size,
                                       int write_size)
 {
+    (void)read_size;
+    (void)write_size;
     if (queue_idx == 1) {
         /* led & keyboard updates */
         //        printf("%s: write_size=%d\n", __func__, write_size);
@@ -1454,7 +1464,8 @@ int virtio_input_send_mouse_event(VIRTIODevice *s, int dx, int dy, int dz,
                                   unsigned int buttons)
 {
     VIRTIOInputDevice *s1 = (VIRTIOInputDevice *)s;
-    int ret, i, b, last_b;
+    int ret, b, last_b;
+    size_t i;
 
     if (s1->type != VIRTIO_INPUT_TYPE_MOUSE &&
         s1->type != VIRTIO_INPUT_TYPE_TABLET)
@@ -1506,7 +1517,7 @@ static void virtio_input_config_write(VIRTIODevice *s)
 {
     VIRTIOInputDevice *s1 = (VIRTIOInputDevice *)s;
     uint8_t *config = s->config_space;
-    int i;
+    size_t i;
     
     //    printf("config_write: %02x %02x\n", config[0], config[1]);
     switch(config[0]) {
@@ -1756,6 +1767,9 @@ static int marshall(VIRTIO9PDevice *s,
     uint64_t val64;
     uint8_t *buf, *buf_end;
 
+#ifndef DEBUG_VIRTIO
+    (void)s;
+#endif
 #ifdef DEBUG_VIRTIO
     if (s->common.debug & VIRTIO_DEBUG_9P)
         printf(" ->");
@@ -2001,7 +2015,8 @@ static void virtio_9p_open_reply(FSDevice *fs, FSQID *qid, int err,
     VIRTIO9PDevice *s = oi->dev;
     uint8_t buf[32];
     int buf_len;
-    
+
+    (void)fs;
     if (err < 0) {
         virtio_9p_send_error(s, oi->queue_idx, oi->desc_idx, oi->tag, err);
     } else {
@@ -2040,6 +2055,8 @@ static int virtio_9p_recv_request(VIRTIODevice *s1, int queue_idx,
     int buf_len, err;
     FSDevice *fs = s->fs;
 
+    (void)read_size;
+    (void)write_size;
     if (queue_idx != 0)
         return 0;
     
@@ -2273,7 +2290,7 @@ static int virtio_9p_recv_request(VIRTIODevice *s1, int queue_idx,
         {
             uint32_t fid, count;
             uint64_t offs;
-            uint8_t *buf;
+            uint8_t *data_buf;
             int n;
             FSFile *f;
 
@@ -2283,15 +2300,17 @@ static int virtio_9p_recv_request(VIRTIODevice *s1, int queue_idx,
             f = fid_find(s, fid);
             if (!f)
                 goto fid_not_found;
-            buf = malloc(count + 4);
-            n = fs->fs_readdir(fs, f, offs, buf + 4, count);
+            data_buf = malloc(count + 4);
+            n = fs->fs_readdir(fs, f, offs, data_buf + 4, count);
             if (n < 0) {
                 err = n;
+                free(data_buf);
                 goto error;
             }
-            put_le32(buf, n);
-            virtio_9p_send_reply(s, queue_idx, desc_idx, id, tag, buf, n + 4);
-            free(buf);
+            put_le32(data_buf, n);
+            virtio_9p_send_reply(s, queue_idx, desc_idx, id, tag,
+                                 data_buf, n + 4);
+            free(data_buf);
         }
         break;
     case 50: /* fsync */
@@ -2533,7 +2552,7 @@ static int virtio_9p_recv_request(VIRTIODevice *s1, int queue_idx,
         {
             uint32_t fid, count;
             uint64_t offs;
-            uint8_t *buf;
+            uint8_t *data_buf;
             int n;
             FSFile *f;
 
@@ -2543,16 +2562,17 @@ static int virtio_9p_recv_request(VIRTIODevice *s1, int queue_idx,
             f = fid_find(s, fid);
             if (!f)
                 goto fid_not_found;
-            buf = malloc(count + 4);
-            n = fs->fs_read(fs, f, offs, buf + 4, count);
+            data_buf = malloc(count + 4);
+            n = fs->fs_read(fs, f, offs, data_buf + 4, count);
             if (n < 0) {
                 err = n;
-                free(buf);
+                free(data_buf);
                 goto error;
             }
-            put_le32(buf, n);
-            virtio_9p_send_reply(s, queue_idx, desc_idx, id, tag, buf, n + 4);
-            free(buf);
+            put_le32(data_buf, n);
+            virtio_9p_send_reply(s, queue_idx, desc_idx, id, tag,
+                                 data_buf, n + 4);
+            free(data_buf);
         }
         break;
     case 118: /* write */

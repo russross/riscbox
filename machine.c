@@ -29,6 +29,7 @@
 #include <assert.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <limits.h>
 #include <unistd.h>
 #include <time.h>
 
@@ -139,7 +140,7 @@ static char *cmdline_subst(const char *cmdline)
             p += 2;
             q = var_name;
             while (*p != '\0' && *p != '}') {
-                if ((q - var_name) < sizeof(var_name) - 1)
+                if (q < var_name + sizeof(var_name) - 1)
                     *q++ = *p;
                 p++;
             }
@@ -399,6 +400,8 @@ char *get_file_path(const char *base_filename, const char *filename)
 #ifdef EMSCRIPTEN
 static int load_file(uint8_t **pbuf, const char *filename)
 {
+    (void)pbuf;
+    (void)filename;
     abort();
 }
 #else
@@ -407,6 +410,7 @@ static int load_file(uint8_t **pbuf, const char *filename)
 {
     FILE *f;
     int size;
+    long file_size;
     uint8_t *buf;
     
     f = fopen(filename, "rb");
@@ -414,11 +418,15 @@ static int load_file(uint8_t **pbuf, const char *filename)
         perror(filename);
         exit(1);
     }
-    fseek(f, 0, SEEK_END);
-    size = ftell(f);
-    fseek(f, 0, SEEK_SET);
+    if (fseek(f, 0, SEEK_END) < 0 ||
+        (file_size = ftell(f)) < 0 || file_size > INT_MAX ||
+        fseek(f, 0, SEEK_SET) < 0) {
+        fprintf(stderr, "%s: invalid file size\n", filename);
+        exit(1);
+    }
+    size = file_size;
     buf = malloc(size);
-    if (fread(buf, 1, size, f) != size) {
+    if (fread(buf, 1, size, f) != (size_t)size) {
         fprintf(stderr, "%s: read error\n", filename);
         exit(1);
     }

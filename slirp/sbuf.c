@@ -22,7 +22,9 @@ sbdrop(struct sbuf *sb, int num)
 	 * We can only drop how much we have
 	 * This should never succeed
 	 */
-	if(num > sb->sb_cc)
+	if (num < 0)
+		return;
+	if ((u_int)num > sb->sb_cc)
 		num = sb->sb_cc;
 	sb->sb_cc -= num;
 	sb->sb_rptr += num;
@@ -34,9 +36,11 @@ sbdrop(struct sbuf *sb, int num)
 void
 sbreserve(struct sbuf *sb, int size)
 {
+	if (size < 0)
+		return;
 	if (sb->sb_data) {
 		/* Already alloced, realloc if necessary */
-		if (sb->sb_datalen != size) {
+		if (sb->sb_datalen != (u_int)size) {
 			sb->sb_wptr = sb->sb_rptr = sb->sb_data = (char *)realloc(sb->sb_data, size);
 			sb->sb_cc = 0;
 			if (sb->sb_wptr)
@@ -167,7 +171,10 @@ sbcopy(struct sbuf *sb, int off, int len, char *to)
 		from -= sb->sb_datalen;
 
 	if (from < sb->sb_wptr) {
-		if (len > sb->sb_cc) len = sb->sb_cc;
+		if (len < 0)
+			return;
+		if ((u_int)len > sb->sb_cc)
+			len = sb->sb_cc;
 		memcpy(to,from,len);
 	} else {
 		/* re-use off */

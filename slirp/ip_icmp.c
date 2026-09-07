@@ -194,6 +194,9 @@ icmp_error(struct mbuf *msrc, u_char type, u_char code, int minsize,
   register struct icmp *icp;
   register struct mbuf *m;
 
+#ifndef DEBUG
+  (void)message;
+#endif
   DEBUG_CALL("icmp_error");
   DEBUG_ARG("msrc = %lx", (long )msrc);
   DEBUG_ARG("msrc_len = %d", msrc->m_len);

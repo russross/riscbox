@@ -32,9 +32,14 @@ CONFIG_SLIRP=y
 
 CC=clang
 STRIP=strip
-CFLAGS=-O2 -Wall -g -D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE -MMD
-CFLAGS+=-D_GNU_SOURCE -DCONFIG_VERSION=\"$(shell cat VERSION)\"
+CPPFLAGS=-D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE
+CPPFLAGS+=-D_GNU_SOURCE -DCONFIG_VERSION=\"$(shell cat VERSION)\"
+CFLAGS=-O2 -g -Wall -MMD
+DEBUG_CFLAGS=-O1 -g3 -Wall -Wextra -Werror -Wformat=2 -Wshadow -MMD \
+    -fno-omit-frame-pointer -fsanitize=address,undefined \
+    -fno-sanitize-recover=all
 LDFLAGS=
+DEBUG_LDFLAGS=-fsanitize=address,undefined -fno-sanitize-recover=all
 
 bindir=/usr/local/bin
 INSTALL=install
@@ -44,35 +49,55 @@ ifdef CONFIG_FS_NET
 PROGS+=build_filelist splitimg
 endif
 
-all: $(PROGS)
+all: release
+
+release: $(PROGS)
+
+debug: temu-debug
+
+wasm:
+	$(MAKE) -f Makefile.js
 
 EMU_OBJS:=virtio.o pci.o fs.o cutils.o iomem.o simplefb.o \
     json.o machine.o temu.o uart16550.o
 
 ifdef CONFIG_SLIRP
-CFLAGS+=-DCONFIG_SLIRP
+CPPFLAGS+=-DCONFIG_SLIRP
 EMU_OBJS+=$(addprefix slirp/, bootp.o ip_icmp.o mbuf.o slirp.o tcp_output.o cksum.o ip_input.o misc.o socket.o tcp_subr.o udp.o if.o ip_output.o sbuf.o tcp_input.o tcp_timer.o)
 endif
 
 EMU_OBJS+=fs_disk.o
 EMU_LIBS=-lrt
 ifdef CONFIG_FS_NET
-CFLAGS+=-DCONFIG_FS_NET
+CPPFLAGS+=-DCONFIG_FS_NET
 EMU_OBJS+=fs_net.o fs_wget.o fs_utils.o block_net.o
 EMU_LIBS+=-lcurl -lcrypto
 endif # CONFIG_FS_NET
 ifdef CONFIG_SDL
 EMU_LIBS+=-lSDL
 EMU_OBJS+=sdl.o
-CFLAGS+=-DCONFIG_SDL
+CPPFLAGS+=-DCONFIG_SDL
 endif
 
 EMU_OBJS+=riscv_machine.o softfp.o riscv_cpu64.o
+DEBUG_OBJS:=$(addprefix build/debug/,$(EMU_OBJS))
+
 temu: $(EMU_OBJS)
 	$(CC) $(LDFLAGS) -o $@ $^ $(EMU_LIBS)
 
 riscv_cpu64.o: riscv_cpu.c
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
+
+temu-debug: $(DEBUG_OBJS)
+	$(CC) $(DEBUG_LDFLAGS) -o $@ $^ $(EMU_LIBS)
+
+build/debug/riscv_cpu64.o: riscv_cpu.c
+	mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(DEBUG_CFLAGS) -c -o $@ $<
+
+build/debug/%.o: %.c
+	mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(DEBUG_CFLAGS) -c -o $@ $<
 
 build_filelist: build_filelist.o fs_utils.o cutils.o
 	$(CC) $(LDFLAGS) -o $@ $^ -lm
@@ -85,10 +110,16 @@ install: $(PROGS)
 	$(INSTALL) -m755 $(PROGS) "$(DESTDIR)$(bindir)"
 
 %.o: %.c
-	$(CC) $(CFLAGS) -c -o $@ $<
+	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
 clean:
-	rm -f *.o *.d *~ $(PROGS) slirp/*.o slirp/*.d slirp/*~
+	rm -rf build
+	rm -f *.o *.d *~ $(PROGS) temu-debug slirp/*.o slirp/*.d slirp/*~
+	rm -f js/riscvemu64-wasm.js js/riscvemu64-wasm.wasm
 
 -include $(wildcard *.d)
 -include $(wildcard slirp/*.d)
+-include $(wildcard build/debug/*.d)
+-include $(wildcard build/debug/slirp/*.d)
+
+.PHONY: all release debug wasm clean install

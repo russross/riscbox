@@ -505,14 +505,18 @@ struct arphdr
 
 static void arp_input(Slirp *slirp, const uint8_t *pkt, int pkt_len)
 {
-    struct ethhdr *eh = (struct ethhdr *)pkt;
-    struct arphdr *ah = (struct arphdr *)(pkt + ETH_HLEN);
+    struct ethhdr *eh;
+    struct arphdr *ah;
     uint8_t arp_reply[max(ETH_HLEN + sizeof(struct arphdr), 64)];
     struct ethhdr *reh = (struct ethhdr *)arp_reply;
     struct arphdr *rah = (struct arphdr *)(arp_reply + ETH_HLEN);
     int ar_op;
     struct ex_list *ex_ptr;
 
+    if (pkt_len < ETH_HLEN + (int)sizeof(struct arphdr))
+        return;
+    eh = (struct ethhdr *)pkt;
+    ah = (struct arphdr *)(pkt + ETH_HLEN);
     ar_op = ntohs(ah->ar_op);
     switch(ar_op) {
     case ARPOP_REQUEST:
@@ -601,7 +605,8 @@ void if_encap(Slirp *slirp, const uint8_t *ip_data, int ip_data_len)
     uint8_t buf[1600];
     struct ethhdr *eh = (struct ethhdr *)buf;
 
-    if (ip_data_len + ETH_HLEN > sizeof(buf))
+    if (ip_data_len < 0 ||
+        (size_t)ip_data_len + ETH_HLEN > sizeof(buf))
         return;
     
     if (!memcmp(slirp->client_ethaddr, zero_ethaddr, ETH_ALEN)) {

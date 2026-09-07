@@ -57,6 +57,9 @@ static RISCVCPUState riscv_cpu_global_state;
 #define code_to_pc_addend s->__code_to_pc_addend
 #endif
 
+static void log_vprintf(const char *fmt, va_list ap)
+    __attribute__((format(printf, 1, 0)));
+
 #ifdef CONFIG_LOGFILE
 static FILE *log_file;
 
@@ -208,7 +211,8 @@ static int get_phys_addr(RISCVCPUState *s,
         return 0;
     }
 
-    if ((((target_long)vaddr << SV39_VADDR_SHIFT) >> SV39_VADDR_SHIFT) != vaddr)
+    if ((target_ulong)(((target_long)vaddr << SV39_VADDR_SHIFT) >>
+                       SV39_VADDR_SHIFT) != vaddr)
         return -1;
 
     pte_addr = (s->satp & SATP_PPN_MASK) << PG_SHIFT;
@@ -475,7 +479,7 @@ struct __attribute__((packed)) unaligned_u32 {
 static uint32_t get_insn32(uint8_t *ptr)
 {
 #if defined(EMSCRIPTEN)
-    return ((uint16_t *)ptr)[0] | (((uint16_t *)ptr)[1] << 16);
+    return ((uint16_t *)ptr)[0] | ((uint32_t)((uint16_t *)ptr)[1] << 16);
 #else
     return ((struct unaligned_u32 *)ptr)->u32;
 #endif
@@ -548,6 +552,7 @@ static void tlb_flush_all(RISCVCPUState *s)
 
 static void tlb_flush_vaddr(RISCVCPUState *s, target_ulong vaddr)
 {
+    (void)vaddr;
     tlb_flush_all(s);
 }
 
@@ -561,7 +566,7 @@ static void glue(riscv_cpu_flush_tlb_write_range_ram,
     
     ram_end = ram_ptr + ram_size;
     for(i = 0; i < TLB_SIZE; i++) {
-        if (s->tlb_write[i].vaddr != -1) {
+        if (s->tlb_write[i].vaddr != (target_ulong)-1) {
             ptr = (uint8_t *)(s->tlb_write[i].mem_addend +
                               (uintptr_t)s->tlb_write[i].vaddr);
             if (ptr >= ram_ptr && ptr < ram_end) {
@@ -1113,7 +1118,10 @@ static __exception int raise_interrupt(RISCVCPUState *s)
 
 static inline int32_t sext(int32_t val, int n)
 {
-    return (val << (32 - n)) >> (32 - n);
+    uint32_t sign_mask = (uint32_t)1 << (n - 1);
+
+    return (int32_t)((uint32_t)val & (sign_mask - 1)) -
+        (int32_t)((uint32_t)val & sign_mask);
 }
 
 static inline uint32_t get_field1(uint32_t val, int src_pos, 
@@ -1207,6 +1215,8 @@ static void glue(riscv_cpu_end, MAX_XLEN)(RISCVCPUState *s)
 {
 #ifdef USE_GLOBAL_STATE
     free(s);
+#else
+    (void)s;
 #endif
 }
 

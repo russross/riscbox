@@ -78,8 +78,8 @@ JSONValue json_object_get(JSONValue val, const char *name);
 int json_object_set(JSONValue val, const char *name, JSONValue prop_val);
 
 JSONValue json_array_new(void);
-JSONValue json_array_get(JSONValue val, unsigned int idx);
-int json_array_set(JSONValue val, unsigned int idx, JSONValue prop_val);
+JSONValue json_array_get(JSONValue val, int idx);
+int json_array_set(JSONValue val, int idx, JSONValue prop_val);
 
 static inline BOOL json_is_error(JSONValue val)
 {

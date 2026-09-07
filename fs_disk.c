@@ -69,6 +69,8 @@ static void fs_delete(FSDevice *fs, FSFile *f)
 static FSFile *fid_create(FSDevice *s1, char *path, uint32_t uid)
 {
     FSFile *f;
+
+    (void)s1;
     f = mallocz(sizeof(*f));
     f->path = path;
     f->uid = uid;
@@ -90,7 +92,7 @@ static int errno_table[][2] = {
 
 static int errno_to_p9(int err)
 {
-    int i;
+    size_t i;
     if (err == 0)
         return 0;
     for(i = 0; i < countof(errno_table); i++) {
@@ -120,7 +122,8 @@ static int open_flags[][2] = {
 
 static int p9_flags_to_host(int flags)
 {
-    int ret, i;
+    int ret;
+    size_t i;
 
     ret = (flags & P9_O_NOACCESS);
     for(i = 0; i < countof(open_flags); i++) {
@@ -176,7 +179,9 @@ static int fs_attach(FSDevice *fs1, FSFile **pf,
     FSDeviceDisk *fs = (FSDeviceDisk *)fs1;
     struct stat st;
     FSFile *f;
-    
+
+    (void)uname;
+    (void)aname;
     if (lstat(fs->root_path, &st) != 0) {
         *pf = NULL;
         return -errno_to_p9(errno);
@@ -215,7 +220,9 @@ static int fs_mkdir(FSDevice *fs, FSQID *qid, FSFile *f,
 {
     char *path;
     struct stat st;
-    
+
+    (void)fs;
+    (void)gid;
     path = compose_path(f->path, name);
     if (mkdir(path, mode) < 0) {
         free(path);
@@ -234,6 +241,9 @@ static int fs_open(FSDevice *fs, FSQID *qid, FSFile *f, uint32_t flags,
                    FSOpenCompletionFunc *cb, void *opaque)
 {
     struct stat st;
+
+    (void)cb;
+    (void)opaque;
     fs_close(fs, f);
 
     if (stat(f->path, &st) != 0) 
@@ -267,6 +277,7 @@ static int fs_create(FSDevice *fs, FSQID *qid, FSFile *f, const char *name,
     char *path;
     int ret, fd;
 
+    (void)gid;
     fs_close(fs, f);
     
     path = compose_path(f->path, name);
@@ -296,6 +307,7 @@ static int fs_readdir(FSDevice *fs, FSFile *f, uint64_t offset,
     struct dirent *de;
     int len, pos, name_len, type, d_type;
 
+    (void)fs;
     if (!f->is_opened || !f->is_dir)
         return -P9_EPROTO;
     if (offset == 0)
@@ -351,6 +363,7 @@ static int fs_read(FSDevice *fs, FSFile *f, uint64_t offset,
 {
     int ret;
 
+    (void)fs;
     if (!f->is_opened || f->is_dir)
         return -P9_EPROTO;
     ret = pread(f->u.fd, buf, count, offset);
@@ -365,6 +378,7 @@ static int fs_write(FSDevice *fs, FSFile *f, uint64_t offset,
 {
     int ret;
 
+    (void)fs;
     if (!f->is_opened || f->is_dir)
         return -P9_EPROTO;
     ret = pwrite(f->u.fd, buf, count, offset);
@@ -376,6 +390,7 @@ static int fs_write(FSDevice *fs, FSFile *f, uint64_t offset,
 
 static void fs_close(FSDevice *fs, FSFile *f)
 {
+    (void)fs;
     if (!f->is_opened)
         return;
     if (f->is_dir)
@@ -389,6 +404,7 @@ static int fs_stat(FSDevice *fs, FSFile *f, FSStat *st)
 {
     struct stat st1;
 
+    (void)fs;
     if (lstat(f->path, &st1) != 0)
         return -P9_ENOENT;
     stat_to_qid(&st->qid, &st1);
@@ -416,6 +432,7 @@ static int fs_setattr(FSDevice *fs, FSFile *f, uint32_t mask,
 {
     BOOL ctime_updated = FALSE;
 
+    (void)fs;
     if (mask & (P9_SETATTR_UID | P9_SETATTR_GID)) {
         if (lchown(f->path, (mask & P9_SETATTR_UID) ? uid : -1,
                    (mask & P9_SETATTR_GID) ? gid : -1) < 0)
@@ -473,7 +490,8 @@ static int fs_setattr(FSDevice *fs, FSFile *f, uint32_t mask,
 static int fs_link(FSDevice *fs, FSFile *df, FSFile *f, const char *name)
 {
     char *path;
-    
+
+    (void)fs;
     path = compose_path(df->path, name);
     if (link(f->path, path) < 0) {
         free(path);
@@ -488,7 +506,9 @@ static int fs_symlink(FSDevice *fs, FSQID *qid,
 {
     char *path;
     struct stat st;
-    
+
+    (void)fs;
+    (void)gid;
     path = compose_path(f->path, name);
     if (symlink(symgt, path) < 0) {
         free(path);
@@ -509,7 +529,9 @@ static int fs_mknod(FSDevice *fs, FSQID *qid,
 {
     char *path;
     struct stat st;
-    
+
+    (void)fs;
+    (void)gid;
     path = compose_path(f->path, name);
     if (mknod(path, mode, makedev(major, minor)) < 0) {
         free(path);
@@ -527,6 +549,8 @@ static int fs_mknod(FSDevice *fs, FSQID *qid,
 static int fs_readlink(FSDevice *fs, char *buf, int buf_size, FSFile *f)
 {
     int ret;
+
+    (void)fs;
     ret = readlink(f->path, buf, buf_size - 1);
     if (ret < 0)
         return -errno_to_p9(errno);
@@ -540,6 +564,7 @@ static int fs_renameat(FSDevice *fs, FSFile *f, const char *name,
     char *path, *new_path;
     int ret;
 
+    (void)fs;
     path = compose_path(f->path, name);
     new_path = compose_path(new_f->path, new_name);
     ret = rename(path, new_path);
@@ -555,6 +580,7 @@ static int fs_unlinkat(FSDevice *fs, FSFile *f, const char *name)
     char *path;
     int ret;
 
+    (void)fs;
     path = compose_path(f->path, name);
     ret = remove(path);
     free(path);
@@ -568,7 +594,8 @@ static int fs_lock(FSDevice *fs, FSFile *f, const FSLock *lock)
 {
     int ret;
     struct flock fl;
-    
+
+    (void)fs;
     /* XXX: lock directories too */
     if (!f->is_opened || f->is_dir)
         return -P9_EPROTO;
@@ -593,7 +620,8 @@ static int fs_getlock(FSDevice *fs, FSFile *f, FSLock *lock)
 {
     int ret;
     struct flock fl;
-    
+
+    (void)fs;
     /* XXX: lock directories too */
     if (!f->is_opened || f->is_dir)
         return -P9_EPROTO;

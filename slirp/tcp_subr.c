@@ -216,6 +216,7 @@ tcp_newtcpcb(struct socket *so)
  */
 struct tcpcb *tcp_drop(struct tcpcb *tp, int err)
 {
+	(void)err;
 	DEBUG_CALL("tcp_drop");
 	DEBUG_ARG("tp = %lx", (long)tp);
 	DEBUG_ARG("errno = %d", errno);

@@ -78,7 +78,7 @@ ip_input(struct mbuf *m)
 	DEBUG_ARG("m = %lx", (long)m);
 	DEBUG_ARG("m_len = %d", m->m_len);
 
-	if (m->m_len < sizeof (struct ip)) {
+	if (m->m_len < (int)sizeof(struct ip)) {
 		return;
 	}
 
@@ -89,7 +89,7 @@ ip_input(struct mbuf *m)
 	}
 
 	hlen = ip->ip_hl << 2;
-	if (hlen<sizeof(struct ip ) || hlen>m->m_len) {/* min header length */
+	if (hlen < (int)sizeof(struct ip) || hlen > m->m_len) {/* min header length */
 	  goto bad;                                  /* or packet too short */
 	}
 
@@ -675,6 +675,7 @@ ip_stripoptions(register struct mbuf *m, struct mbuf *mopt)
 	register caddr_t opts;
 	int olen;
 
+	(void)mopt;
 	olen = (ip->ip_hl<<2) - sizeof (struct ip);
 	opts = (caddr_t)(ip + 1);
 	i = m->m_len - (sizeof (struct ip) + olen);

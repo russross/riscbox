@@ -178,6 +178,7 @@ void phys_mem_reset_dirty_bit(PhysMemoryRange *pr, size_t offset)
 
 static void default_free_ram(PhysMemoryMap *s, PhysMemoryRange *pr)
 {
+    (void)s;
     free(pr->phys_mem);
 }
 

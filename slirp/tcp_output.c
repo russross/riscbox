@@ -114,7 +114,7 @@ again:
 			 * to send then the probe will be the FIN
 			 * itself.
 			 */
-			if (off < so->so_snd.sb_cc)
+			if ((u_int)off < so->so_snd.sb_cc)
 				flags &= ~TH_FIN;
 			win = 1;
 		} else {

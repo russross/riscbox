@@ -316,12 +316,14 @@ static int64_t to_blocks(FSDeviceMem *fs, uint64_t size)
 
 static FSINode *inode_incref(FSDevice *fs, FSINode *n)
 {
+    (void)fs;
     n->refcount++;
     return n;
 }
 
 static FSINode *inode_inc_open(FSDevice *fs, FSINode *n)
 {
+    (void)fs;
     n->open_count++;
     return n;
 }
@@ -403,6 +405,8 @@ static void inode_dec_open(FSDevice *fs1, FSINode *n)
 static void inode_update_mtime(FSDevice *fs, FSINode *n)
 {
     struct timeval tv;
+
+    (void)fs;
     gettimeofday(&tv, NULL);
     n->mtime_sec = tv.tv_sec;
     n->mtime_nsec = tv.tv_usec * 1000;
@@ -487,9 +491,10 @@ static FSINode *inode_search_path1(FSDevice *fs, FSINode *n, const char *path)
 {
     char name[1024];
     const char *p, *p1;
-    int len;
+    size_t len;
     FSDirEntry *de;
-    
+
+    (void)fs;
     p = path;
     if (*p == '/')
         p++;
@@ -503,7 +508,7 @@ static FSINode *inode_search_path1(FSDevice *fs, FSINode *n, const char *path)
             len = p1 - p;
             p1++;
         }
-        if (len > sizeof(name) - 1)
+        if (len >= sizeof(name))
             return NULL;
         memcpy(name, p, len);
         name[len] = '\0';
@@ -533,6 +538,7 @@ static BOOL is_empty_dir(FSDevice *fs, FSINode *n)
     struct list_head *el;
     FSDirEntry *de;
 
+    (void)fs;
     list_for_each(el, &n->u.dir.de_list) {
         de = list_entry(el, FSDirEntry, link);
         if (strcmp(de->name, ".") != 0 &&
@@ -623,6 +629,8 @@ static int fs_attach(FSDevice *fs1, FSFile **pf, FSQID *qid, uint32_t uid,
 {
     FSDeviceMem *fs = (FSDeviceMem *)fs1;
 
+    (void)uname;
+    (void)aname;
     *pf = fid_create(fs1, fs->root_inode, uid);
     inode_to_qid(qid, fs->root_inode);
     return 0;
@@ -1114,6 +1122,7 @@ static int fs_readdir(FSDevice *fs, FSFile *f, uint64_t offset1,
     FSDirEntry *de;
     uint64_t offset;
 
+    (void)fs;
     if (!f->is_opened || n->type != FT_DIR)
         return -P9_EPROTO;
     
@@ -1170,6 +1179,8 @@ static int fs_read(FSDevice *fs, FSFile *f, uint64_t offset,
         return -P9_EPROTO;
     if (n->type != FT_REG)
         return -P9_EIO;
+    if (count <= 0)
+        return 0;
     if ((f->open_flags & P9_O_NOACCESS) == P9_O_WRONLY)
         return -P9_EIO;
     if (n->u.reg.is_fscmd)
@@ -1177,7 +1188,7 @@ static int fs_read(FSDevice *fs, FSFile *f, uint64_t offset,
     if (offset >= n->u.reg.size)
         return 0;
     count1 = n->u.reg.size - offset;
-    if (count1 < count)
+    if (count1 < (uint64_t)count)
         count = count1;
     file_buffer_read(&n->u.reg.fbuf, offset, buf, count);
     return count;
@@ -1210,7 +1221,7 @@ static int fs_truncate(FSDevice *fs1, FSINode *n, uint64_t size)
     case REG_STATE_LOADED:
     case REG_STATE_LOCAL:
         if (diff > 0) {
-            if ((fs->fs_blocks + diff_blocks) > fs->fs_max_blocks)
+            if ((uint64_t)(fs->fs_blocks + diff_blocks) > fs->fs_max_blocks)
                 return -P9_ENOSPC;
             if (size > n->u.reg.fbuf.allocated_size) {
                 new_allocated_size = n->u.reg.fbuf.allocated_size * 5 / 4;
@@ -1336,7 +1347,9 @@ static int fs_setattr(FSDevice *fs1, FSFile *f, uint32_t mask,
 {
     FSINode *n = f->inode;
     int ret;
-    
+
+    (void)atime_sec;
+    (void)atime_nsec;
     if (mask & P9_SETATTR_MODE) {
         n->mode = mode;
     }
@@ -1423,6 +1436,8 @@ static int fs_readlink(FSDevice *fs, char *buf, int buf_size, FSFile *f)
 {
     FSINode *n = f->inode;
     int len;
+
+    (void)fs;
     if (n->type != FT_LNK)
         return -P9_EIO;
     len = min_int(strlen(n->u.symlink.name), buf_size - 1);
@@ -1478,6 +1493,9 @@ static int fs_unlinkat(FSDevice *fs, FSFile *f, const char *name)
 static int fs_lock(FSDevice *fs, FSFile *f, const FSLock *lock)
 {
     FSINode *n = f->inode;
+
+    (void)fs;
+    (void)lock;
     if (!f->is_opened)
         return -P9_EPROTO;
     if (n->type != FT_REG)
@@ -1489,6 +1507,9 @@ static int fs_lock(FSDevice *fs, FSFile *f, const FSLock *lock)
 static int fs_getlock(FSDevice *fs, FSFile *f, FSLock *lock)
 {
     FSINode *n = f->inode;
+
+    (void)fs;
+    (void)lock;
     if (!f->is_opened)
         return -P9_EPROTO;
     if (n->type != FT_REG)
@@ -1600,6 +1621,7 @@ static FSBaseURL *fs_find_base_url(FSDevice *fs1,
 
 static void fs_base_url_decref(FSDevice *fs, FSBaseURL *bu)
 {
+    (void)fs;
     assert(bu->ref_count >= 1);
     if (--bu->ref_count == 0) {
         free(bu->base_url_id);
@@ -1891,6 +1913,8 @@ void fs_dump_cache_load(FSDevice *fs1, const char *cfg_filename)
 #else
 void fs_dump_cache_load(FSDevice *fs1, const char *cfg_filename)
 {
+    (void)fs1;
+    (void)cfg_filename;
 }
 #endif
 
@@ -2233,6 +2257,7 @@ static void kernel_load_cb(FSDevice *fs, FSQID *qid1, int err,
     FSNetInitState *s = opaque;
     FSQID qid;
 
+    (void)qid1;
 #ifdef DUMP_CACHE_LOAD
     /* disable preloading if dumping cache load */
     if (((FSDeviceMem *)fs)->dump_cache_load)
@@ -2590,7 +2615,8 @@ static void fs_cmd_xhr_on_load(FSDevice *fs, FSFile *f, int64_t size,
     CmdXHRState *s = opaque;
     FSCMDRequest *req;
     int ret;
-    
+
+    (void)f;
     //    printf("fs_cmd_xhr_on_load: size=%d\n", (int)size);
 
     if (s->fd)
@@ -2737,7 +2763,8 @@ static int fs_cmd_pbkdf2(FSDevice *fs, FSFile *f, const char *p)
     uint32_t iter, key_len;
     int pwd_len, salt_len;
     FSCMDRequest *req;
-    
+
+    (void)fs;
     /* a request is already done or in progress */
     if (f->req != NULL)
         return -P9_EIO;
@@ -2771,6 +2798,7 @@ static int fs_cmd_set_import_dir(FSDevice *fs, FSFile *f, const char *p)
     FSDeviceMem *fs1 = (FSDeviceMem *)fs;
     char filename[1024];
 
+    (void)f;
     if (parse_fname(filename, sizeof(filename), &p) < 0)
         return -P9_EINVAL;
     free(fs1->import_dir);
@@ -2785,7 +2813,8 @@ static int fs_cmd_write(FSDevice *fs, FSFile *f, uint64_t offset,
     const char *p;
     char cmd[64];
     int err;
-    
+
+    (void)offset;
     /* transform into a string */
     buf1 = malloc(buf_len + 1);
     memcpy(buf1, buf, buf_len);
@@ -2826,7 +2855,9 @@ static int fs_cmd_read(FSDevice *fs, FSFile *f, uint64_t offset,
 {
     FSCMDRequest *req;
     int l;
-    
+
+    (void)fs;
+    (void)offset;
     req = f->req;
     if (!req)
         return -P9_EIO;
@@ -2838,6 +2869,8 @@ static int fs_cmd_read(FSDevice *fs, FSFile *f, uint64_t offset,
 static void fs_cmd_close(FSDevice *fs, FSFile *f)
 {
     FSCMDRequest *req;
+
+    (void)fs;
     req = f->req;
 
     if (req) {
@@ -2906,6 +2939,9 @@ void fs_import_file(const char *filename, uint8_t *buf, int buf_len)
 void fs_export_file(const char *filename,
                     const uint8_t *buf, int buf_len)
 {
+    (void)filename;
+    (void)buf;
+    (void)buf_len;
 }
 
 #endif

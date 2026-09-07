@@ -100,6 +100,9 @@ uint32_t os_get_time_ms(void)
 int
 fork_exec(struct socket *so, const char *ex, int do_pty)
 {
+    (void)so;
+    (void)ex;
+    (void)do_pty;
     /* not implemented */
     return 0;
 }

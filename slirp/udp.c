@@ -73,7 +73,7 @@ udp_input(register struct mbuf *m, int iphlen)
 	 * but we don't yet have a way to check the checksum
 	 * with options still present.
 	 */
-	if(iphlen > sizeof(struct ip)) {
+	if (iphlen > (int)sizeof(struct ip)) {
 		ip_stripoptions(m, (struct mbuf *)0);
 		iphlen = sizeof(struct ip);
 	}

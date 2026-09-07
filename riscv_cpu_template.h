@@ -243,7 +243,7 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
         if (unlikely(code_ptr >= code_end)) {
             uint32_t tlb_idx;
             uint16_t insn_high;
-            target_ulong addr;
+            target_ulong fetch_addr;
             uint8_t *ptr;
             
             s->pc = GET_PC();
@@ -261,28 +261,30 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
                 }
             }
     
-            addr = s->pc;
-            tlb_idx = (addr >> PG_SHIFT) & (TLB_SIZE - 1);
-            if (likely(s->tlb_code[tlb_idx].vaddr == (addr & ~PG_MASK))) {
+            fetch_addr = s->pc;
+            tlb_idx = (fetch_addr >> PG_SHIFT) & (TLB_SIZE - 1);
+            if (likely(s->tlb_code[tlb_idx].vaddr ==
+                       (fetch_addr & ~PG_MASK))) {
                 /* TLB match */ 
                 ptr = (uint8_t *)(s->tlb_code[tlb_idx].mem_addend +
-                                  (uintptr_t)addr);
+                                  (uintptr_t)fetch_addr);
             } else {
-                if (unlikely(target_read_insn_slow(s, &ptr, addr)))
+                if (unlikely(target_read_insn_slow(s, &ptr, fetch_addr)))
                     goto mmu_exception;
             }
             code_ptr = ptr;
-            code_end = ptr + (PG_MASK - 1 - (addr & PG_MASK));
-            code_to_pc_addend = addr - (uintptr_t)code_ptr;
+            code_end = ptr + (PG_MASK - 1 - (fetch_addr & PG_MASK));
+            code_to_pc_addend = fetch_addr - (uintptr_t)code_ptr;
             if (unlikely(code_ptr >= code_end)) {
                 /* instruction is potentially half way between two
                    pages ? */
                 insn = *(uint16_t *)code_ptr;
                 if ((insn & 3) == 3) {
                     /* instruction is half way between two pages */
-                    if (unlikely(target_read_insn_u16(s, &insn_high, addr + 2)))
+                    if (unlikely(target_read_insn_u16(s, &insn_high,
+                                                      fetch_addr + 2)))
                         goto mmu_exception;
-                    insn |= insn_high << 16;
+                    insn |= (uint32_t)insn_high << 16;
                 }
             } else {
                 insn = get_insn32(code_ptr);
@@ -654,7 +656,7 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
                 ((insn >> (21 - 1)) & 0x7fe) |
                 ((insn >> (20 - 11)) & (1 << 11)) |
                 (insn & 0xff000);
-            imm = (imm << 11) >> 11;
+            imm = sext(imm, 21);
             if (rd != 0)
                 s->reg[rd] = GET_PC() + 4;
             s->pc = (intx_t)(GET_PC() + imm);
@@ -687,7 +689,7 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
                     ((insn >> (25 - 5)) & 0x7e0) |
                     ((insn >> (8 - 1)) & 0x1e) |
                     ((insn << (11 - 7)) & (1 << 11));
-                imm = (imm << 19) >> 19;
+                imm = sext(imm, 13);
                 s->pc = (intx_t)(GET_PC() + imm);
                 JUMP_INSN;
             }
@@ -762,7 +764,7 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
         case 0x23: /* store */
             funct3 = (insn >> 12) & 7;
             imm = rd | ((insn >> (25 - 5)) & 0xfe0);
-            imm = (imm << 20) >> 20;
+            imm = sext(imm, 12);
             addr = s->reg[rs1] + imm;
             val = s->reg[rs2];
             switch(funct3) {
@@ -937,7 +939,7 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
                 funct3 = (insn >> 12) & 7;
                 switch(funct3) {
                 case 0: /* mulw */
-                    val = (int32_t)((int32_t)val * (int32_t)val2);
+                    val = sext((uint32_t)val * (uint32_t)val2, 32);
                     break;
                 case 4:/* divw */
                     val = div32(val, val2);
@@ -1301,7 +1303,7 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
                 goto illegal_insn;
             funct3 = (insn >> 12) & 7;
             imm = rd | ((insn >> (25 - 5)) & 0xfe0);
-            imm = (imm << 20) >> 20;
+            imm = sext(imm, 12);
             addr = s->reg[rs1] + imm;
             switch(funct3) {
             case 2: /* fsw */

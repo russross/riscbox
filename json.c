@@ -145,21 +145,21 @@ int json_object_set(JSONValue val, const char *name, JSONValue prop_val)
     return 0;
 }
 
-JSONValue json_array_get(JSONValue val, unsigned int idx)
+JSONValue json_array_get(JSONValue val, int idx)
 {
     JSONArray *array;
     
     if (val.type != JSON_ARRAY)
         return json_undefined_new();
     array = val.u.array;
-    if (idx < array->len) {
+    if (idx >= 0 && idx < array->len) {
         return array->tab[idx];
     } else {
         return json_undefined_new();
     }
 }
 
-int json_array_set(JSONValue val, unsigned int idx, JSONValue prop_val)
+int json_array_set(JSONValue val, int idx, JSONValue prop_val)
 {
     JSONArray *array;
     int new_size;
@@ -167,7 +167,7 @@ int json_array_set(JSONValue val, unsigned int idx, JSONValue prop_val)
     if (val.type != JSON_ARRAY)
         return -1;
     array = val.u.array;
-    if (idx < array->len) {
+    if (idx >= 0 && idx < array->len) {
         json_free(array->tab[idx]);
         array->tab[idx] = prop_val;
     } else if (idx == array->len) {

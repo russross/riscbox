@@ -108,7 +108,7 @@ static int virtio_irq_num(int index)
 #define RTC_FREQ_DIV 16 /* arbitrary, relative to CPU freq to have a
                            10 MHz frequency */
 
-static uint64_t rtc_get_real_time(RISCVMachine *s)
+static uint64_t rtc_get_real_time(void)
 {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -120,7 +120,7 @@ static uint64_t rtc_get_time(RISCVMachine *m)
 {
     uint64_t val;
     if (m->rtc_real_time) {
-        val = rtc_get_real_time(m) - m->rtc_start_time;
+        val = rtc_get_real_time() - m->rtc_start_time;
     } else {
         val = riscv_cpu_get_cycles(m->cpu_state) / RTC_FREQ_DIV;
     }
@@ -470,7 +470,8 @@ static void fdt_put_data(FDTState *s, const uint8_t *data, int len)
     
     len1 = (len + 3) / 4;
     fdt_alloc_len(s, s->tab_len + len1);
-    memcpy(s->tab + s->tab_len, data, len);
+    if (len != 0)
+        memcpy(s->tab + s->tab_len, data, len);
     memset((uint8_t *)(s->tab + s->tab_len) + len, 0, -len & 3);
     s->tab_len += len1;
 }
@@ -1043,7 +1044,7 @@ static VirtMachine *riscv_machine_init(const VirtMachineParams *p)
     cpu_register_ram(s->mem_map, 0x00000000, LOW_RAM_SIZE, 0);
     s->rtc_real_time = p->rtc_real_time;
     if (p->rtc_real_time) {
-        s->rtc_start_time = rtc_get_real_time(s);
+        s->rtc_start_time = rtc_get_real_time();
     }
     riscv_cpu_set_time_source(s->cpu_state, rtc_get_time_for_cpu, s);
     
@@ -1239,6 +1240,7 @@ static void riscv_vm_console_resize(VirtMachine *s1, int width, int height)
 
 static BOOL riscv_vm_mouse_is_absolute(VirtMachine *s)
 {
+    (void)s;
     return TRUE;
 }
 

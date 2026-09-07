@@ -22,34 +22,44 @@
 # THE SOFTWARE.
 #
 
-# Build the Javascript version of TinyEMU
+# Build the WebAssembly version of TinyEMU
 EMCC=emcc
-EMCFLAGS=-O2 --llvm-opts 2 -Wall -D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE -MMD -fno-strict-aliasing -DCONFIG_FS_NET
-#EMCFLAGS+=-Werror
-EMLDFLAGS=-O3 --memory-init-file 0 --closure 0 -s NO_EXIT_RUNTIME=1 -s NO_FILESYSTEM=1 -s "EXPORTED_FUNCTIONS=['_console_queue_char','_vm_start','_fs_import_file','_display_key_event','_display_mouse_event','_display_wheel_event','_net_write_packet','_net_set_carrier']" -s 'EXTRA_EXPORTED_RUNTIME_METHODS=["ccall", "cwrap"]' -s BINARYEN_TRAP_MODE=clamp --js-library js/lib.js
-EMLDFLAGS_ASMJS:=$(EMLDFLAGS) -s WASM=0
-EMLDFLAGS_WASM:=$(EMLDFLAGS) -s WASM=1 -s TOTAL_MEMORY=67108864 -s ALLOW_MEMORY_GROWTH=1
+EMCPPFLAGS=-D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE -DCONFIG_FS_NET
+EMCFLAGS=-O3 -Wall -Wextra -Werror -Wformat=2 -Wshadow -MMD \
+    -fno-strict-aliasing
+EMLDFLAGS=-O3 -s NO_EXIT_RUNTIME=1 -s NO_FILESYSTEM=1 \
+    -s "EXPORTED_FUNCTIONS=['_console_queue_char','_vm_start','_fs_import_file','_display_key_event','_display_mouse_event','_display_wheel_event','_net_write_packet','_net_set_carrier']" \
+    -s 'EXPORTED_RUNTIME_METHODS=["ccall", "cwrap"]' \
+    -s INITIAL_MEMORY=67108864 -s ALLOW_MEMORY_GROWTH=1 \
+    --js-library js/lib.js
 
-PROGS=js/riscvemu64.js js/riscvemu64-wasm.js
+WASM_DIR=build/wasm
+PROGS=js/riscvemu64-wasm.js
 
 all: $(PROGS)
 
-JS_OBJS=jsemu.js.o softfp.js.o virtio.js.o fs.js.o fs_net.js.o fs_wget.js.o fs_utils.js.o simplefb.js.o pci.js.o json.js.o block_net.js.o
-JS_OBJS+=iomem.js.o cutils.js.o aes.js.o sha256.js.o uart16550.js.o
+JS_OBJS=jsemu.o softfp.o virtio.o fs.o fs_net.o fs_wget.o fs_utils.o \
+    simplefb.o pci.o json.o block_net.o iomem.o cutils.o aes.o sha256.o \
+    uart16550.o
 
-RISCVEMU64_OBJS=$(JS_OBJS) riscv_cpu64.js.o riscv_machine.js.o machine.js.o
-
-js/riscvemu64.js: $(RISCVEMU64_OBJS) js/lib.js
-	$(EMCC) $(EMLDFLAGS_ASMJS) -o $@ $(RISCVEMU64_OBJS)
+RISCVEMU64_OBJS=$(addprefix $(WASM_DIR)/,$(JS_OBJS) riscv_cpu64.o \
+    riscv_machine.o machine.o)
 
 js/riscvemu64-wasm.js: $(RISCVEMU64_OBJS) js/lib.js
-	$(EMCC) $(EMLDFLAGS_WASM) -o $@ $(RISCVEMU64_OBJS)
+	$(EMCC) $(EMLDFLAGS) -o $@ $(RISCVEMU64_OBJS)
 
-riscv_cpu64.js.o: riscv_cpu.c
-	$(EMCC) $(EMCFLAGS) -c -o $@ $<
+$(WASM_DIR)/riscv_cpu64.o: riscv_cpu.c
+	mkdir -p $(@D)
+	$(EMCC) $(EMCPPFLAGS) $(EMCFLAGS) -c -o $@ $<
 
+$(WASM_DIR)/%.o: %.c
+	mkdir -p $(@D)
+	$(EMCC) $(EMCPPFLAGS) $(EMCFLAGS) -c -o $@ $<
 
-%.js.o: %.c
-	$(EMCC) $(EMCFLAGS) -c -o $@ $<
+clean:
+	rm -rf $(WASM_DIR)
+	rm -f js/riscvemu64-wasm.js js/riscvemu64-wasm.wasm
 
--include $(wildcard *.d)
+-include $(wildcard $(WASM_DIR)/*.d)
+
+.PHONY: all clean

@@ -4,4 +4,8 @@
 build_filelist
 splitimg
 temu
+temu-debug
+build/
+js/riscvemu64-wasm.js
+js/riscvemu64-wasm.wasm
 image

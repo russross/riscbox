@@ -80,6 +80,9 @@ static void fs_wget_onerror(unsigned int handle, void *opaque, int status,
                             const char *status_text)
 {
     XHRState *s = opaque;
+
+    (void)handle;
+    (void)status_text;
     if (status <= 0)
         status = -404; /* HTTP not found error */
     else
@@ -93,6 +96,8 @@ static void fs_wget_onload(unsigned int handle,
                            void *opaque, void *data, unsigned int size)
 {
     XHRState *s = opaque;
+
+    (void)handle;
     fs_wget_update_downloading_count(-1);
     if (s->cb)
         s->cb(s->opaque, 0, data, size);
@@ -107,7 +112,8 @@ XHRState *fs_wget2(const char *url, const char *user, const char *password,
     XHRState *s;
     const char *request;
     uint8_t *post_data;
-    
+
+    (void)single_write;
     s = mallocz(sizeof(*s));
     s->opaque = opaque;
     s->cb = cb;

@@ -237,6 +237,7 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
     }
 
     s->pending_exception = -1;
+    s->pending_tval = 0;
     /* Note: we assume NULL is represented as a zero number */
     code_ptr = NULL;
     code_end = NULL;

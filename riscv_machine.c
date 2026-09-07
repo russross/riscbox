@@ -58,8 +58,6 @@ typedef struct RISCVMachine {
     uint32_t plic_enable[2];
     uint32_t plic_threshold[2];
     IRQSignal plic_irq[32]; /* IRQ 0 is not used */
-    /* HTIF */
-    uint64_t htif_tohost, htif_fromhost;
 
     VIRTIODevice *keyboard_dev;
     VIRTIODevice *mouse_dev;
@@ -70,13 +68,14 @@ typedef struct RISCVMachine {
 } RISCVMachine;
 
 /* Memory map following the QEMU 'virt' platform (hw/riscv/virt.c).
-   HTIF and the framebuffer are not part of the virt spec; they live in
+   The framebuffer is not part of the virt spec; it lives in
    the VIRT_PLATFORM_BUS expansion window (0x4000000-0x5ffffff). */
 #define LOW_RAM_SIZE   0x00010000 /* 64KB */
 #define RAM_BASE_ADDR  0x80000000 /* VIRT_DRAM */
+#define TEST_BASE_ADDR 0x00100000 /* VIRT_TEST */
+#define TEST_SIZE      0x00001000
 #define CLINT_BASE_ADDR 0x02000000 /* VIRT_CLINT */
 #define CLINT_SIZE      0x00010000
-#define HTIF_BASE_ADDR 0x04000000
 #define VIRTIO_BASE_ADDR 0x10001000 /* VIRT_VIRTIO */
 #define VIRTIO_SIZE      0x1000
 #define VIRTIO_IRQ       1
@@ -128,98 +127,42 @@ static uint64_t rtc_get_time_for_cpu(void *opaque)
     return rtc_get_time(m);
 }
 
-static uint32_t htif_read(void *opaque, uint32_t offset,
+/* SiFive test finisher, as on QEMU virt: a 32-bit register at offset
+   0 whose low half selects pass, fail or reset. */
+#define TEST_FINISHER_FAIL 0x3333
+#define TEST_FINISHER_PASS 0x5555
+#define TEST_FINISHER_RESET 0x7777
+
+static uint32_t test_read(void *opaque, uint32_t offset,
                           int size_log2)
 {
-    RISCVMachine *s = opaque;
-    uint32_t val;
-
+    (void)opaque;
+    (void)offset;
     assert(size_log2 == 2);
-    switch(offset) {
-    case 0:
-        val = s->htif_tohost;
-        break;
-    case 4:
-        val = s->htif_tohost >> 32;
-        break;
-    case 8:
-        val = s->htif_fromhost;
-        break;
-    case 12:
-        val = s->htif_fromhost >> 32;
-        break;
-    default:
-        val = 0;
-        break;
-    }
-    return val;
+    return 0;
 }
 
-static void htif_handle_cmd(RISCVMachine *s)
-{
-    uint32_t device, cmd;
-
-    device = s->htif_tohost >> 56;
-    cmd = (s->htif_tohost >> 48) & 0xff;
-    if (s->htif_tohost == 1) {
-        /* shuthost */
-        printf("\nPower off.\n");
-        exit(0);
-    } else if (device == 1 && cmd == 1) {
-        uint8_t buf[1];
-        buf[0] = s->htif_tohost & 0xff;
-        s->common.console->write_data(s->common.console->opaque, buf, 1);
-        s->htif_tohost = 0;
-        s->htif_fromhost = ((uint64_t)device << 56) | ((uint64_t)cmd << 48);
-    } else if (device == 1 && cmd == 0) {
-        /* request keyboard interrupt */
-        s->htif_tohost = 0;
-    } else {
-        printf("HTIF: unsupported tohost=0x%016" PRIx64 "\n", s->htif_tohost);
-    }
-}
-
-static void htif_write(void *opaque, uint32_t offset, uint32_t val,
+static void test_write(void *opaque, uint32_t offset, uint32_t val,
                        int size_log2)
 {
-    RISCVMachine *s = opaque;
-
+    (void)opaque;
     assert(size_log2 == 2);
-    switch(offset) {
-    case 0:
-        s->htif_tohost = (s->htif_tohost & ~0xffffffff) | val;
-        break;
-    case 4:
-        s->htif_tohost = (s->htif_tohost & 0xffffffff) | ((uint64_t)val << 32);
-        htif_handle_cmd(s);
-        break;
-    case 8:
-        s->htif_fromhost = (s->htif_fromhost & ~0xffffffff) | val;
-        break;
-    case 12:
-        s->htif_fromhost = (s->htif_fromhost & 0xffffffff) |
-            (uint64_t)val << 32;
-        break;
+    if (offset != 0)
+        return;
+    switch (val & 0xffff) {
+    case TEST_FINISHER_FAIL:
+        printf("\nTest failed with code %d.\n", (val >> 16) & 0xffff);
+        exit(1);
+    case TEST_FINISHER_PASS:
+        printf("\nPower off.\n");
+        exit(0);
+    case TEST_FINISHER_RESET:
+        printf("\nReset.\n");
+        exit(0);
     default:
         break;
     }
 }
-
-#if 0
-static void htif_poll(RISCVMachine *s)
-{
-    uint8_t buf[1];
-    int ret;
-
-    if (s->htif_fromhost == 0) {
-        ret = s->console->read_data(s->console->opaque, buf, 1);
-        if (ret == 1) {
-            s->htif_fromhost = ((uint64_t)1 << 56) | ((uint64_t)0 << 48) |
-                buf[0];
-        }
-    }
-}
-#endif
 
 static uint32_t clint_read(void *opaque, uint32_t offset, int size_log2)
 {
@@ -588,22 +531,6 @@ static void fdt_prop_tab_u64_2(FDTState *s, const char *prop_name,
     fdt_prop_tab_u32(s, prop_name, tab, 4);
 }
 
-static void fdt_prop_tab_u64_4(FDTState *s, const char *prop_name,
-                               uint64_t v0, uint64_t v1,
-                               uint64_t v2, uint64_t v3)
-{
-    uint32_t tab[8];
-    tab[0] = v0 >> 32;
-    tab[1] = v0;
-    tab[2] = v1 >> 32;
-    tab[3] = v1;
-    tab[4] = v2 >> 32;
-    tab[5] = v2;
-    tab[6] = v3 >> 32;
-    tab[7] = v3;
-    fdt_prop_tab_u32(s, prop_name, tab, 8);
-}
-
 static void fdt_prop_str(FDTState *s, const char *prop_name,
                          const char *str)
 {
@@ -715,6 +642,7 @@ static int riscv_build_fdt(RISCVMachine *m, uint8_t *dst,
 {
     FDTState *s;
     int size, i, cur_phandle, intc_phandle, plic_phandle, cpu_phandle;
+    int syscon_phandle;
     char isa_string[128], *q;
     uint32_t misa;
     uint32_t tab[4];
@@ -818,17 +746,20 @@ static int riscv_build_fdt(RISCVMachine *m, uint8_t *dst,
     
     fdt_end_node(s); /* memory */
 
-    fdt_begin_node(s, "htif");
-    fdt_prop_str(s, "compatible", "ucb,htif0");
-    /* OpenSBI binds reg[0] as fromhost and reg[1] as tohost */
-    fdt_prop_tab_u64_4(s, "reg", HTIF_BASE_ADDR + 8, 8, HTIF_BASE_ADDR, 8);
-    fdt_end_node(s); /* htif */
+    syscon_phandle = cur_phandle++;
 
     fdt_begin_node(s, "soc");
     fdt_prop_u32(s, "#address-cells", 2);
     fdt_prop_u32(s, "#size-cells", 2);
     fdt_prop_str(s, "compatible", "simple-bus");
     fdt_prop(s, "ranges", NULL, 0);
+
+    fdt_begin_node_num(s, "syscon", TEST_BASE_ADDR);
+    fdt_prop_tab_str(s, "compatible",
+                     "sifive,test1", "sifive,test0", "syscon", NULL);
+    fdt_prop_tab_u64_2(s, "reg", TEST_BASE_ADDR, TEST_SIZE);
+    fdt_prop_u32(s, "phandle", syscon_phandle);
+    fdt_end_node(s); /* syscon */
 
     fdt_begin_node_num(s, "clint", CLINT_BASE_ADDR);
     fdt_prop_tab_str(s, "compatible", "sifive,clint0", "riscv,clint0", NULL);
@@ -895,6 +826,20 @@ static int riscv_build_fdt(RISCVMachine *m, uint8_t *dst,
     }
     
     fdt_end_node(s); /* soc */
+
+    fdt_begin_node(s, "reboot");
+    fdt_prop_str(s, "compatible", "syscon-reboot");
+    fdt_prop_u32(s, "regmap", syscon_phandle);
+    fdt_prop_u32(s, "offset", 0);
+    fdt_prop_u32(s, "value", TEST_FINISHER_RESET);
+    fdt_end_node(s); /* reboot */
+
+    fdt_begin_node(s, "poweroff");
+    fdt_prop_str(s, "compatible", "syscon-poweroff");
+    fdt_prop_u32(s, "regmap", syscon_phandle);
+    fdt_prop_u32(s, "offset", 0);
+    fdt_prop_u32(s, "value", TEST_FINISHER_PASS);
+    fdt_end_node(s); /* poweroff */
 
     fdt_begin_node(s, "chosen");
     fdt_prop_str(s, "bootargs", cmd_line ? cmd_line : "");
@@ -1047,8 +992,8 @@ static VirtMachine *riscv_machine_init(const VirtMachineParams *p)
         irq_init(&s->plic_irq[i], plic_set_irq, s, i);
     }
 
-    cpu_register_device(s->mem_map, HTIF_BASE_ADDR, 16,
-                        s, htif_read, htif_write, DEVIO_SIZE32);
+    cpu_register_device(s->mem_map, TEST_BASE_ADDR, TEST_SIZE,
+                        s, test_read, test_write, DEVIO_SIZE32);
     s->common.console = p->console;
 
     s->uart_dev = uart16550_init(s->mem_map, UART_BASE_ADDR,

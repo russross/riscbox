@@ -719,8 +719,8 @@ static uint8_t *riscv_build_fdt(RISCVMachine *m, int *pfdt_size,
         if (misa & (1 << bit))
             *q++ = single_letter_order[i];
     }
-    strcpy(q, "_sstc_svadu_zawrs_zcmop_zicntr_zicond_zicsr_zifencei"
-              "_zihintntl_zihintpause_zihpm_zimop");
+    strcpy(q, "_sstc_svadu_zawrs_zcmop_zicbop_zicntr_zicond_zicsr"
+              "_zifencei_zihintntl_zihintpause_zihpm_zimop");
     fdt_prop_str(s, "riscv,isa", isa_string);
     fdt_prop_str(s, "riscv,isa-base", "rv64i");
 
@@ -728,9 +728,9 @@ static uint8_t *riscv_build_fdt(RISCVMachine *m, int *pfdt_size,
     {
         static const char ext_letters[] = "imafdc";
         static const char *const ext_names[] = {
-            "sstc", "svadu", "zawrs", "zcmop", "zicntr", "zicond",
-            "zicsr", "zifencei", "zihintntl", "zihintpause", "zihpm",
-            "zimop",
+            "sstc", "svadu", "zawrs", "zcmop", "zicbop", "zicntr",
+            "zicond", "zicsr", "zifencei", "zihintntl", "zihintpause",
+            "zihpm", "zimop",
         };
         char ext_list[128];
         char *r = ext_list;
@@ -749,6 +749,7 @@ static uint8_t *riscv_build_fdt(RISCVMachine *m, int *pfdt_size,
         fdt_prop(s, "riscv,isa-extensions", ext_list, r - ext_list);
     }
     
+    fdt_prop_u32(s, "riscv,cbop-block-size", 64);
     fdt_prop_str(s, "mmu-type", "riscv,sv39");
     fdt_prop_u32(s, "clock-frequency", 2000000000);
     cpu_phandle = cur_phandle++;

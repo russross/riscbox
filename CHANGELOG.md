@@ -7,38 +7,18 @@ Riscbox changelog
 This release establishes Riscbox as a focused RV64 browser emulator based on
 TinyEMU 2019-12-21.
 
-*   Renamed the project, native binaries, WebAssembly artifacts, documentation,
-    and user-visible interfaces from TinyEMU/temu to Riscbox.
-*   Reduced the CPU to RV64, the MMU to Sv39, and the platform to one hart;
-    removed x86, RV32, RV128, Sv32, Sv48, and Windows paths, and made vectors
-    and the hypervisor extension explicit non-goals.
-*   Moved the machine to the QEMU `virt` memory map and boot protocol, including
-    the low reset vector, DRAM/FDT layout, OpenSBI handoff, and standard FDT
-    bindings.
-*   Added an NS16550A UART, standard PLIC and CLINT layouts, SiFive test
-    finisher, QEMU VirtIO vendor identification, and VirtIO block device ID
-    requests.
-*   Made UART and VirtIO console selection explicit. UART-only guests such as
-    xv6 receive input correctly; Linux can use VirtIO console while optionally
-    mirroring early UART output.
-*   Implemented PMP, supervisor timer compare, Svadu controls, Svinval, Svnapot,
-    Svpbmt, and current counter/privilege behavior needed by OpenSBI, Linux, and
-    xv6.
-*   Added and advertised focused RVA23-era extensions and guarantees, including
-    `Zicond`, `Zimop`, `Zawrs`, `Zba`, `Zbb`, `Zbs`, `Zca`, `Zcb`, `Zcmop`,
-    cache-block operations, instruction hints, and standard main-memory
-    properties.
-*   Corrected LR/SC and AMO alignment, reservation, permission, and operand-size
-    behavior; Sv39 superpage/PTE validation; MPRV trap return; independent cycle
-    and instruction-retirement accounting; high multiplication; FMIN/FMAX; HTTP
-    URL bounds; configuration ownership; and writable FDT placement.
+*   Renamed the project to reduce confusion (there are lots of TinyEMU forks), native binaries, WebAssembly artifacts, documentation, and user-visible interfaces from TinyEMU/temu to Riscbox.
+*   Reduced the CPU to RV64, the MMU to Sv39, and the platform to one hart; removed x86, RV32, RV128, Sv32, Sv48, and Windows paths, and made vectors and the hypervisor extension explicit non-goals.
+*   Moved the machine to the QEMU `virt` memory map and boot protocol, including the low reset vector, DRAM/FDT layout, OpenSBI handoff, and standard FDT bindings.
+*   Added an NS16550A UART, standard PLIC and CLINT layouts, SiFive test finisher, QEMU VirtIO vendor identification, and VirtIO block device ID requests.
+*   Made UART and VirtIO console selection explicit. UART-only guests such as xv6 receive input correctly; Linux can use VirtIO console while optionally mirroring early UART output.
+*   Implemented PMP, supervisor timer compare, Svadu controls, Svinval, Svnapot, Svpbmt, and current counter/privilege behavior needed by OpenSBI, Linux, and xv6.
+*   Added and advertised focused RVA23-era extensions and guarantees, including `Zicond`, `Zimop`, `Zawrs`, `Zba`, `Zbb`, `Zbs`, `Zca`, `Zcb`, `Zcmop`, cache-block operations, instruction hints, and standard main-memory properties.
+*   Corrected LR/SC and AMO alignment, reservation, permission, and operand-size behavior; Sv39 superpage/PTE validation; MPRV trap return; independent cycle and instruction-retirement accounting; high multiplication; FMIN/FMAX; HTTP URL bounds; configuration ownership; and writable FDT placement.
 *   Replaced the native AES decryption use of obsolete OpenSSL APIs with EVP.
-*   Standardized optimized native and sanitizer/debug builds on Clang and the
-    browser build on Emscripten. Modernized the Emscripten HTTP bridge and made
-    every web asset path relative to its VM configuration.
-*   Validated modern xv6 through its complete user test suite and Alpine 3.24.1
-    through OpenSBI to a UART login prompt in native, sanitizer, and browser
-    builds.
+*   Standardized optimized native and sanitizer/debug builds on Clang and the browser build on Emscripten. Modernized the Emscripten HTTP bridge and made every web asset path relative to its VM configuration.
+*   Validated modern xv6 through its complete user test suite and Alpine 3.24.1 through OpenSBI to a UART login prompt in native, sanitizer, and browser builds.
+
 
 TinyEMU history
 ===============

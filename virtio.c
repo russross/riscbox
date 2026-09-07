@@ -1010,12 +1010,14 @@ typedef struct {
 #define VIRTIO_BLK_T_OUT         1
 #define VIRTIO_BLK_T_FLUSH       4
 #define VIRTIO_BLK_T_FLUSH_OUT   5
+#define VIRTIO_BLK_T_GET_ID      8
 
 #define VIRTIO_BLK_S_OK     0
 #define VIRTIO_BLK_S_IOERR  1
 #define VIRTIO_BLK_S_UNSUPP 2
 
 #define SECTOR_SIZE 512
+#define VIRTIO_BLK_ID_BYTES 20
 
 static void virtio_block_req_end(VIRTIODevice *s, int ret)
 {
@@ -1064,6 +1066,15 @@ static void virtio_block_req_cb(void *opaque, int ret)
     queue_notify((VIRTIODevice *)s, s1->req.queue_idx);
 }
 
+static void virtio_block_complete_status(VIRTIODevice *s, int queue_idx,
+                                         int desc_idx, int write_size,
+                                         uint8_t status)
+{
+    memcpy_to_queue(s, queue_idx, desc_idx, write_size - 1,
+                    &status, sizeof(status));
+    virtio_consume_desc(s, queue_idx, desc_idx, sizeof(status));
+}
+
 /* XXX: handle async I/O */
 static int virtio_block_recv_request(VIRTIODevice *s, int queue_idx,
                                      int desc_idx, int read_size,
@@ -1072,7 +1083,7 @@ static int virtio_block_recv_request(VIRTIODevice *s, int queue_idx,
     VIRTIOBlockDevice *s1 = (VIRTIOBlockDevice *)s;
     BlockDevice *bs = s1->bs;
     BlockRequestHeader h;
-    uint8_t *buf;
+    uint8_t *buf, id[VIRTIO_BLK_ID_BYTES + 1];
     int len, ret;
 
     if (s1->req_in_progress)
@@ -1083,6 +1094,10 @@ static int virtio_block_recv_request(VIRTIODevice *s, int queue_idx,
     s1->req.type = h.type;
     s1->req.queue_idx = queue_idx;
     s1->req.desc_idx = desc_idx;
+    if (write_size < 1) {
+        virtio_consume_desc(s, queue_idx, desc_idx, 0);
+        return 0;
+    }
     switch(h.type) {
     case VIRTIO_BLK_T_IN:
         s1->req.buf = malloc(write_size);
@@ -1112,7 +1127,20 @@ static int virtio_block_recv_request(VIRTIODevice *s, int queue_idx,
             virtio_block_req_end(s, ret);
         }
         break;
+    case VIRTIO_BLK_T_GET_ID:
+        if (write_size != VIRTIO_BLK_ID_BYTES + 1) {
+            virtio_block_complete_status(s, queue_idx, desc_idx, write_size,
+                                         VIRTIO_BLK_S_UNSUPP);
+            break;
+        }
+        memset(id, 0, sizeof(id));
+        memcpy_to_queue(s, queue_idx, desc_idx, 0, id, sizeof(id));
+        virtio_consume_desc(s, queue_idx, desc_idx,
+                            VIRTIO_BLK_ID_BYTES + 1);
+        break;
     default:
+        virtio_block_complete_status(s, queue_idx, desc_idx, write_size,
+                                     VIRTIO_BLK_S_UNSUPP);
         break;
     }
     return 0;

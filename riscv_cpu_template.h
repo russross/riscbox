@@ -850,10 +850,14 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
             case 0: /* addiw */
                 val = (int32_t)(val + imm);
                 break;
-            case 1: /* slliw */
-                if ((imm & ~31) != 0)
-                    goto illegal_insn;
-                val = (int32_t)(val << (imm & 31));
+            case 1: /* slliw/slli.uw */
+                if (imm & ~31) {
+                    if ((imm & ~63) != 0x80)
+                        goto illegal_insn;
+                    val = (uintx_t)(uint32_t)val << (imm & 63);
+                } else {
+                    val = (int32_t)(val << (imm & 31));
+                }
                 break;
             case 5: /* srliw/sraiw */
                 if ((imm & ~(31 | 0x400)) != 0)
@@ -906,16 +910,22 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
             } else {
                 funct3 = (insn >> 12) & 7;
                 if (imm & ~0x20) {
-                    if (imm != 7)
-                        goto illegal_insn;
-                    switch(funct3) {
-                    case 5: /* czero.eqz */
-                        val = val2 == 0 ? 0 : val;
-                        break;
-                    case 7: /* czero.nez */
-                        val = val2 != 0 ? 0 : val;
-                        break;
-                    default:
+                    if (imm == 0x10) { /* sh1add/sh2add/sh3add */
+                        if (funct3 != 2 && funct3 != 4 && funct3 != 6)
+                            goto illegal_insn;
+                        val = val2 + (val << (funct3 >> 1));
+                    } else if (imm == 7) {
+                        switch(funct3) {
+                        case 5: /* czero.eqz */
+                            val = val2 == 0 ? 0 : val;
+                            break;
+                        case 7: /* czero.nez */
+                            val = val2 != 0 ? 0 : val;
+                            break;
+                        default:
+                            goto illegal_insn;
+                        }
+                    } else {
                         goto illegal_insn;
                     }
                 } else {
@@ -985,27 +995,39 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
                     goto illegal_insn;
                 }
             } else {
-                if (imm & ~0x20)
-                    goto illegal_insn;
-                funct3 = ((insn >> 12) & 7) | ((insn >> (30 - 3)) & (1 << 3));
-                switch(funct3) {
-                case 0: /* addw */
-                    val = (int32_t)(val + val2);
-                    break;
-                case 0 | 8: /* subw */
-                    val = (int32_t)(val - val2);
-                    break;
-                case 1: /* sllw */
-                    val = (int32_t)((uint32_t)val << (val2 & 31));
-                    break;
-                case 5: /* srlw */
-                    val = (int32_t)((uint32_t)val >> (val2 & 31));
-                    break;
-                case 5 | 8: /* sraw */
-                    val = (int32_t)val >> (val2 & 31);
-                    break;
-                default:
-                    goto illegal_insn;
+                funct3 = (insn >> 12) & 7;
+                if (imm & ~0x20) {
+                    if (imm == 4 && funct3 == 0) { /* add.uw */
+                        val = (uint32_t)val + val2;
+                    } else if (imm == 0x10 &&
+                               (funct3 == 2 || funct3 == 4 || funct3 == 6)) {
+                        /* sh1add.uw/sh2add.uw/sh3add.uw */
+                        val = val2 + ((uintx_t)(uint32_t)val <<
+                                      (funct3 >> 1));
+                    } else {
+                        goto illegal_insn;
+                    }
+                } else {
+                    funct3 |= (insn >> (30 - 3)) & (1 << 3);
+                    switch(funct3) {
+                    case 0: /* addw */
+                        val = (int32_t)(val + val2);
+                        break;
+                    case 0 | 8: /* subw */
+                        val = (int32_t)(val - val2);
+                        break;
+                    case 1: /* sllw */
+                        val = (int32_t)((uint32_t)val << (val2 & 31));
+                        break;
+                    case 5: /* srlw */
+                        val = (int32_t)((uint32_t)val >> (val2 & 31));
+                        break;
+                    case 5 | 8: /* sraw */
+                        val = (int32_t)val >> (val2 & 31);
+                        break;
+                    default:
+                        goto illegal_insn;
+                    }
                 }
             }
             if (rd != 0)

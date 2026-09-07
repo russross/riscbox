@@ -1372,9 +1372,15 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
                         goto done_interp;
                     }
                     break;
+                case 0x180: /* sfence.w.inval */
+                case 0x181: /* sfence.inval.ir */
+                    if (insn != ((uint32_t)imm << 20 | 0x73) ||
+                        s->priv == PRV_U)
+                        goto illegal_insn;
+                    break;
                 default:
-                    if ((imm >> 5) == 0x09) {
-                        /* sfence.vma */
+                    if ((imm >> 5) == 0x09 || (imm >> 5) == 0x0b) {
+                        /* sfence.vma/sinval.vma */
                         if (insn & 0x00007f80)
                             goto illegal_insn;
                         if (s->priv == PRV_U)

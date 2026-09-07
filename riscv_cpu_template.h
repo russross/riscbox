@@ -813,6 +813,12 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
                 val = s->reg[rs1];
                 if ((imm & ~(XLEN - 1)) == 0) {
                     val <<= imm & (XLEN - 1);
+                } else if ((imm & ~(XLEN - 1)) == 0x480) { /* bclri */
+                    val &= ~((uintx_t)1 << (imm & (XLEN - 1)));
+                } else if ((imm & ~(XLEN - 1)) == 0x680) { /* binvi */
+                    val ^= (uintx_t)1 << (imm & (XLEN - 1));
+                } else if ((imm & ~(XLEN - 1)) == 0x280) { /* bseti */
+                    val |= (uintx_t)1 << (imm & (XLEN - 1));
                 } else {
                     switch(imm) {
                     case 0x600: /* clz */
@@ -854,6 +860,8 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
                 } else if ((imm & ~(XLEN - 1)) == 0x600) { /* rori */
                     imm &= XLEN - 1;
                     val = (val >> imm) | (val << ((-imm) & (XLEN - 1)));
+                } else if ((imm & ~(XLEN - 1)) == 0x480) { /* bexti */
+                    val = (val >> (imm & (XLEN - 1))) & 1;
                 } else if (imm == 0x287) { /* orc.b */
                     uintx_t result = 0;
                     int shift;
@@ -985,6 +993,19 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
                         default:
                             goto illegal_insn;
                         }
+                    } else if (imm == 0x14 && funct3 == 1) { /* bset */
+                        val |= (uintx_t)1 << (val2 & (XLEN - 1));
+                    } else if (imm == 0x24) { /* bclr/bext */
+                        if (funct3 == 1) {
+                            val &= ~((uintx_t)1 <<
+                                     (val2 & (XLEN - 1)));
+                        } else if (funct3 == 5) {
+                            val = (val >> (val2 & (XLEN - 1))) & 1;
+                        } else {
+                            goto illegal_insn;
+                        }
+                    } else if (imm == 0x34 && funct3 == 1) { /* binv */
+                        val ^= (uintx_t)1 << (val2 & (XLEN - 1));
                     } else if (imm == 0x10) { /* sh1add/sh2add/sh3add */
                         if (funct3 != 2 && funct3 != 4 && funct3 != 6)
                             goto illegal_insn;

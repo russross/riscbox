@@ -1452,7 +1452,8 @@ static RISCVCPUState *glue(riscv_cpu_init, MAX_XLEN)(PhysMemoryMap *mem_map)
     s->priv = PRV_M;
     s->mstatus = 0;
     s->stimecmp = UINT64_MAX;
-    s->misa |= MCPUID_SUPER | MCPUID_USER | MCPUID_I | MCPUID_M | MCPUID_A;
+    s->misa |= MCPUID_SUPER | MCPUID_USER | MCPUID_I | MCPUID_M | MCPUID_A |
+        MCPUID_B;
 #if FLEN >= 32
     s->misa |= MCPUID_F;
 #endif

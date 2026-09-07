@@ -719,18 +719,18 @@ static uint8_t *riscv_build_fdt(RISCVMachine *m, int *pfdt_size,
         if (misa & (1 << bit))
             *q++ = single_letter_order[i];
     }
-    strcpy(q, "_sstc_svadu_zawrs_zba_zbb_zcmop_zicbop_zicntr_zicond_zicsr"
+    strcpy(q, "_sstc_svadu_zawrs_zba_zbb_zbs_zcmop_zicbop_zicntr_zicond_zicsr"
               "_zifencei_zihintntl_zihintpause_zihpm_zimop");
     fdt_prop_str(s, "riscv,isa", isa_string);
     fdt_prop_str(s, "riscv,isa-base", "rv64i");
 
     /* Modern kernels enumerate extensions from riscv,isa-extensions. */
     {
-        static const char ext_letters[] = "imafdc";
+        static const char ext_letters[] = "imafdcb";
         static const char *const ext_names[] = {
-            "sstc", "svadu", "zawrs", "zba", "zbb", "zcmop",
-            "zicbop", "zicntr", "zicond", "zicsr", "zifencei",
-            "zihintntl", "zihintpause", "zihpm", "zimop",
+            "sstc", "svadu", "zawrs", "zba", "zbb", "zbs",
+            "zcmop", "zicbop", "zicntr", "zicond", "zicsr",
+            "zifencei", "zihintntl", "zihintpause", "zihpm", "zimop",
         };
         char ext_list[128];
         char *r = ext_list;

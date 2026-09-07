@@ -87,6 +87,7 @@ typedef uint64_t mem_uint_t;
 #define MCPUID_I       (1 << ('I' - 'A'))
 #define MCPUID_M       (1 << ('M' - 'A'))
 #define MCPUID_A       (1 << ('A' - 'A'))
+#define MCPUID_B       (1 << ('B' - 'A'))
 #define MCPUID_F       (1 << ('F' - 'A'))
 #define MCPUID_D       (1 << ('D' - 'A'))
 #define MCPUID_Q       (1 << ('Q' - 'A'))

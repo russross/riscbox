@@ -94,15 +94,24 @@ Serve the repository over HTTP; browsers cannot load the VM reliably from `file:
 
 Open <http://127.0.0.1:8000/examples/web/?config=alpine.cfg>. The example page is a minimal, dependency-free UART terminal. It demonstrates the complete embedding contract and boots the same Alpine profile entirely in WebAssembly. Production applications can replace its `term` object with a full terminal component while keeping the riscbox API calls.
 
+The [Risclet example](examples/risclet/README.md) adds a browser-backed 9p
+filesystem and a live `sort.s` editor.
+
 For another site, copy `riscbox-wasm.js`, `riscbox-wasm.wasm`, the VM configuration, firmware, kernel, initramfs, and split block directory into its static assets. Load the JavaScript after defining these globals:
 
 *   `Module.onRuntimeInitialized()` calls `Module.ccall("vm_start", ...)`.
+*   `Module.onVmStarted()` runs after the VM and its devices are ready.
 *   `term.write(text)` accepts console output.
 *   `term.getSize()` returns `[columns, rows]`.
 *   `update_downloading(active)` reports HTTP activity.
 *   `graphic_display` and `net_state` may be `null` for a console-only VM.
 
 Console input is queued one byte at a time through `Module._console_queue_char(byte)`. All VM URLs may be relative to the configuration file. Serve `.wasm` files as `application/wasm`; ordinary static servers generally do this already. Cross-origin assets also need the usual CORS headers.
+
+Browser code can replace a file in the first 9p filesystem with
+`Module.ccall("fs_import_text", "number", ["string", "string", "string"],
+[directory, filename, text])`. Call it from `onVmStarted()` or later; zero
+indicates success.
 
 
 Configuration and command line

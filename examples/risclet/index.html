@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Risclet</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: ui-monospace, "Cascadia Mono", monospace;
+    }
+
+    body {
+      margin: 0;
+      background: #111;
+      color: #ddd;
+    }
+
+    main {
+      display: grid;
+      grid-template-columns: minmax(20rem, 1fr) minmax(20rem, 1fr);
+      gap: 1rem;
+      min-height: calc(100vh - 2rem);
+      padding: 1rem;
+    }
+
+    section {
+      display: flex;
+      min-width: 0;
+      flex-direction: column;
+    }
+
+    h1 {
+      margin: 0 0 0.75rem;
+      font: inherit;
+      font-weight: bold;
+    }
+
+    #editor,
+    #terminal {
+      box-sizing: border-box;
+      flex: 1;
+      min-height: 32rem;
+      margin: 0;
+      overflow: auto;
+      padding: 1rem;
+      border: 1px solid #444;
+      border-radius: 0;
+      outline: none;
+      background: #111;
+      color: #ddd;
+      font: inherit;
+      line-height: 1.35;
+      tab-size: 8;
+    }
+
+    #editor {
+      resize: none;
+      white-space: pre;
+    }
+
+    #terminal {
+      white-space: pre-wrap;
+    }
+
+    #editor:focus,
+    #terminal:focus {
+      border-color: #999;
+    }
+
+    #status {
+      min-height: 1.35em;
+      margin: 0 0 0.75rem;
+    }
+
+    @media (max-width: 50rem) {
+      main {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section>
+      <h1><label for="editor">sort.s</label></h1>
+      <textarea id="editor" aria-describedby="status" spellcheck="false"></textarea>
+    </section>
+    <section>
+      <h1>Risclet console</h1>
+      <p id="status" role="status">Loading editor…</p>
+      <pre id="terminal" tabindex="0" aria-label="Virtual machine console"></pre>
+    </section>
+  </main>
+
+  <script>
+    const editorElement = document.querySelector("#editor");
+    const statusElement = document.querySelector("#status");
+    const terminalElement = document.querySelector("#terminal");
+    const inputEncoder = new TextEncoder();
+    const specialKeys = new Map([
+      ["Enter", "\r"],
+      ["Backspace", "\x7f"],
+      ["Tab", "\t"],
+      ["Escape", "\x1b"],
+      ["ArrowUp", "\x1b[A"],
+      ["ArrowDown", "\x1b[B"],
+      ["ArrowRight", "\x1b[C"],
+      ["ArrowLeft", "\x1b[D"],
+      ["Home", "\x1b[H"],
+      ["End", "\x1b[F"],
+      ["Delete", "\x1b[3~"],
+    ]);
+    let vmStarted = false;
+
+    const snapshotEditor = () => {
+      if (!vmStarted)
+        return;
+
+      const result = Module.ccall(
+        "fs_import_text",
+        "number",
+        ["string", "string", "string"],
+        ["/", "sort.s", editorElement.value],
+      );
+      statusElement.textContent = result === 0 ? "Running · sort.s synchronized" :
+        `Could not synchronize sort.s (${result})`;
+    };
+
+    var term = {
+      write(text) {
+        terminalElement.append(document.createTextNode(text));
+        terminalElement.scrollTop = terminalElement.scrollHeight;
+      },
+      getSize() {
+        return [80, 25];
+      },
+    };
+    var graphic_display = null;
+    var net_state = null;
+    var update_downloading = (downloading) => {
+      if (!vmStarted)
+        statusElement.textContent = downloading ? "Loading VM assets…" : "Starting VM…";
+    };
+    var Module = {
+      async onRuntimeInitialized() {
+        try {
+          const response = await fetch("demo/sort.s");
+          if (!response.ok)
+            throw new Error(`HTTP ${response.status}`);
+          editorElement.value = await response.text();
+        } catch (error) {
+          statusElement.textContent = `Could not load sort.s: ${error.message}`;
+          return;
+        }
+
+        statusElement.textContent = "Loading VM assets…";
+        Module.ccall(
+          "vm_start",
+          null,
+          ["string", "number", "string", "string", "number", "number", "number"],
+          [new URL("risclet.cfg", location.href).href, 256, "", null, 0, 0, 0],
+        );
+      },
+      onVmStarted() {
+        vmStarted = true;
+        snapshotEditor();
+        terminalElement.focus();
+      },
+    };
+
+    const keyText = (event) => {
+      if (event.ctrlKey && !event.altKey && !event.metaKey && event.key.length === 1)
+        return String.fromCharCode(event.key.toUpperCase().charCodeAt(0) & 31);
+
+      return specialKeys.get(event.key) ??
+        (!event.altKey && !event.metaKey && event.key.length === 1 ? event.key : null);
+    };
+
+    editorElement.addEventListener("input", snapshotEditor);
+    terminalElement.addEventListener("keydown", (event) => {
+      const text = keyText(event);
+      if (text === null || !Module._console_queue_char)
+        return;
+      event.preventDefault();
+      for (const byte of inputEncoder.encode(text))
+        Module._console_queue_char(byte);
+    });
+  </script>
+  <script src="/js/riscbox-wasm.js"></script>
+</body>
+</html>

@@ -93,7 +93,8 @@ static inline uint16_t get_le16(const uint8_t *ptr)
 
 static inline uint32_t get_le32(const uint8_t *ptr)
 {
-    return ptr[0] | (ptr[1] << 8) | (ptr[2] << 16) | (ptr[3] << 24);
+    return ptr[0] | (ptr[1] << 8) | (ptr[2] << 16) |
+           ((uint32_t)ptr[3] << 24);
 }
 
 static inline uint64_t get_le64(const uint8_t *ptr)

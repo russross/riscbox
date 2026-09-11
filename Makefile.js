@@ -28,7 +28,7 @@ EMCPPFLAGS=-D_FILE_OFFSET_BITS=64 -D_LARGEFILE_SOURCE -DCONFIG_FS_NET
 EMCFLAGS=-O3 -Wall -Wextra -Werror -Wformat=2 -Wshadow -MMD \
     -fno-strict-aliasing
 EMLDFLAGS=-O3 -s NO_EXIT_RUNTIME=1 -s NO_FILESYSTEM=1 \
-    -s "EXPORTED_FUNCTIONS=['_console_queue_char','_vm_start','_fs_import_file','_display_key_event','_display_mouse_event','_display_wheel_event','_net_write_packet','_net_set_carrier']" \
+    -s "EXPORTED_FUNCTIONS=['_console_queue_char','_vm_start','_fs_import_file','_fs_import_text','_display_key_event','_display_mouse_event','_display_wheel_event','_net_write_packet','_net_set_carrier']" \
     -s 'EXPORTED_RUNTIME_METHODS=["ccall", "cwrap"]' \
     -s INITIAL_MEMORY=67108864 -s ALLOW_MEMORY_GROWTH=1 \
     --js-library js/lib.js

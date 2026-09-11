@@ -1674,8 +1674,8 @@ VIRTIODevice *virtio_input_init(VIRTIOBusDef *bus, VirtioInputTypeEnum type)
 /*********************************************************************/
 /* 9p filesystem device */
 
-typedef struct {
-    struct list_head link;
+typedef struct FIDDesc {
+    struct FIDDesc *next;
     uint32_t fid;
     FSFile *fd;
 } FIDDesc;
@@ -1684,17 +1684,15 @@ typedef struct VIRTIO9PDevice {
     VIRTIODevice common;
     FSDevice *fs;
     int msize; /* maximum message size */
-    struct list_head fid_list; /* list of FIDDesc */
+    FIDDesc *fid_list;
     BOOL req_in_progress;
 } VIRTIO9PDevice;
 
 static FIDDesc *fid_find1(VIRTIO9PDevice *s, uint32_t fid)
 {
-    struct list_head *el;
     FIDDesc *f;
 
-    list_for_each(el, &s->fid_list) {
-        f = list_entry(el, FIDDesc, link);
+    for(f = s->fid_list; f; f = f->next) {
         if (f->fid == fid)
             return f;
     }
@@ -1713,13 +1711,17 @@ static FSFile *fid_find(VIRTIO9PDevice *s, uint32_t fid)
 
 static void fid_delete(VIRTIO9PDevice *s, uint32_t fid)
 {
-    FIDDesc *f;
+    FIDDesc **pf;
 
-    f = fid_find1(s, fid);
-    if (f) {
-        s->fs->fs_delete(s->fs, f->fd);
-        list_del(&f->link);
-        free(f);
+    for(pf = &s->fid_list; *pf; pf = &(*pf)->next) {
+        FIDDesc *f = *pf;
+
+        if (f->fid == fid) {
+            *pf = f->next;
+            s->fs->fs_delete(s->fs, f->fd);
+            free(f);
+            return;
+        }
     }
 }
 
@@ -1733,9 +1735,10 @@ static void fid_set(VIRTIO9PDevice *s, uint32_t fid, FSFile *fd)
         f->fd = fd;
     } else {
         f = malloc(sizeof(*f));
+        f->next = s->fid_list;
         f->fid = fid;
         f->fd = fd;
-        list_add(&f->link, &s->fid_list);
+        s->fid_list = f;
     }
 }
 
@@ -2014,7 +2017,8 @@ static void virtio_9p_send_reply(VIRTIO9PDevice *s, int queue_idx,
     put_le32(buf1, len);
     buf1[4] = id + 1;
     put_le16(buf1 + 5, tag);
-    memcpy(buf1 + 7, buf, buf_len);
+    if (buf_len > 0)
+        memcpy(buf1 + 7, buf, buf_len);
     memcpy_to_queue((VIRTIODevice *)s, queue_idx, desc_idx, 0, buf1, len);
     virtio_consume_desc((VIRTIODevice *)s, queue_idx, desc_idx, len);
     free(buf1);
@@ -2680,7 +2684,5 @@ VIRTIODevice *virtio_9p_init(VIRTIOBusDef *bus, FSDevice *fs,
 
     s->fs = fs;
     s->msize = 8192;
-    init_list_head(&s->fid_list);
-    
     return (VIRTIODevice *)s;
 }

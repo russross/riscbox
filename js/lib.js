@@ -22,6 +22,12 @@
  * THE SOFTWARE.
  */
 mergeInto(LibraryManager.library, {
+    vm_started: function()
+    {
+        if (typeof Module.onVmStarted === "function")
+            Module.onVmStarted();
+    },
+
     console_write: function(opaque, buf, len)
     {
         var str;

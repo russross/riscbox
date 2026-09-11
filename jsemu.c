@@ -40,6 +40,8 @@
 #include "list.h"
 #include "fbuf.h"
 
+extern void vm_started(void);
+
 void virt_machine_run(void *opaque);
 
 /* provided in lib.js */
@@ -287,6 +289,8 @@ static void init_vm(void *arg)
 
     m = virt_machine_init(p);
     global_vm = m;
+
+    vm_started();
 
     virt_machine_free_config(s->p);
 

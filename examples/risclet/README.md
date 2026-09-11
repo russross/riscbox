@@ -1,0 +1,27 @@
+Risclet browser demo
+====================
+
+The demo boots a small Alpine image, mounts the browser-backed 9p filesystem
+on `/home/student`, and snapshots the `sort.s` textarea into that filesystem
+after every edit.
+
+Build the root image and browser assets from the repository root:
+
+    make -j4
+    make wasm -j4
+    ./examples/risclet/build-rootfs.sh
+    ./examples/risclet/build-web-assets.sh
+
+`build-rootfs.sh` expects the pinned Alpine minirootfs and standard ISO under
+`image/`. It installs Risclet 0.4.7 but does not copy demo source into the disk.
+`build-web-assets.sh` expects the configured kernel image at
+`image/build/kernel/arch/riscv/boot/Image`; its paths can be overridden through
+the environment variables defined at the top of each script.
+
+Serve the repository over HTTP:
+
+    python3 -m http.server 8000
+
+Open <http://127.0.0.1:8000/examples/risclet/>, log in as `student`, and run:
+
+    risclet start.s sort.s print.s

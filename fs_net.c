@@ -2902,36 +2902,59 @@ void fs_net_set_pwd(FSDevice *fs, const char *pwd)
 
 #ifdef EMSCRIPTEN
 
-void fs_import_file(const char *filename, uint8_t *buf, int buf_len)
+static int fs_import_data(const char *directory, const char *filename,
+                          const uint8_t *buf, int buf_len, uint32_t mode)
 {
     FSDevice *fs;
-    FSDeviceMem *fs1;
-    FSFile *fd, *root_fd;
+    FSFile *dir_fd, *root_fd;
     FSQID qid;
-    
-    //    printf("importing file: %s len=%d\n", filename, buf_len);
+    int err;
+
     fs = fs_import_fs;
-    if (!fs) {
-        free(buf);
-        return;
-    }
-    
+    if (!fs)
+        return -P9_EIO;
+
+    root_fd = NULL;
+    dir_fd = NULL;
     assert(!fs->fs_attach(fs, &root_fd, &qid, 1000, "", ""));
-    fs1 = (FSDeviceMem *)fs;
-    fd = fs_walk_path(fs, root_fd, fs1->import_dir);
-    if (!fd)
-        goto fail;
-    fs_unlinkat(fs, root_fd, filename);
-    if (fs->fs_create(fs, &qid, fd, filename, P9_O_RDWR | P9_O_TRUNC,
-                      0600, 0) < 0)
-        goto fail;
-    fs->fs_write(fs, fd, 0, buf, buf_len);
- fail:
-    if (fd)
-        fs->fs_delete(fs, fd);
+    if (directory[0] == '\0' || !strcmp(directory, "/"))
+        dir_fd = fs_dup(fs, root_fd);
+    else
+        dir_fd = fs_walk_path(fs, root_fd, directory);
+    if (!dir_fd) {
+        err = -P9_ENOENT;
+        goto done;
+    }
+
+    fs->fs_unlinkat(fs, dir_fd, filename);
+    err = fs->fs_create(fs, &qid, dir_fd, filename,
+                        P9_O_RDWR | P9_O_TRUNC, mode, 0);
+    if (err < 0)
+        goto done;
+    err = fs->fs_write(fs, dir_fd, 0, buf, buf_len);
+
+ done:
+    if (dir_fd)
+        fs->fs_delete(fs, dir_fd);
     if (root_fd)
         fs->fs_delete(fs, root_fd);
+    return err < 0 ? err : 0;
+}
+
+void fs_import_file(const char *filename, uint8_t *buf, int buf_len)
+{
+    FSDeviceMem *fs = (FSDeviceMem *)fs_import_fs;
+
+    if (fs)
+        fs_import_data(fs->import_dir, filename, buf, buf_len, 0600);
     free(buf);
+}
+
+int fs_import_text(const char *directory, const char *filename,
+                   const char *text)
+{
+    return fs_import_data(directory, filename, (const uint8_t *)text,
+                          strlen(text), 0644);
 }
 
 #else

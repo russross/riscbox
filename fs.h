@@ -199,6 +199,8 @@ FSDevice *fs_net_init(const char *url, void (*start)(void *opaque), void *opaque
 void fs_net_set_pwd(FSDevice *fs, const char *pwd);
 #ifdef EMSCRIPTEN
 void fs_import_file(const char *filename, uint8_t *buf, int buf_len);
+int fs_import_text(const char *directory, const char *filename,
+                   const char *text);
 #endif
 void fs_export_file(const char *filename,
                     const uint8_t *buf, int buf_len);

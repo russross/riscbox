@@ -97,6 +97,7 @@
 
 typedef struct {
     uint32_t ready; /* 0 or 1 */
+    uint32_t num_max;
     uint32_t num;
     uint16_t last_avail_idx;
     virtio_phys_addr_t desc_addr;
@@ -170,7 +171,7 @@ static void virtio_reset(VIRTIODevice *s)
     for(i = 0; i < MAX_QUEUE; i++) {
         QueueState *qs = &s->queue[i];
         qs->ready = 0;
-        qs->num = MAX_QUEUE_NUM;
+        qs->num = qs->num_max;
         qs->desc_addr = 0;
         qs->avail_addr = 0;
         qs->used_addr = 0;
@@ -223,6 +224,8 @@ static void virtio_init(VIRTIODevice *s, VIRTIOBusDef *bus,
                         uint32_t device_id, int config_space_size,
                         VIRTIODeviceRecvFunc *device_recv)
 {
+    int i;
+
     memset(s, 0, sizeof(*s));
 
     if (bus->pci_bus) {
@@ -290,6 +293,8 @@ static void virtio_init(VIRTIODevice *s, VIRTIOBusDef *bus,
         s->get_ram_ptr = virtio_mmio_get_ram_ptr;
     }
 
+    for(i = 0; i < MAX_QUEUE; i++)
+        s->queue[i].num_max = MAX_QUEUE_NUM;
     s->device_id = device_id;
     s->vendor_id = 0x554d4551; /* "QEMU" */
     s->config_space_size = config_space_size;
@@ -650,7 +655,7 @@ static uint32_t virtio_mmio_read(void *opaque, uint32_t offset, int size_log2)
             val = s->queue_sel;
             break;
         case VIRTIO_MMIO_QUEUE_NUM_MAX:
-            val = MAX_QUEUE_NUM;
+            val = s->queue[s->queue_sel].num_max;
             break;
         case VIRTIO_MMIO_QUEUE_NUM:
             val = s->queue[s->queue_sel].num;
@@ -747,7 +752,8 @@ static void virtio_mmio_write(void *opaque, uint32_t offset,
                 s->queue_sel = val;
             break;
         case VIRTIO_MMIO_QUEUE_NUM:
-            if ((val & (val - 1)) == 0 && val > 0) {
+            if ((val & (val - 1)) == 0 && val > 0 &&
+                val <= s->queue[s->queue_sel].num_max) {
                 s->queue[s->queue_sel].num = val;
             }
             break;
@@ -938,7 +944,8 @@ static void virtio_pci_write(void *opaque, uint32_t offset1,
                     s->queue_sel = val;
                 break;
             case VIRTIO_PCI_QUEUE_SIZE:
-                if ((val & (val - 1)) == 0 && val > 0) {
+                if ((val & (val - 1)) == 0 && val > 0 &&
+                    val <= s->queue[s->queue_sel].num_max) {
                     s->queue[s->queue_sel].num = val;
                 }
                 break;
@@ -1673,6 +1680,8 @@ VIRTIODevice *virtio_input_init(VIRTIOBusDef *bus, VirtioInputTypeEnum type)
 
 /*********************************************************************/
 /* 9p filesystem device */
+
+#define VIRTIO_9P_QUEUE_SIZE 128
 
 typedef struct FIDDesc {
     struct FIDDesc *next;
@@ -2674,6 +2683,8 @@ VIRTIODevice *virtio_9p_init(VIRTIOBusDef *bus, FSDevice *fs,
     s = mallocz(sizeof(*s));
     virtio_init(&s->common, bus,
                 9, 2 + len, virtio_9p_recv_request);
+    s->common.queue[0].num_max = VIRTIO_9P_QUEUE_SIZE;
+    s->common.queue[0].num = VIRTIO_9P_QUEUE_SIZE;
     s->common.device_features = 1 << 0;
 
     /* set the mount tag */
@@ -2685,4 +2696,103 @@ VIRTIODevice *virtio_9p_init(VIRTIOBusDef *bus, FSDevice *fs,
     s->fs = fs;
     s->msize = 8192;
     return (VIRTIODevice *)s;
+}
+
+typedef struct {
+    VIRTIODevice common;
+    P9Server *server;
+} VIRTIO9PProtocolDevice;
+
+static void virtio_9p_protocol_send_error(VIRTIODevice *s, int queue_idx,
+                                          int desc_idx, int write_size,
+                                          uint16_t tag, uint32_t error)
+{
+    uint8_t reply[11];
+
+    if (write_size < (int)sizeof(reply)) {
+        virtio_consume_desc(s, queue_idx, desc_idx, 0);
+        return;
+    }
+    put_le32(reply, sizeof(reply));
+    reply[4] = 7; /* Rlerror */
+    put_le16(reply + 5, tag);
+    put_le32(reply + 7, error);
+    memcpy_to_queue(s, queue_idx, desc_idx, 0, reply, sizeof(reply));
+    virtio_consume_desc(s, queue_idx, desc_idx, sizeof(reply));
+}
+
+static int virtio_9p_protocol_recv_request(VIRTIODevice *s1, int queue_idx,
+                                           int desc_idx, int read_size,
+                                           int write_size)
+{
+    VIRTIO9PProtocolDevice *s = (VIRTIO9PProtocolDevice *)s1;
+    uint8_t *request, *reply;
+    uint8_t request_type;
+    uint32_t request_size;
+    uint16_t tag;
+    int reply_size;
+
+    if (queue_idx != 0)
+        return 0;
+    tag = 0xffff;
+    if (read_size < 7 || write_size < 7)
+        goto protocol_error;
+
+    request = malloc(read_size);
+    if (memcpy_from_queue(s1, request, queue_idx, desc_idx, 0, read_size)) {
+        free(request);
+        goto protocol_error;
+    }
+    request_size = get_le32(request);
+    request_type = request[4];
+    tag = get_le16(request + 5);
+    if (request_size < 7 || request_size > (uint32_t)read_size) {
+        free(request);
+        goto protocol_error;
+    }
+
+    reply = malloc(write_size);
+    reply_size = s->server->request(s->server, request, request_size,
+                                    reply, write_size);
+    free(request);
+    if (reply_size < 7 || reply_size > write_size ||
+        get_le32(reply) != (uint32_t)reply_size ||
+        get_le16(reply + 5) != tag ||
+        (reply[4] != 7 && reply[4] != request_type + 1)) {
+        free(reply);
+        virtio_9p_protocol_send_error(s1, queue_idx, desc_idx, write_size,
+                                      tag, P9_EIO);
+        return 0;
+    }
+    memcpy_to_queue(s1, queue_idx, desc_idx, 0, reply, reply_size);
+    virtio_consume_desc(s1, queue_idx, desc_idx, reply_size);
+    free(reply);
+    return 0;
+
+ protocol_error:
+    virtio_9p_protocol_send_error(s1, queue_idx, desc_idx, write_size,
+                                  tag, P9_EPROTO);
+    return 0;
+}
+
+VIRTIODevice *virtio_9p_protocol_init(VIRTIOBusDef *bus, P9Server *server,
+                                      const char *mount_tag)
+{
+    VIRTIO9PProtocolDevice *s;
+    uint8_t *cfg;
+    int len;
+
+    len = strlen(mount_tag);
+    s = mallocz(sizeof(*s));
+    virtio_init(&s->common, bus, 9, 2 + len,
+                virtio_9p_protocol_recv_request);
+    s->common.queue[0].num_max = VIRTIO_9P_QUEUE_SIZE;
+    s->common.queue[0].num = VIRTIO_9P_QUEUE_SIZE;
+    s->common.device_features = 1 << 0;
+
+    cfg = s->common.config_space;
+    put_le16(cfg, len);
+    memcpy(cfg + 2, mount_tag, len);
+    s->server = server;
+    return &s->common;
 }

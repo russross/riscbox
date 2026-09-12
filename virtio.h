@@ -138,8 +138,11 @@ VIRTIODevice *virtio_input_init(VIRTIOBusDef *bus, VirtioInputTypeEnum type);
 /* 9p filesystem device */
 
 #include "fs.h"
+#include "p9.h"
 
 VIRTIODevice *virtio_9p_init(VIRTIOBusDef *bus, FSDevice *fs,
                              const char *mount_tag);
+VIRTIODevice *virtio_9p_protocol_init(VIRTIOBusDef *bus, P9Server *server,
+                                      const char *mount_tag);
 
 #endif /* VIRTIO_H */

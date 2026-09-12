@@ -58,7 +58,7 @@ debug: riscbox-debug
 wasm:
 	$(MAKE) -f Makefile.js
 
-EMU_OBJS:=virtio.o pci.o fs.o cutils.o iomem.o simplefb.o \
+EMU_OBJS:=virtio.o pci.o fs.o p9_socket.o cutils.o iomem.o simplefb.o \
     json.o machine.o riscbox.o uart16550.o
 
 ifdef CONFIG_SLIRP

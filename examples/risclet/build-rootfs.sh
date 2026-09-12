@@ -84,7 +84,19 @@ mount -t sysfs sysfs /sys
 mount -t tmpfs tmpfs /run
 hostname riscbox
 ip link set lo up 2>/dev/null || true
-mount -t 9p -o trans=virtio,version=9p2000.L risclet /home/student
+aname=
+uname=student
+for option in $(cat /proc/cmdline); do
+    case "$option" in
+        risclet.aname=*) aname=${option#risclet.aname=} ;;
+        risclet.uname=*) uname=${option#risclet.uname=} ;;
+    esac
+done
+mount_options=trans=virtio,version=9p2000.L,cache=mmap,access=1000,uname=$uname
+if [ -n "$aname" ]; then
+    mount_options="$mount_options,aname=$aname"
+fi
+mount -t 9p -o "$mount_options" risclet /home/student
 EOF
 chmod 755 "$ROOTFS_DIR/etc/init.d/rcS"
 
@@ -122,6 +134,11 @@ printf 'student:x:1000:1000:Student:/home/student:/bin/sh\n' >> \
 printf 'student:x:1000:student\n' >> "$ROOTFS_DIR/etc/group"
 printf 'student::0:0:99999:7:::\n' >> "$ROOTFS_DIR/etc/shadow"
 mkdir -p "$ROOTFS_DIR/home/student" "$ROOTFS_DIR/usr/local/bin"
+mkdir -p "$ROOTFS_DIR/etc/profile.d"
+cat > "$ROOTFS_DIR/etc/profile.d/risclet.sh" <<'EOF'
+HISTFILE=/tmp/student-history
+export HISTFILE
+EOF
 curl --fail --location --silent --show-error \
     --output "$ROOTFS_DIR/usr/local/bin/risclet" "$RISCLET_URL"
 printf '%s  %s\n' "$RISCLET_SHA256" \

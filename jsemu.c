@@ -213,6 +213,10 @@ static void init_vm_fs(void *arg)
         char *filename;
 
         assert(p->fs_count == 1);
+        if (p->tab_fs[0].backend_type != VM_FS_FILE) {
+            vm_error("socket-backed 9p is not available in browser builds\n");
+            exit(1);
+        }
         filename = get_file_path(p->cfg_filename, p->tab_fs[0].filename);
         p->tab_fs[0].fs_dev = fs_net_init(filename, init_vm_drive, s);
         free(filename);

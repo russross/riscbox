@@ -749,6 +749,18 @@ int main(int argc, char **argv)
         FSDevice *fs;
         char *fname;
 
+        if (p->tab_fs[i].backend_type == VM_FS_SOCKET) {
+            fname = get_file_path(p->cfg_filename,
+                                  p->tab_fs[i].socket_path);
+            p->tab_fs[i].p9_server = p9_socket_init(fname);
+            if (!p->tab_fs[i].p9_server) {
+                fprintf(stderr, "%s: cannot connect to 9p server: %s\n",
+                        fname, strerror(errno));
+                exit(1);
+            }
+            free(fname);
+            continue;
+        }
         fname = get_file_path(p->cfg_filename, p->tab_fs[i].filename);
 #ifdef CONFIG_FS_NET
         if (is_url(fname)) {

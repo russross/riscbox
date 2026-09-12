@@ -1104,8 +1104,13 @@ static VirtMachine *riscv_machine_init(const VirtMachineParams *p)
     for(i = 0; i < p->fs_count; i++) {
         VIRTIODevice *fs_dev;
         vbus->irq = &s->plic_irq[virtio_irq_num(s->virtio_count)];
-        fs_dev = virtio_9p_init(vbus, p->tab_fs[i].fs_dev,
-                                p->tab_fs[i].tag);
+        if (p->tab_fs[i].backend_type == VM_FS_FILE) {
+            fs_dev = virtio_9p_init(vbus, p->tab_fs[i].fs_dev,
+                                    p->tab_fs[i].tag);
+        } else {
+            fs_dev = virtio_9p_protocol_init(vbus, p->tab_fs[i].p9_server,
+                                             p->tab_fs[i].tag);
+        }
         (void)fs_dev;
         //        virtio_set_debug(fs_dev, VIRTIO_DEBUG_9P);
         vbus->addr += VIRTIO_SIZE;

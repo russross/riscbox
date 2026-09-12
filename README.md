@@ -139,7 +139,10 @@ Paths for boot files, disks, and network filesystems are relative to the configu
 *   `console: "virtio"` selects the VirtIO console. This is the default.
 *   `uart_output: true` mirrors early UART output while input remains attached to the selected VirtIO console.
 *   `driveN: { file: "...", device: "..." }` adds a VirtIO block device.
-*   `fsN: { file: "...", tag: "..." }` adds a VirtIO 9p filesystem.
+*   `fsN: { file: "...", tag: "..." }` adds a VirtIO 9p filesystem backed by
+    a native directory or the browser HTTP filesystem.
+*   `fsN: { socket: "...", tag: "..." }` connects the VirtIO device directly
+    to a 9P server over a native Unix-domain socket.
 *   `ethN: { driver: "user" }` adds user-mode networking. Native builds also support `driver: "tap"` with an `ifname`; see `netinit.sh`.
 *   `display0: { device: "simplefb", width: 1024, height: 768 }` adds the simple framebuffer. `input_device: "virtio"` adds keyboard and tablet input.
 

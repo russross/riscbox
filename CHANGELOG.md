@@ -1,6 +1,15 @@
 Riscbox changelog
 =================
 
+2026-09-11
+----------
+
+*   Added a native raw 9P2000.L endpoint that connects a VirtIO 9p device to a
+    Unix-domain server, plus a diod-backed Risclet demo with a read/write student
+    home directory.
+*   Raised the VirtIO 9p queue capacity to support Linux's scatter/gather
+    requests while retaining the smaller default for other devices.
+
 2026-09-07
 ----------
 

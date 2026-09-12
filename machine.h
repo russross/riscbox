@@ -59,6 +59,11 @@ typedef enum {
     VM_CONSOLE_UART,
 } VMConsoleType;
 
+typedef enum {
+    VM_FS_FILE,
+    VM_FS_SOCKET,
+} VMFSBackendType;
+
 typedef struct {
     char *filename;
     uint8_t *buf;
@@ -74,8 +79,11 @@ typedef struct {
 typedef struct {
     char *device;
     char *tag; /* 9p mount tag */
+    VMFSBackendType backend_type;
     char *filename;
+    char *socket_path;
     FSDevice *fs_dev;
+    P9Server *p9_server;
 } VMFSEntry;
 
 typedef struct {

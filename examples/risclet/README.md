@@ -18,6 +18,14 @@ Build the root image and browser assets from the repository root:
 `image/build/kernel/arch/riscv/boot/Image`; its paths can be overridden through
 the environment variables defined at the top of each script.
 
+To run the native demo with the checked-in source directory exported read/write
+by diod:
+
+    ./examples/risclet/run-native.sh
+
+The launcher starts a temporary single-user diod instance and cleans it up when
+Riscbox exits. Set `RISCBOX=./riscbox-debug` to exercise the debug build.
+
 Serve the repository over HTTP:
 
     python3 -m http.server 8000

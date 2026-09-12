@@ -277,6 +277,8 @@ static int virt_machine_parse_config(VirtMachineParams *p,
     }
 
     for(;;) {
+        const char *filename, *socket_path;
+
         snprintf(buf1, sizeof(buf1), "fs%d", p->fs_count);
         obj = json_object_get(cfg, buf1);
         if (json_is_undefined(obj))
@@ -285,9 +287,21 @@ static int virt_machine_parse_config(VirtMachineParams *p,
             vm_error("Too many filesystems\n");
             goto tag_fail;
         }
-        if (vm_get_str(obj, "file", &str) < 0)
+        if (vm_get_str_opt(obj, "file", &filename) < 0 ||
+            vm_get_str_opt(obj, "socket", &socket_path) < 0)
             goto tag_fail;
-        p->tab_fs[p->fs_count].filename = strdup(str);
+        if ((filename == NULL) == (socket_path == NULL)) {
+            vm_error("%s: exactly one of 'file' or 'socket' is required\n",
+                     buf1);
+            goto tag_fail;
+        }
+        if (filename) {
+            p->tab_fs[p->fs_count].backend_type = VM_FS_FILE;
+            p->tab_fs[p->fs_count].filename = strdup(filename);
+        } else {
+            p->tab_fs[p->fs_count].backend_type = VM_FS_SOCKET;
+            p->tab_fs[p->fs_count].socket_path = strdup(socket_path);
+        }
         if (vm_get_str_opt(obj, "tag", &str) < 0)
             goto tag_fail;
         if (!str) {
@@ -569,6 +583,7 @@ void virt_machine_free_config(VirtMachineParams *p)
     }
     for(i = 0; i < p->fs_count; i++) {
         free(p->tab_fs[i].filename);
+        free(p->tab_fs[i].socket_path);
         free(p->tab_fs[i].tag);
     }
     for(i = 0; i < p->eth_count; i++) {

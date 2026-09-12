@@ -86,13 +86,19 @@ hostname riscbox
 ip link set lo up 2>/dev/null || true
 aname=
 uname=student
+cache=mmap
 for option in $(cat /proc/cmdline); do
     case "$option" in
         risclet.aname=*) aname=${option#risclet.aname=} ;;
         risclet.uname=*) uname=${option#risclet.uname=} ;;
+        risclet.cache=*) cache=${option#risclet.cache=} ;;
     esac
 done
-mount_options=trans=virtio,version=9p2000.L,cache=mmap,access=1000,uname=$uname
+case "$cache" in
+    mmap|none) ;;
+    *) echo "invalid risclet.cache value: $cache" >&2; exit 1 ;;
+esac
+mount_options=trans=virtio,version=9p2000.L,cache=$cache,access=1000,uname=$uname
 if [ -n "$aname" ]; then
     mount_options="$mount_options,aname=$aname"
 fi

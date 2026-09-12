@@ -278,6 +278,9 @@ static int virt_machine_parse_config(VirtMachineParams *p,
 
     for(;;) {
         const char *filename, *socket_path;
+        JSONValue js9p_value;
+        BOOL js9p;
+        int backend_count;
 
         snprintf(buf1, sizeof(buf1), "fs%d", p->fs_count);
         obj = json_object_get(cfg, buf1);
@@ -290,17 +293,29 @@ static int virt_machine_parse_config(VirtMachineParams *p,
         if (vm_get_str_opt(obj, "file", &filename) < 0 ||
             vm_get_str_opt(obj, "socket", &socket_path) < 0)
             goto tag_fail;
-        if ((filename == NULL) == (socket_path == NULL)) {
-            vm_error("%s: exactly one of 'file' or 'socket' is required\n",
+        js9p = FALSE;
+        js9p_value = json_object_get(obj, "js9p");
+        if (!json_is_undefined(js9p_value)) {
+            if (js9p_value.type != JSON_BOOL) {
+                vm_error("%s.js9p: boolean expected\n", buf1);
+                goto tag_fail;
+            }
+            js9p = js9p_value.u.b;
+        }
+        backend_count = (filename != NULL) + (socket_path != NULL) + js9p;
+        if (backend_count != 1) {
+            vm_error("%s: exactly one of 'file', 'socket', or 'js9p: true' is required\n",
                      buf1);
             goto tag_fail;
         }
         if (filename) {
             p->tab_fs[p->fs_count].backend_type = VM_FS_FILE;
             p->tab_fs[p->fs_count].filename = strdup(filename);
-        } else {
+        } else if (socket_path) {
             p->tab_fs[p->fs_count].backend_type = VM_FS_SOCKET;
             p->tab_fs[p->fs_count].socket_path = strdup(socket_path);
+        } else {
+            p->tab_fs[p->fs_count].backend_type = VM_FS_JS9P;
         }
         if (vm_get_str_opt(obj, "tag", &str) < 0)
             goto tag_fail;

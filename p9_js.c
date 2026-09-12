@@ -1,5 +1,5 @@
 /*
- * Raw 9P server interface
+ * Raw 9P server connection to the JavaScript host
  *
  * Copyright (c) 2026 Russ Ross
  *
@@ -21,27 +21,34 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
-#ifndef P9_H
-#define P9_H
-
 #include <stddef.h>
 #include <stdint.h>
 
-typedef struct P9Server P9Server;
+#include "cutils.h"
+#include "p9.h"
 
-/* Process one complete 9P message and return the complete reply size. */
-typedef int P9RequestFunc(P9Server *server,
-                         const uint8_t *request, size_t request_size,
+extern int p9_js_request(const uint8_t *request, size_t request_size,
                          uint8_t *reply, size_t reply_capacity);
 
-struct P9Server {
-    /* Requests are synchronous and serialized by the VirtIO device. */
-    P9RequestFunc *request;
-    void (*end)(P9Server *server);
-};
+static int p9_js_server_request(P9Server *server,
+                                const uint8_t *request, size_t request_size,
+                                uint8_t *reply, size_t reply_capacity)
+{
+    (void)server;
+    return p9_js_request(request, request_size, reply, reply_capacity);
+}
 
-P9Server *p9_socket_init(const char *socket_path);
-P9Server *p9_js_init(void);
-void p9_server_end(P9Server *server);
+static void p9_js_end(P9Server *server)
+{
+    (void)server;
+}
 
-#endif /* P9_H */
+P9Server *p9_js_init(void)
+{
+    P9Server *server;
+
+    server = mallocz(sizeof(*server));
+    server->request = p9_js_server_request;
+    server->end = p9_js_end;
+    return server;
+}

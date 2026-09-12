@@ -88,16 +88,19 @@
     </section>
     <section>
       <h1>Risclet console</h1>
-      <p id="status" role="status">Loading editor…</p>
+      <p id="status" role="status">Loading source files…</p>
       <pre id="terminal" tabindex="0" aria-label="Virtual machine console"></pre>
     </section>
   </main>
 
-  <script>
+  <script type="module">
+    import { Memory9PServer } from "../../js/p9.js";
+
     const editorElement = document.querySelector("#editor");
     const statusElement = document.querySelector("#status");
     const terminalElement = document.querySelector("#terminal");
     const inputEncoder = new TextEncoder();
+    const sourceNames = ["start.s", "sort.s", "print.s"];
     const specialKeys = new Map([
       ["Enter", "\r"],
       ["Backspace", "\x7f"],
@@ -113,21 +116,20 @@
     ]);
     let vmStarted = false;
 
-    const snapshotEditor = () => {
-      if (!vmStarted)
-        return;
+    window.addEventListener("unhandledrejection", (event) => {
+      statusElement.textContent = `Could not start the demo: ${event.reason}`;
+    });
 
-      const result = Module.ccall(
-        "fs_import_text",
-        "number",
-        ["string", "string", "string"],
-        ["/", "sort.s", editorElement.value],
-      );
-      statusElement.textContent = result === 0 ? "Running · sort.s synchronized" :
-        `Could not synchronize sort.s (${result})`;
-    };
+    const sourceEntries = await Promise.all(sourceNames.map(async (name) => {
+      const response = await fetch(`demo/${name}`);
+      if (!response.ok)
+        throw new Error(`could not load ${name}: HTTP ${response.status}`);
+      return [name, await response.text()];
+    }));
+    const server = new Memory9PServer(Object.fromEntries(sourceEntries));
+    editorElement.value = new TextDecoder().decode(server.readFile("sort.s"));
 
-    var term = {
+    window.term = {
       write(text) {
         terminalElement.append(document.createTextNode(text));
         terminalElement.scrollTop = terminalElement.scrollHeight;
@@ -136,26 +138,17 @@
         return [80, 25];
       },
     };
-    var graphic_display = null;
-    var net_state = null;
-    var update_downloading = (downloading) => {
+    window.graphic_display = null;
+    window.net_state = null;
+    window.update_downloading = (downloading) => {
       if (!vmStarted)
         statusElement.textContent = downloading ? "Loading VM assets…" : "Starting VM…";
     };
-    var Module = {
-      async onRuntimeInitialized() {
-        try {
-          const response = await fetch("demo/sort.s");
-          if (!response.ok)
-            throw new Error(`HTTP ${response.status}`);
-          editorElement.value = await response.text();
-        } catch (error) {
-          statusElement.textContent = `Could not load sort.s: ${error.message}`;
-          return;
-        }
-
+    window.Module = {
+      p9Server: server,
+      onRuntimeInitialized() {
         statusElement.textContent = "Loading VM assets…";
-        Module.ccall(
+        window.Module.ccall(
           "vm_start",
           null,
           ["string", "number", "string", "string", "number", "number", "number"],
@@ -164,10 +157,22 @@
       },
       onVmStarted() {
         vmStarted = true;
-        snapshotEditor();
+        statusElement.textContent = "Running · sort.s synchronized";
         terminalElement.focus();
       },
     };
+
+    server.subscribe((change) => {
+      if (change.source !== "guest" || (change.path !== "sort.s" && change.oldPath !== "sort.s"))
+        return;
+      if (change.kind === "remove" || (change.kind === "rename" && change.path !== "sort.s")) {
+        editorElement.value = "";
+        statusElement.textContent = "Running · sort.s was removed by the guest";
+        return;
+      }
+      editorElement.value = new TextDecoder().decode(server.readFile("sort.s"));
+      statusElement.textContent = "Running · sort.s updated by the guest";
+    });
 
     const keyText = (event) => {
       if (event.ctrlKey && !event.altKey && !event.metaKey && event.key.length === 1)
@@ -177,16 +182,25 @@
         (!event.altKey && !event.metaKey && event.key.length === 1 ? event.key : null);
     };
 
-    editorElement.addEventListener("input", snapshotEditor);
+    editorElement.addEventListener("input", () => {
+      server.writeFile("sort.s", editorElement.value, "editor");
+      statusElement.textContent = "Running · sort.s synchronized";
+    });
     terminalElement.addEventListener("keydown", (event) => {
       const text = keyText(event);
-      if (text === null || !Module._console_queue_char)
+      if (text === null || !window.Module._console_queue_char)
         return;
       event.preventDefault();
       for (const byte of inputEncoder.encode(text))
-        Module._console_queue_char(byte);
+        window.Module._console_queue_char(byte);
     });
+
+    const runtime = document.createElement("script");
+    runtime.src = "../../js/riscbox-wasm.js";
+    runtime.addEventListener("error", () => {
+      statusElement.textContent = "Could not load the Riscbox runtime";
+    });
+    document.body.append(runtime);
   </script>
-  <script src="/js/riscbox-wasm.js"></script>
 </body>
 </html>

@@ -9,6 +9,8 @@ Riscbox changelog
     home directory.
 *   Raised the VirtIO 9p queue capacity to support Linux's scatter/gather
     requests while retaining the smaller default for other devices.
+*   Added a browser `js9p` endpoint and a small JavaScript 9P2000.L server with
+    a 16 MiB per-file limit, host-side file APIs, and change notifications.
 
 2026-09-07
 ----------

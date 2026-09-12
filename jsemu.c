@@ -213,6 +213,11 @@ static void init_vm_fs(void *arg)
         char *filename;
 
         assert(p->fs_count == 1);
+        if (p->tab_fs[0].backend_type == VM_FS_JS9P) {
+            p->tab_fs[0].p9_server = p9_js_init();
+            init_vm_drive(s);
+            return;
+        }
         if (p->tab_fs[0].backend_type != VM_FS_FILE) {
             vm_error("socket-backed 9p is not available in browser builds\n");
             exit(1);

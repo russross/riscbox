@@ -749,6 +749,10 @@ int main(int argc, char **argv)
         FSDevice *fs;
         char *fname;
 
+        if (p->tab_fs[i].backend_type == VM_FS_JS9P) {
+            fprintf(stderr, "js9p-backed 9p is not available in native builds\n");
+            exit(1);
+        }
         if (p->tab_fs[i].backend_type == VM_FS_SOCKET) {
             fname = get_file_path(p->cfg_filename,
                                   p->tab_fs[i].socket_path);

@@ -113,6 +113,25 @@ Browser code can replace a file in the first 9p filesystem with
 [directory, filename, text])`. Call it from `onVmStarted()` or later; zero
 indicates success.
 
+For a `js9p` filesystem, set `Module.p9Server` before starting the VM. The
+included server accepts a nested object whose string and `Uint8Array` leaves
+are files:
+
+```js
+import { Memory9PServer } from "./js/p9.js";
+
+Module.p9Server = new Memory9PServer({
+    "Makefile": "all:\n\tcc -o hello hello.c\n",
+    "hello.c": "int main(void) { return 0; }\n",
+    tests: { "input.txt": new Uint8Array([1, 2, 3]) },
+});
+```
+
+`readFile`, `writeFile`, `remove`, `rename`, `snapshot`, and `subscribe` let an
+application interact with the live tree. Each file is limited to 16 MiB. A
+different synchronous object implementing `request(request, replyCapacity)`
+can be installed as `Module.p9Server` instead.
+
 
 Configuration and command line
 ------------------------------
@@ -143,6 +162,8 @@ Paths for boot files, disks, and network filesystems are relative to the configu
     a native directory or the browser HTTP filesystem.
 *   `fsN: { socket: "...", tag: "..." }` connects the VirtIO device directly
     to a 9P server over a native Unix-domain socket.
+*   `fsN: { js9p: true, tag: "..." }` connects the VirtIO device to the
+    synchronous `Module.p9Server` endpoint in a browser build.
 *   `ethN: { driver: "user" }` adds user-mode networking. Native builds also support `driver: "tap"` with an `ifname`; see `netinit.sh`.
 *   `display0: { device: "simplefb", width: 1024, height: 768 }` adds the simple framebuffer. `input_device: "virtio"` adds keyboard and tablet input.
 

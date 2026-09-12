@@ -64,6 +64,33 @@ mergeInto(LibraryManager.library, {
         }, 50);
     },
 
+    p9_js_request: function(request, request_size, reply, reply_capacity)
+    {
+        var endpoint, response;
+
+        endpoint = Module.p9Server;
+        if (!endpoint || typeof endpoint.request !== "function") {
+            console.error("Riscbox: Module.p9Server.request is not configured");
+            return -5;
+        }
+        try {
+            response = endpoint.request(
+                HEAPU8.slice(request, request + request_size),
+                reply_capacity
+            );
+        } catch (error) {
+            console.error("Riscbox: JavaScript 9p request failed", error);
+            return -5;
+        }
+        if (!(response instanceof Uint8Array) ||
+            response.length > reply_capacity) {
+            console.error("Riscbox: JavaScript 9p server returned an invalid reply");
+            return -71;
+        }
+        HEAPU8.set(response, reply);
+        return response.length;
+    },
+
     $riscbox_wget: {
         next_handle: 1,
         requests: {},

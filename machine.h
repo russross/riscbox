@@ -62,6 +62,7 @@ typedef enum {
 typedef enum {
     VM_FS_FILE,
     VM_FS_SOCKET,
+    VM_FS_JS9P,
 } VMFSBackendType;
 
 typedef struct {

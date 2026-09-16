@@ -106,7 +106,12 @@ For another site, copy `riscbox-wasm.js`, `riscbox-wasm.wasm`, the VM configurat
 *   `update_downloading(active)` reports HTTP activity.
 *   `graphic_display` and `net_state` may be `null` for a console-only VM.
 
-Console input is queued one byte at a time through `Module._console_queue_char(byte)`. All VM URLs may be relative to the configuration file. Serve `.wasm` files as `application/wasm`; ordinary static servers generally do this already. Cross-origin assets also need the usual CORS headers.
+Console input is queued one byte at a time through
+`Module._console_queue_char(byte)`. After `term.getSize()` changes, call
+`Module._console_resize()` to notify a VirtIO console guest of its new column
+and row counts. All VM URLs may be relative to the configuration file. Serve
+`.wasm` files as `application/wasm`; ordinary static servers generally do this
+already. Cross-origin assets also need the usual CORS headers.
 
 Browser code can replace a file in the first 9p filesystem with
 `Module.ccall("fs_import_text", "number", ["string", "string", "string"],

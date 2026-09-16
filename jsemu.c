@@ -97,6 +97,12 @@ void console_queue_char(int c)
 }
 
 /* called from JS */
+void console_resize(void)
+{
+    console_resize_pending = TRUE;
+}
+
+/* called from JS */
 void display_key_event(int is_down, int key_code)
 {
     if (global_vm) {

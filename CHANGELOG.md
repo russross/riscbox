@@ -1,6 +1,12 @@
 Riscbox changelog
 =================
 
+Next release
+------------
+
+*   Exposed VirtIO console resize notifications to browser hosts through
+    `Module._console_resize()`.
+
 2026-09-11
 ----------
 

@@ -36,6 +36,11 @@ Serve the repository over HTTP:
 
     python3 -m http.server 8000
 
-Open <http://127.0.0.1:8000/examples/risclet/>, log in as `student`, and run:
+Open <http://127.0.0.1:8000/examples/risclet/>. The guest logs in as `student`
+automatically. Run:
 
     risclet start.s sort.s print.s
+
+Routine kernel messages are hidden from the VirtIO console but remain available
+from the running guest with `dmesg`. The minimal image does not persist them, so
+they are lost when the VM restarts.

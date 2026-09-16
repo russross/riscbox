@@ -106,13 +106,19 @@ mount -t 9p -o "$mount_options" risclet /home/student
 EOF
 chmod 755 "$ROOTFS_DIR/etc/init.d/rcS"
 
+cat > "$ROOTFS_DIR/etc/init.d/autologin-student" <<'EOF'
+#!/bin/sh
+exec /bin/login -f student
+EOF
+chmod 755 "$ROOTFS_DIR/etc/init.d/autologin-student"
+
 cat > "$ROOTFS_DIR/etc/init.d/getty-console" <<'EOF'
 #!/bin/sh
 case " $(cat /proc/cmdline) " in
     *" console=hvc0 "*) console=hvc0 ;;
     *) console=ttyS0 ;;
 esac
-exec /sbin/getty -L 115200 "$console" vt100
+exec /sbin/getty -n -l /etc/init.d/autologin-student -L 115200 "$console" vt100
 EOF
 chmod 755 "$ROOTFS_DIR/etc/init.d/getty-console"
 
@@ -139,6 +145,15 @@ printf 'student:x:1000:1000:Student:/home/student:/bin/sh\n' >> \
     "$ROOTFS_DIR/etc/passwd"
 printf 'student:x:1000:student\n' >> "$ROOTFS_DIR/etc/group"
 printf 'student::0:0:99999:7:::\n' >> "$ROOTFS_DIR/etc/shadow"
+cat > "$ROOTFS_DIR/etc/motd" <<'EOF'
+To test your code:
+
+    risclet             (run the debugger)
+    risclet run         (run the program normally)
+
+Note:   "grind", "make", and other normal test scripts
+        are not available in the VM.
+EOF
 mkdir -p "$ROOTFS_DIR/home/student" "$ROOTFS_DIR/usr/local/bin"
 mkdir -p "$ROOTFS_DIR/etc/profile.d"
 cat > "$ROOTFS_DIR/etc/profile.d/risclet.sh" <<'EOF'

@@ -57,10 +57,10 @@ cat > "$CONFIG_PATH" <<EOF
     memory_size: 256,
     bios: "$OPENSBI",
     kernel: "$KERNEL_IMAGE",
-    cmdline: "root=/dev/vda rw rootfstype=ext4 console=ttyS0,115200 earlycon=sbi",
+    cmdline: "root=/dev/vda rw rootfstype=ext4 console=hvc0 quiet loglevel=0",
     drive0: { file: "$ROOTFS_IMAGE" },
     fs0: { socket: "$SOCKET_PATH", tag: "risclet" },
-    console: "uart",
+    console: "virtio",
 }
 EOF
 

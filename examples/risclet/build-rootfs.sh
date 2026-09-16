@@ -11,10 +11,9 @@ ROOTFS_DIR="$BUILD_DIR/rootfs"
 IMAGE_PATH=${IMAGE_PATH:-"$IMAGE_DIR/rootfs.ext4"}
 IMAGE_SIZE_MB=${IMAGE_SIZE_MB:-32}
 MKFS_EXT4=${MKFS_EXT4:-/usr/sbin/mkfs.ext4}
-QEMU_RISCV64=${QEMU_RISCV64:-qemu-riscv64}
 ROOT_PASSWORD=${ROOT_PASSWORD:-root}
-RISCLET_URL=https://github.com/russross/risclet/releases/download/v0.4.7/risclet-riscv64gc-unknown-linux-musl
-RISCLET_SHA256=7268ce6837980b8da2514535290559ac5bcb1efe9fff0941c08952361c11e860
+RISCLET_URL=https://github.com/russross/risclet/releases/download/v0.4.8/risclet-riscv64gc-unknown-linux-musl
+RISCLET_SHA256=ede5c483810c3ed4137a95ee84e62cb0a04f75dcf396899f7f2dbf5fb41361fc
 
 require_file() {
     if [ ! -f "$1" ]; then
@@ -28,10 +27,6 @@ require_file "$ALPINE_ISO"
 
 if [ ! -x "$MKFS_EXT4" ]; then
     echo "mkfs.ext4 not found at $MKFS_EXT4; set MKFS_EXT4 to its path" >&2
-    exit 1
-fi
-if ! command -v "$QEMU_RISCV64" >/dev/null 2>&1; then
-    echo "RISC-V user emulator not found: $QEMU_RISCV64" >&2
     exit 1
 fi
 if ! command -v curl >/dev/null 2>&1; then
@@ -56,21 +51,6 @@ mkdir -p "$BUILD_DIR"
 rm -rf "$ROOTFS_DIR"
 mkdir -p "$ROOTFS_DIR"
 tar -xpf "$ROOTFS_ARCHIVE" -C "$ROOTFS_DIR"
-
-cp /etc/resolv.conf "$ROOTFS_DIR/etc/resolv.conf"
-"$QEMU_RISCV64" -L "$ROOTFS_DIR" "$ROOTFS_DIR/sbin/apk" \
-    --root "$ROOTFS_DIR" \
-    --arch riscv64 \
-    --repositories-file /dev/null \
-    --no-cache \
-    --no-scripts \
-    add \
-    --repository https://dl-cdn.alpinelinux.org/alpine/v3.24/main \
-    --repository https://dl-cdn.alpinelinux.org/alpine/v3.24/community \
-    fbdebug \
-    fbkeyboard \
-    libgcc
-rm -f "$ROOTFS_DIR/etc/resolv.conf"
 
 mkdir -p "$ROOTFS_DIR/etc/init.d" "$ROOTFS_DIR/dev" "$ROOTFS_DIR/proc" \
     "$ROOTFS_DIR/sys" "$ROOTFS_DIR/run" "$ROOTFS_DIR/tmp"

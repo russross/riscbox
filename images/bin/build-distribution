@@ -51,6 +51,7 @@ if [ -d "$image_dir/web" ]; then
 fi
 if grep -R -q 'p9\.js' "$stage_dir" --include='*.html'; then
     install -m 644 "$ROOT_DIR/js/p9.js" "$stage_dir/p9.js"
+    install -m 644 "$ROOT_DIR/js/p9.d.ts" "$stage_dir/p9.d.ts"
 fi
 "$ROOT_DIR/splitimg" "$rootfs_image" "$stage_dir/drive"
 

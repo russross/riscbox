@@ -17,6 +17,8 @@ Files
 *   `rootfs.ext4` is the complete writable disk image for native tools.
 *   `drive/blk.txt` describes the HTTP disk; `drive/blkNNNNNNNNN.bin` files are
     its 256 KiB blocks.
+*   `p9.js` and its `p9.d.ts` declarations are included when the integration
+    uses the browser-backed 9p server.
 
 Publishing
 ----------

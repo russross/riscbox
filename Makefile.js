@@ -40,7 +40,7 @@ all: $(PROGS)
 
 JS_OBJS=jsemu.o softfp.o virtio.o fs.o p9_js.o fs_net.o fs_wget.o fs_utils.o \
     simplefb.o pci.o json.o block_net.o iomem.o cutils.o aes.o sha256.o \
-    uart16550.o
+    uart16550.o goldfish_rtc.o
 
 RISCBOX_OBJS=$(addprefix $(WASM_DIR)/,$(JS_OBJS) riscv_cpu64.o \
     riscv_machine.o machine.o)

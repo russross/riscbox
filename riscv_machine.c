@@ -33,6 +33,7 @@
 #include <time.h>
 
 #include "cutils.h"
+#include "goldfish_rtc.h"
 #include "iomem.h"
 #include "riscv_cpu.h"
 #include "uart16550.h"
@@ -65,6 +66,7 @@ typedef struct RISCVMachine {
     VIRTIODevice *mouse_dev;
 
     UART16550State *uart_dev;
+    GoldfishRTCState *rtc_dev;
     VIRTIODevice *virtio_console_dev;
     VMConsoleType console_type;
     BOOL uart_output;
@@ -82,6 +84,9 @@ typedef struct RISCVMachine {
 #define FDT_MAX_OFFSET 0x40000000
 #define TEST_BASE_ADDR 0x00100000 /* VIRT_TEST */
 #define TEST_SIZE      0x00001000
+#define GOLDFISH_RTC_BASE_ADDR 0x00101000 /* VIRT_RTC */
+#define GOLDFISH_RTC_SIZE      0x00001000
+#define GOLDFISH_RTC_IRQ       11
 #define CLINT_BASE_ADDR 0x02000000 /* VIRT_CLINT */
 #define CLINT_SIZE      0x00010000
 #define VIRTIO_BASE_ADDR 0x10001000 /* VIRT_VIRTIO */
@@ -100,6 +105,8 @@ static int virtio_irq_num(int index)
 {
     int irq_num = VIRTIO_IRQ + index;
     if (irq_num >= UART_IRQ)
+        irq_num++;
+    if (irq_num >= GOLDFISH_RTC_IRQ)
         irq_num++;
     return irq_num;
 }
@@ -840,6 +847,15 @@ static uint8_t *riscv_build_fdt(RISCVMachine *m, int *pfdt_size,
 
     fdt_end_node(s); /* plic */
 
+    fdt_begin_node_num(s, "rtc", GOLDFISH_RTC_BASE_ADDR);
+    fdt_prop_str(s, "compatible", "google,goldfish-rtc");
+    fdt_prop_tab_u64_2(s, "reg", GOLDFISH_RTC_BASE_ADDR,
+                       GOLDFISH_RTC_SIZE);
+    tab[0] = plic_phandle;
+    tab[1] = GOLDFISH_RTC_IRQ;
+    fdt_prop_tab_u32(s, "interrupts-extended", tab, 2);
+    fdt_end_node(s); /* rtc */
+
     fdt_begin_node_num(s, "serial", UART_BASE_ADDR);
     fdt_prop_str(s, "compatible", "ns16550a");
     fdt_prop_tab_u64_2(s, "reg", UART_BASE_ADDR, UART_SIZE);
@@ -1060,6 +1076,10 @@ static VirtMachine *riscv_machine_init(const VirtMachineParams *p)
         irq_init(&s->plic_irq[i], plic_set_irq, s, i);
     }
 
+    s->rtc_dev = goldfish_rtc_init(s->mem_map, GOLDFISH_RTC_BASE_ADDR,
+                                   GOLDFISH_RTC_SIZE,
+                                   &s->plic_irq[GOLDFISH_RTC_IRQ]);
+
     cpu_register_device(s->mem_map, TEST_BASE_ADDR, TEST_SIZE,
                         s, test_read, test_write, DEVIO_SIZE32);
     s->common.console = p->console;
@@ -1171,6 +1191,7 @@ static void riscv_machine_end(VirtMachine *s1)
     riscv_cpu_end(s->cpu_state);
     phys_mem_map_end(s->mem_map);
     uart16550_end(s->uart_dev);
+    goldfish_rtc_end(s->rtc_dev);
     free(s);
 }
 
@@ -1205,6 +1226,7 @@ static int riscv_machine_get_sleep_duration(VirtMachine *s1, int delay)
     riscv_cpu_update_time(s, now);
     if (!(riscv_cpu_get_mip(s) & MIP_STIP))
         delay = limit_timer_delay(delay, riscv_cpu_get_stimecmp(s), now);
+    delay = goldfish_rtc_get_sleep_duration(m->rtc_dev, delay);
     if (!riscv_cpu_get_power_down(s))
         delay = 0;
     return delay;

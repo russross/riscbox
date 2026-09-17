@@ -9,8 +9,9 @@ ALPINE_ISO=${ALPINE_ISO:-"$IMAGE_DIR/alpine-standard-3.24.1-riscv64.iso"}
 BUILD_DIR=${BUILD_DIR:-"$IMAGE_DIR/build"}
 ROOTFS_DIR="$BUILD_DIR/rootfs"
 IMAGE_PATH=${IMAGE_PATH:-"$IMAGE_DIR/rootfs.ext4"}
-IMAGE_SIZE_MB=${IMAGE_SIZE_MB:-12}
+IMAGE_SIZE_MB=${IMAGE_SIZE_MB:-64}
 MKFS_EXT4=${MKFS_EXT4:-/usr/sbin/mkfs.ext4}
+QEMU_RISCV64=${QEMU_RISCV64:-qemu-riscv64}
 ROOT_PASSWORD=${ROOT_PASSWORD:-root}
 RISCLET_URL=https://github.com/russross/risclet/releases/download/v0.4.8/risclet-riscv64gc-unknown-linux-musl
 RISCLET_SHA256=ede5c483810c3ed4137a95ee84e62cb0a04f75dcf396899f7f2dbf5fb41361fc
@@ -33,6 +34,10 @@ if ! command -v curl >/dev/null 2>&1; then
     echo "curl is required to download image contents" >&2
     exit 1
 fi
+if ! command -v "$QEMU_RISCV64" >/dev/null 2>&1; then
+    echo "qemu-riscv64 is required to install image packages" >&2
+    exit 1
+fi
 
 archive_release=$(tar -xOf "$ROOTFS_ARCHIVE" ./usr/lib/os-release |
     sed -n 's/^VERSION_ID=//p' | tr -d '"')
@@ -51,6 +56,19 @@ mkdir -p "$BUILD_DIR"
 rm -rf "$ROOTFS_DIR"
 mkdir -p "$ROOTFS_DIR"
 tar -xpf "$ROOTFS_ARCHIVE" -C "$ROOTFS_DIR"
+
+cp /etc/resolv.conf "$ROOTFS_DIR/etc/resolv.conf"
+"$QEMU_RISCV64" -L "$ROOTFS_DIR" "$ROOTFS_DIR/sbin/apk" \
+    --root "$ROOTFS_DIR" \
+    --arch riscv64 \
+    --repositories-file /dev/null \
+    --no-cache \
+    --no-scripts \
+    add \
+    --repository https://dl-cdn.alpinelinux.org/alpine/v3.24/main \
+    --repository https://dl-cdn.alpinelinux.org/alpine/v3.24/community \
+    python3 make
+rm -f "$ROOTFS_DIR/etc/resolv.conf"
 
 mkdir -p "$ROOTFS_DIR/etc/init.d" "$ROOTFS_DIR/dev" "$ROOTFS_DIR/proc" \
     "$ROOTFS_DIR/sys" "$ROOTFS_DIR/run" "$ROOTFS_DIR/tmp"
@@ -126,12 +144,13 @@ printf 'student:x:1000:1000:Student:/home/student:/bin/sh\n' >> \
 printf 'student:x:1000:student\n' >> "$ROOTFS_DIR/etc/group"
 printf 'student::0:0:99999:7:::\n' >> "$ROOTFS_DIR/etc/shadow"
 cat > "$ROOTFS_DIR/etc/motd" <<'EOF'
-Note: "grind" and "make" are not available in this VM.
+Note: "grind" is not available on this VM, but "make" is.
 
 To test your code:
 
+    make                (run with testing)
+    risclet run         (run without testing)
     risclet             (run the debugger)
-    risclet run         (run the program normally)
 
 EOF
 mkdir -p "$ROOTFS_DIR/home/student" "$ROOTFS_DIR/usr/local/bin"

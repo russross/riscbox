@@ -15,32 +15,13 @@ Build the root image and browser assets from the repository root:
     ./examples/risclet/build-web-assets.sh
 
 `build-rootfs.sh` expects the pinned Alpine minirootfs and standard ISO under
-`image/`. It installs Risclet 0.4.8 but does not copy demo source into the disk.
+`image/`. It creates a 64 MiB image with Python 3, Make, and Risclet 0.4.8, but
+does not copy demo source into the disk.
 `build-web-assets.sh` expects the configured kernel image at
 `image/build/kernel/arch/riscv/boot/Image`; its paths can be overridden through
 the environment variables defined at the top of each script. Demo source files
 are loaded directly into the JavaScript 9p server rather than converted to the
 legacy browser filesystem format.
-
-Adding packages to a future image
----------------------------------
-
-The Risclet image does not install Alpine packages. A future image that needs
-packages can run the guest `apk` under QEMU user emulation after extracting the
-minirootfs:
-
-    cp /etc/resolv.conf "$ROOTFS_DIR/etc/resolv.conf"
-    qemu-riscv64 -L "$ROOTFS_DIR" "$ROOTFS_DIR/sbin/apk" \
-        --root "$ROOTFS_DIR" \
-        --arch riscv64 \
-        --repositories-file /dev/null \
-        --no-cache \
-        --no-scripts \
-        add \
-        --repository https://dl-cdn.alpinelinux.org/alpine/v3.24/main \
-        --repository https://dl-cdn.alpinelinux.org/alpine/v3.24/community \
-        package-name
-    rm -f "$ROOTFS_DIR/etc/resolv.conf"
 
 To run the native demo with the checked-in source directory exported read/write
 by diod:

@@ -126,13 +126,13 @@ printf 'student:x:1000:1000:Student:/home/student:/bin/sh\n' >> \
 printf 'student:x:1000:student\n' >> "$ROOTFS_DIR/etc/group"
 printf 'student::0:0:99999:7:::\n' >> "$ROOTFS_DIR/etc/shadow"
 cat > "$ROOTFS_DIR/etc/motd" <<'EOF'
+Note: "grind" and "make" are not available in this VM.
+
 To test your code:
 
     risclet             (run the debugger)
     risclet run         (run the program normally)
 
-Note:   "grind", "make", and other normal test scripts
-        are not available in the VM.
 EOF
 mkdir -p "$ROOTFS_DIR/home/student" "$ROOTFS_DIR/usr/local/bin"
 mkdir -p "$ROOTFS_DIR/etc/profile.d"

@@ -45,7 +45,7 @@
 #if defined(EMSCRIPTEN)
 #include <emscripten.h>
 #else
-#include <curl/multi.h>
+#include <curl/curl.h>
 #endif
 
 /***********************************************/
@@ -218,7 +218,7 @@ XHRState *fs_wget2(const char *url, const char *user, const char *password,
     curl_easy_setopt(s->eh, CURLOPT_PRIVATE, s);
     curl_easy_setopt(s->eh, CURLOPT_WRITEDATA, s);
     curl_easy_setopt(s->eh, CURLOPT_WRITEFUNCTION, fs_wget_write_cb);
-    curl_easy_setopt(s->eh, CURLOPT_HEADER, 0);
+    curl_easy_setopt(s->eh, CURLOPT_HEADER, 0L);
     curl_easy_setopt(s->eh, CURLOPT_URL, url);
     curl_easy_setopt(s->eh, CURLOPT_VERBOSE, 0L);
     curl_easy_setopt(s->eh, CURLOPT_ACCEPT_ENCODING, "");

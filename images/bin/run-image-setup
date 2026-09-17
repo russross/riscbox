@@ -1,0 +1,60 @@
+#!/bin/sh
+set -eu
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+IMAGES_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
+KERNEL_IMAGE=${KERNEL_IMAGE:-"$IMAGES_DIR/build/kernel/arch/riscv/boot/Image"}
+OPENSBI=${OPENSBI:-/usr/lib/riscv64-linux-gnu/opensbi/generic/fw_jump.bin}
+QEMU_SYSTEM_RISCV64=${QEMU_SYSTEM_RISCV64:-qemu-system-riscv64}
+
+if [ "$#" -lt 2 ]; then
+    echo "usage: $0 IMAGE.ext4 SETUP.sh [PAYLOAD ...]" >&2
+    exit 2
+fi
+
+image_path=$1
+setup_script=$2
+shift 2
+
+for required_file in "$image_path" "$setup_script" "$KERNEL_IMAGE" "$OPENSBI"; do
+    if [ ! -f "$required_file" ]; then
+        echo "missing required file: $required_file" >&2
+        exit 1
+    fi
+done
+if ! command -v "$QEMU_SYSTEM_RISCV64" >/dev/null 2>&1; then
+    echo "required command not found: $QEMU_SYSTEM_RISCV64" >&2
+    exit 1
+fi
+
+setup_dir=$(mktemp -d "$IMAGES_DIR/build/setup.XXXXXX")
+cleanup() {
+    rm -rf "$setup_dir"
+}
+trap cleanup EXIT HUP INT TERM
+install -m 755 "$setup_script" "$setup_dir/setup.sh"
+for payload in "$@"; do
+    if [ ! -f "$payload" ]; then
+        echo "missing setup payload: $payload" >&2
+        exit 1
+    fi
+    install -m 644 "$payload" "$setup_dir/$(basename -- "$payload")"
+done
+
+"$QEMU_SYSTEM_RISCV64" \
+    -machine virt \
+    -m 512M \
+    -smp 1 \
+    -nographic \
+    -no-reboot \
+    -bios "$OPENSBI" \
+    -kernel "$KERNEL_IMAGE" \
+    -append "root=/dev/vda rw rootfstype=ext4 console=ttyS0,115200 panic=-1 init=/sbin/riscbox-image-setup" \
+    -drive "if=none,file=$image_path,format=raw,id=rootfs" \
+    -device virtio-blk-device,drive=rootfs \
+    -netdev user,id=net0 \
+    -device virtio-net-device,netdev=net0 \
+    -fsdev "local,id=setup,path=$setup_dir,security_model=none,readonly=on" \
+    -device virtio-9p-device,fsdev=setup,mount_tag=setup
+
+echo "configured image: $image_path"

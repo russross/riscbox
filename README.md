@@ -22,9 +22,10 @@ The native build requires Clang, GNU Make, libcurl, OpenSSL, and SDL 1.2 develop
 
     sudo apt install clang make libcurl4-openssl-dev libssl-dev libsdl1.2-dev
 
-Preparing the Alpine example also requires `curl`, `gzip`, 7-Zip, and an OpenSBI generic `fw_jump.bin`:
+Image builds also require the RISC-V cross compiler, QEMU system emulator,
+`curl`, ext4 tools, and an OpenSBI generic `fw_jump.bin`:
 
-    sudo apt install curl gzip 7zip opensbi
+    sudo apt install curl e2fsprogs gcc-riscv64-linux-gnu opensbi qemu-system-misc
 
 The WASM build requires Emscripten:
 
@@ -52,90 +53,34 @@ There are three supported build targets:
 `make clean` removes all generated outputs. `make install` installs the native release programs under `/usr/local/bin` by default; set `DESTDIR` or `bindir` to stage them elsewhere.
 
 
-Boot a basic Alpine system
---------------------------
+Build and deploy an image
+-------------------------
 
-The simplest supported Alpine profile uses the official RISC-V standard ISO, its kernel and compressed initramfs, and OpenSBI `fw_jump.bin`. riscbox loads raw boot payloads, so the gzip-compressed kernel from the ISO must be decompressed; the initramfs stays compressed for Linux to unpack.
+The tracked image definitions live under `images/`; downloads, the single
+Linux source tree, intermediate files, disk images, and deployment bundles are
+ignored. Build the general Alpine image or the Risclet teaching image from its
+own directory:
 
-The checked-in example is pinned to Alpine 3.24.1, which is exercised by the project's native, debug, and browser validation. From the repository root:
+    cd images/alpine
+    ./build.sh
 
-    RISCBOX_ASSETS=image/alpine
-    ALPINE_ISO=alpine-standard-3.24.1-riscv64.iso
-    ALPINE_URL=https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/riscv64
+    cd images/risclet
+    ./build.sh
 
-    mkdir -p "$RISCBOX_ASSETS"
-    curl --fail --location --output "$RISCBOX_ASSETS/$ALPINE_ISO" "$ALPINE_URL/$ALPINE_ISO"
-    curl --fail --location --output "$RISCBOX_ASSETS/$ALPINE_ISO.sha256" "$ALPINE_URL/$ALPINE_ISO.sha256"
-    (cd "$RISCBOX_ASSETS" && sha256sum --check "$ALPINE_ISO.sha256")
+Each build downloads verified inputs as needed, incrementally builds the
+tracked kernel configuration and WASM runtime, creates an ext4 disk, runs the
+image-specific setup under QEMU with networking, and writes a self-contained
+`dist/` directory. See [images/README.md](images/README.md) for the build layout.
 
-    7z e -y "-o$RISCBOX_ASSETS" "$RISCBOX_ASSETS/$ALPINE_ISO" boot/vmlinuz-lts boot/initramfs-lts
-    gzip --decompress --stdout "$RISCBOX_ASSETS/vmlinuz-lts" > "$RISCBOX_ASSETS/linux"
-    install -m 644 /usr/lib/riscv64-linux-gnu/opensbi/generic/fw_jump.bin "$RISCBOX_ASSETS/fw_jump.bin"
+Serve a completed distribution over HTTP:
 
-Boot it using the UART for I/O:
-
-    ./riscbox examples/alpine.cfg
-
-Log in as `root`; the standard live image does not initially require a password. Native block devices use snapshot writes by default, so guest changes disappear when riscbox exits. Pass `-rw` only when the attached image is meant to be modified. Press `Ctrl-A X` to stop the emulator or `Ctrl-A H` for console help.
-
-
-Embed riscbox in a web page
----------------------------
-
-First build the WebAssembly runtime and convert the Alpine ISO into the chunked HTTP block format:
-
-    make wasm
-    mkdir -p image/alpine/drive
-    ./splitimg image/alpine/alpine-standard-3.24.1-riscv64.iso image/alpine/drive
-
-Serve the repository over HTTP; browsers cannot load the VM reliably from `file:` URLs:
-
+    cd images/risclet/dist
     python3 -m http.server 8000
 
-Open <http://127.0.0.1:8000/examples/web/?config=alpine.cfg>. The example page is a minimal, dependency-free UART terminal. It demonstrates the complete embedding contract and boots the same Alpine profile entirely in WebAssembly. Production applications can replace its `term` object with a full terminal component while keeping the riscbox API calls.
-
-The [Risclet example](examples/risclet/README.md) adds a browser-backed 9p
-filesystem and a live `sort.s` editor.
-
-For another site, copy `riscbox-wasm.js`, `riscbox-wasm.wasm`, the VM configuration, firmware, kernel, initramfs, and split block directory into its static assets. Load the JavaScript after defining these globals:
-
-*   `Module.onRuntimeInitialized()` calls `Module.ccall("vm_start", ...)`.
-*   `Module.onVmStarted()` runs after the VM and its devices are ready.
-*   `term.write(text)` accepts console output.
-*   `term.getSize()` returns `[columns, rows]`.
-*   `update_downloading(active)` reports HTTP activity.
-*   `graphic_display` and `net_state` may be `null` for a console-only VM.
-
-Console input is queued one byte at a time through
-`Module._console_queue_char(byte)`. After `term.getSize()` changes, call
-`Module._console_resize()` to notify a VirtIO console guest of its new column
-and row counts. All VM URLs may be relative to the configuration file. Serve
-`.wasm` files as `application/wasm`; ordinary static servers generally do this
-already. Cross-origin assets also need the usual CORS headers.
-
-Browser code can replace a file in the first 9p filesystem with
-`Module.ccall("fs_import_text", "number", ["string", "string", "string"],
-[directory, filename, text])`. Call it from `onVmStarted()` or later; zero
-indicates success.
-
-For a `js9p` filesystem, set `Module.p9Server` before starting the VM. The
-included server accepts a nested object whose string and `Uint8Array` leaves
-are files:
-
-```js
-import { Memory9PServer } from "./js/p9.js";
-
-Module.p9Server = new Memory9PServer({
-    "Makefile": "all:\n\tcc -o hello hello.c\n",
-    "hello.c": "int main(void) { return 0; }\n",
-    tests: { "input.txt": new Uint8Array([1, 2, 3]) },
-});
-```
-
-`readFile`, `writeFile`, `remove`, `rename`, `snapshot`, and `subscribe` let an
-application interact with the live tree. Each file is limited to 16 MiB. A
-different synchronous object implementing `request(request, replyCapacity)`
-can be installed as `Module.p9Server` instead.
+Open <http://127.0.0.1:8000/>. The distribution includes its configuration,
+firmware, kernel, unsplit image, chunked browser image, runtime, integration
+page, and an all-in-one deployment README. It can be copied directly to a
+static server with `rsync`.
 
 
 Configuration and command line
@@ -221,7 +166,7 @@ The following paths are supported:
 | xv6 or bare metal | Flat M-mode image at `0x80000000` | Omit | Optional VirtIO block disk |
 | S-mode bootloader | Raw OpenSBI `fw_jump.bin`         | Flat bootloader at `0x80200000` | Bootloader-supported VirtIO media |
 
-riscbox does not parse ELF, PE/COFF, FIT, qcow2, or compressed kernel images and does not provide built-in OpenSBI or U-Boot. Keeping boot assets explicit makes browser deployment predictable. Linux may consume a compressed initramfs, as in the Alpine example, because riscbox loads that file opaquely and describes it in the FDT.
+riscbox does not parse ELF, PE/COFF, FIT, qcow2, or compressed kernel images and does not provide built-in OpenSBI or U-Boot. Keeping boot assets explicit makes browser deployment predictable. Linux may consume a compressed initramfs because riscbox loads that file opaquely and describes it in the FDT.
 
 
 License and credits

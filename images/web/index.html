@@ -53,8 +53,7 @@
     const terminalElement = document.querySelector("#terminal");
     const parameters = new URLSearchParams(location.search);
     const configParameter = parameters.get("config");
-    const configUrl = configParameter === null ? null :
-      new URL(configParameter, location.href).href;
+    const configUrl = new URL(configParameter ?? "riscbox.cfg", location.href).href;
     const memoryMiB = Number.parseInt(parameters.get("memory") ?? "512", 10);
     const inputEncoder = new TextEncoder();
     const specialKeys = new Map([
@@ -87,10 +86,6 @@
     };
     var Module = {
       onRuntimeInitialized() {
-        if (!configUrl) {
-          statusElement.textContent = "Pass the VM configuration as ?config=URL";
-          return;
-        }
         if (!Number.isInteger(memoryMiB) || memoryMiB <= 0) {
           statusElement.textContent = "The memory parameter must be a positive integer";
           return;
@@ -122,6 +117,6 @@
         Module._console_queue_char(byte);
     });
   </script>
-  <script src="/js/riscbox-wasm.js"></script>
+  <script src="./riscbox-wasm.js"></script>
 </body>
 </html>

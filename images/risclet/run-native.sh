@@ -3,9 +3,9 @@ set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ROOT_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
-DEMO_DIR="$SCRIPT_DIR/demo"
-ROOTFS_IMAGE=${ROOTFS_IMAGE:-"$ROOT_DIR/image/rootfs.ext4"}
-KERNEL_IMAGE=${KERNEL_IMAGE:-"$ROOT_DIR/image/build/kernel/arch/riscv/boot/Image"}
+DEMO_DIR="$SCRIPT_DIR/web/demo"
+ROOTFS_IMAGE=${ROOTFS_IMAGE:-"$SCRIPT_DIR/build/rootfs.ext4"}
+KERNEL_IMAGE=${KERNEL_IMAGE:-"$ROOT_DIR/images/build/kernel/arch/riscv/boot/Image"}
 OPENSBI=${OPENSBI:-/usr/lib/riscv64-linux-gnu/opensbi/generic/fw_jump.bin}
 RISCBOX=${RISCBOX:-"$ROOT_DIR/riscbox"}
 DIOD=${DIOD:-/usr/sbin/diod}

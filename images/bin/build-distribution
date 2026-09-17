@@ -1,0 +1,60 @@
+#!/bin/sh
+set -eu
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+IMAGES_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
+ROOT_DIR=$(CDPATH= cd -- "$IMAGES_DIR/.." && pwd)
+KERNEL_IMAGE=${KERNEL_IMAGE:-"$IMAGES_DIR/build/kernel/arch/riscv/boot/Image"}
+OPENSBI=${OPENSBI:-/usr/lib/riscv64-linux-gnu/opensbi/generic/fw_jump.bin}
+
+if [ "$#" -ne 2 ]; then
+    echo "usage: $0 IMAGE_DIRECTORY ROOTFS.ext4" >&2
+    exit 2
+fi
+
+image_dir=$(CDPATH= cd -- "$1" && pwd)
+rootfs_image=$2
+output_dir="$image_dir/dist"
+mkdir -p "$image_dir/build"
+
+for required_file in "$image_dir/riscbox.cfg" "$rootfs_image" \
+    "$KERNEL_IMAGE" "$OPENSBI" "$IMAGES_DIR/DEPLOYMENT.md"; do
+    if [ ! -f "$required_file" ]; then
+        echo "missing required file: $required_file" >&2
+        exit 1
+    fi
+done
+
+make -C "$ROOT_DIR" splitimg
+make -C "$ROOT_DIR" -f Makefile.js
+
+stage_dir=$(mktemp -d "$image_dir/build/dist.XXXXXX")
+cleanup() {
+    rm -rf "$stage_dir"
+}
+trap cleanup EXIT HUP INT TERM
+
+mkdir -p "$stage_dir/drive"
+install -m 644 "$rootfs_image" "$stage_dir/rootfs.ext4"
+install -m 644 "$KERNEL_IMAGE" "$stage_dir/linux"
+install -m 644 "$OPENSBI" "$stage_dir/fw_jump.bin"
+install -m 644 "$ROOT_DIR/js/riscbox-wasm.js" "$stage_dir/riscbox-wasm.js"
+install -m 644 "$ROOT_DIR/js/riscbox-wasm.wasm" "$stage_dir/riscbox-wasm.wasm"
+install -m 644 "$image_dir/riscbox.cfg" "$stage_dir/riscbox.cfg"
+if [ -f "$image_dir/riscbox-native.cfg" ]; then
+    install -m 644 "$image_dir/riscbox-native.cfg" "$stage_dir/riscbox-native.cfg"
+fi
+install -m 644 "$IMAGES_DIR/DEPLOYMENT.md" "$stage_dir/README.md"
+install -m 644 "$IMAGES_DIR/web/index.html" "$stage_dir/index.html"
+if [ -d "$image_dir/web" ]; then
+    cp -R "$image_dir/web/." "$stage_dir/"
+fi
+if grep -R -q 'p9\.js' "$stage_dir" --include='*.html'; then
+    install -m 644 "$ROOT_DIR/js/p9.js" "$stage_dir/p9.js"
+fi
+"$ROOT_DIR/splitimg" "$rootfs_image" "$stage_dir/drive"
+
+rm -rf "$output_dir"
+mv "$stage_dir" "$output_dir"
+trap - EXIT HUP INT TERM
+echo "deployment: $output_dir"

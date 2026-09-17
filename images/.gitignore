@@ -1,0 +1,7 @@
+# Shared source and build artifacts.
+/linux/
+/build/
+
+# Per-image working files and deployable output.
+/*/build/
+/*/dist/

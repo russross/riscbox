@@ -9,4 +9,3 @@ riscbox-debug
 build/
 js/riscbox-wasm.js
 js/riscbox-wasm.wasm
-image

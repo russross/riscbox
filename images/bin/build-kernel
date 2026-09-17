@@ -1,0 +1,79 @@
+#!/bin/sh
+set -eu
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+IMAGES_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
+KERNEL_VERSION=7.2.3
+KERNEL_SHA256=8ba259e8e7b13ec6ef0941c8a39ad90b24bd4a4d6c0010ba6bafb794550ecd03
+KERNEL_SOURCE=${KERNEL_SOURCE:-"$IMAGES_DIR/linux"}
+KERNEL_BUILD=${KERNEL_BUILD:-"$IMAGES_DIR/build/kernel"}
+DOWNLOAD_DIR=${DOWNLOAD_DIR:-"$IMAGES_DIR/build/downloads"}
+CROSS_COMPILE=${CROSS_COMPILE:-riscv64-linux-gnu-}
+JOBS=${JOBS:-$(getconf _NPROCESSORS_ONLN)}
+ARCHIVE="$DOWNLOAD_DIR/linux-$KERNEL_VERSION.tar.xz"
+CONFIG="$IMAGES_DIR/kernel.config"
+CONFIG_STAMP="$KERNEL_BUILD/.riscbox-config.sha256"
+
+require_command() {
+    if ! command -v "$1" >/dev/null 2>&1; then
+        echo "required command not found: $1" >&2
+        exit 1
+    fi
+}
+
+for command in curl make sha256sum tar "${CROSS_COMPILE}gcc"; do
+    require_command "$command"
+done
+
+if [ ! -f "$KERNEL_SOURCE/Makefile" ]; then
+    if [ -e "$KERNEL_SOURCE" ]; then
+        echo "kernel source path exists but is not a Linux tree: $KERNEL_SOURCE" >&2
+        exit 1
+    fi
+    mkdir -p "$DOWNLOAD_DIR"
+    if [ ! -f "$ARCHIVE" ]; then
+        curl --fail --location --show-error \
+            --output "$ARCHIVE.part" \
+            "https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-$KERNEL_VERSION.tar.xz"
+        mv "$ARCHIVE.part" "$ARCHIVE"
+    fi
+    printf '%s  %s\n' "$KERNEL_SHA256" "$ARCHIVE" | sha256sum --check --status || {
+        echo "kernel archive checksum failed: $ARCHIVE" >&2
+        exit 1
+    }
+
+    source_parent=$(dirname -- "$KERNEL_SOURCE")
+    extract_dir=$(mktemp -d "$source_parent/.linux.XXXXXX")
+    trap 'rm -rf "$extract_dir"' EXIT HUP INT TERM
+    tar -xJf "$ARCHIVE" -C "$extract_dir" --strip-components=1
+    mv "$extract_dir" "$KERNEL_SOURCE"
+    trap - EXIT HUP INT TERM
+fi
+
+kernel_release=$(sed -n \
+    -e 's/^VERSION = //p' \
+    -e 's/^PATCHLEVEL = //p' \
+    -e 's/^SUBLEVEL = //p' \
+    "$KERNEL_SOURCE/Makefile" | paste -sd . -)
+if [ "$kernel_release" != "$KERNEL_VERSION" ]; then
+    echo "expected Linux $KERNEL_VERSION in $KERNEL_SOURCE, found $kernel_release" >&2
+    exit 1
+fi
+
+mkdir -p "$KERNEL_BUILD"
+config_hash=$(sha256sum "$CONFIG" | sed 's/ .*//')
+saved_hash=
+if [ -f "$CONFIG_STAMP" ]; then
+    saved_hash=$(sed -n '1p' "$CONFIG_STAMP")
+fi
+if [ ! -f "$KERNEL_BUILD/.config" ] || [ "$config_hash" != "$saved_hash" ]; then
+    install -m 644 "$CONFIG" "$KERNEL_BUILD/.config"
+    make -C "$KERNEL_SOURCE" O="$KERNEL_BUILD" ARCH=riscv \
+        CROSS_COMPILE="$CROSS_COMPILE" olddefconfig
+    printf '%s\n' "$config_hash" > "$CONFIG_STAMP"
+fi
+
+make -C "$KERNEL_SOURCE" O="$KERNEL_BUILD" ARCH=riscv \
+    CROSS_COMPILE="$CROSS_COMPILE" -j "$JOBS" Image
+test -s "$KERNEL_BUILD/arch/riscv/boot/Image"
+echo "kernel: $KERNEL_BUILD/arch/riscv/boot/Image"

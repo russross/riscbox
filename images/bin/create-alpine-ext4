@@ -1,0 +1,155 @@
+#!/bin/sh
+set -eu
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+IMAGES_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
+
+# Change the Alpine release and its published checksum here. The URL, branch,
+# archive name, repositories, and release validation derive from the version.
+ALPINE_VERSION=3.24.1
+ALPINE_ARCH=riscv64
+ALPINE_BRANCH=${ALPINE_VERSION%.*}
+ALPINE_SHA256=7201513262d851f39105102cf95519410100259bd7996fca13bade517838d7b7
+DOWNLOAD_DIR=${DOWNLOAD_DIR:-"$IMAGES_DIR/build/downloads"}
+MKFS_EXT4=${MKFS_EXT4:-/usr/sbin/mkfs.ext4}
+
+if [ "$#" -ne 2 ]; then
+    echo "usage: $0 SIZE_MIB OUTPUT.ext4" >&2
+    exit 2
+fi
+
+IMAGE_SIZE_MIB=$1
+IMAGE_PATH=$2
+case "$IMAGE_SIZE_MIB" in
+    ''|*[!0-9]*)
+        echo "image size must be a positive integer in MiB" >&2
+        exit 2
+        ;;
+    0)
+        echo "image size must be greater than zero" >&2
+        exit 2
+        ;;
+esac
+
+for command in curl "$MKFS_EXT4" sha256sum tar truncate; do
+    if ! command -v "$command" >/dev/null 2>&1; then
+        echo "required command not found: $command" >&2
+        exit 1
+    fi
+done
+
+archive_name="alpine-minirootfs-$ALPINE_VERSION-$ALPINE_ARCH.tar.gz"
+archive="$DOWNLOAD_DIR/$archive_name"
+archive_url="https://dl-cdn.alpinelinux.org/alpine/v$ALPINE_BRANCH/releases/$ALPINE_ARCH/$archive_name"
+mkdir -p "$DOWNLOAD_DIR"
+if [ ! -f "$archive" ]; then
+    curl --fail --location --show-error --output "$archive.part" "$archive_url"
+    mv "$archive.part" "$archive"
+fi
+printf '%s  %s\n' "$ALPINE_SHA256" "$archive" | sha256sum --check --status || {
+    echo "Alpine archive checksum failed: $archive" >&2
+    exit 1
+}
+
+archive_release=$(tar -xOf "$archive" ./etc/alpine-release)
+if [ "$archive_release" != "$ALPINE_VERSION" ]; then
+    echo "expected Alpine $ALPINE_VERSION, found $archive_release" >&2
+    exit 1
+fi
+
+mkdir -p "$IMAGES_DIR/build" "$(dirname -- "$IMAGE_PATH")"
+rootfs_dir=$(mktemp -d "$IMAGES_DIR/build/rootfs.XXXXXX")
+image_part="$IMAGE_PATH.part"
+cleanup() {
+    rm -rf "$rootfs_dir"
+    rm -f "$image_part"
+}
+trap cleanup EXIT HUP INT TERM
+
+tar -xpf "$archive" -C "$rootfs_dir"
+mkdir -p "$rootfs_dir/dev" "$rootfs_dir/etc/init.d" "$rootfs_dir/mnt/setup" \
+    "$rootfs_dir/proc" "$rootfs_dir/run" "$rootfs_dir/sys" "$rootfs_dir/tmp"
+chmod 1777 "$rootfs_dir/tmp"
+
+cat > "$rootfs_dir/etc/apk/repositories" <<EOF
+https://dl-cdn.alpinelinux.org/alpine/v$ALPINE_BRANCH/main
+https://dl-cdn.alpinelinux.org/alpine/v$ALPINE_BRANCH/community
+EOF
+
+cat > "$rootfs_dir/etc/fstab" <<'EOF'
+/dev/vda  /         ext4   defaults,noatime  0 1
+proc      /proc     proc   defaults           0 0
+sysfs     /sys      sysfs  defaults           0 0
+devpts    /dev/pts  devpts gid=5,mode=620     0 0
+tmpfs     /run      tmpfs  defaults           0 0
+EOF
+
+cat > "$rootfs_dir/etc/init.d/rcS" <<'EOF'
+#!/bin/sh
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+[ -c /dev/null ] || mount -t devtmpfs devtmpfs /dev
+mkdir -p /dev/pts /run
+mount -t devpts devpts /dev/pts
+mount -t tmpfs tmpfs /run
+hostname "$(cat /etc/hostname)"
+ip link set lo up 2>/dev/null || true
+if ip link show eth0 >/dev/null 2>&1; then
+    ip link set eth0 up
+    udhcpc -q -b -i eth0
+fi
+EOF
+chmod 755 "$rootfs_dir/etc/init.d/rcS"
+
+cat > "$rootfs_dir/etc/init.d/getty-console" <<'EOF'
+#!/bin/sh
+case " $(cat /proc/cmdline) " in
+    *" console=hvc0 "*) console=hvc0 ;;
+    *) console=ttyS0 ;;
+esac
+exec /sbin/getty -L 115200 "$console" vt100
+EOF
+chmod 755 "$rootfs_dir/etc/init.d/getty-console"
+
+cat > "$rootfs_dir/etc/inittab" <<'EOF'
+::sysinit:/etc/init.d/rcS
+::respawn:/etc/init.d/getty-console
+::ctrlaltdel:/sbin/reboot
+::shutdown:/bin/umount -a -r
+EOF
+
+cat > "$rootfs_dir/sbin/riscbox-image-setup" <<'EOF'
+#!/bin/sh
+set -eu
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+[ -c /dev/null ] || mount -t devtmpfs devtmpfs /dev
+mkdir -p /dev/pts /run /mnt/setup
+mount -t devpts devpts /dev/pts
+mount -t tmpfs tmpfs /run
+mount -o remount,rw /
+ip link set lo up
+ip link set eth0 up
+udhcpc -q -n -i eth0
+mount -t 9p -o trans=virtio,version=9p2000.L setup /mnt/setup
+/bin/sh /mnt/setup/setup.sh
+sync
+umount /mnt/setup
+mount -o remount,ro /
+poweroff -f
+EOF
+chmod 755 "$rootfs_dir/sbin/riscbox-image-setup"
+
+printf 'riscbox\n' > "$rootfs_dir/etc/hostname"
+sed -i 's|^root:[^:]*:|root::|' "$rootfs_dir/etc/shadow"
+
+truncate -s "${IMAGE_SIZE_MIB}M" "$image_part"
+"$MKFS_EXT4" -q -F -L riscbox-root -d "$rootfs_dir" "$image_part"
+actual_size=$(stat -c %s "$image_part")
+expected_size=$((IMAGE_SIZE_MIB * 1024 * 1024))
+if [ "$actual_size" -ne "$expected_size" ]; then
+    echo "image has $actual_size bytes, expected $expected_size" >&2
+    exit 1
+fi
+mv "$image_part" "$IMAGE_PATH"
+echo "root filesystem: $IMAGE_PATH (${IMAGE_SIZE_MIB} MiB, Alpine $ALPINE_VERSION)"

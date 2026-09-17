@@ -94,7 +94,7 @@
   </main>
 
   <script type="module">
-    import { Memory9PServer } from "../../js/p9.js";
+    import { Memory9PServer } from "./p9.js";
 
     const editorElement = document.querySelector("#editor");
     const statusElement = document.querySelector("#status");
@@ -152,7 +152,7 @@
           "vm_start",
           null,
           ["string", "number", "string", "string", "number", "number", "number"],
-          [new URL("risclet.cfg", location.href).href, 256, "", null, 0, 0, 0],
+          [new URL("riscbox.cfg", location.href).href, 256, "", null, 0, 0, 0],
         );
       },
       onVmStarted() {
@@ -196,7 +196,7 @@
     });
 
     const runtime = document.createElement("script");
-    runtime.src = "../../js/riscbox-wasm.js";
+    runtime.src = "./riscbox-wasm.js";
     runtime.addEventListener("error", () => {
       statusElement.textContent = "Could not load the Riscbox runtime";
     });

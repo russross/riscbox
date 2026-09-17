@@ -15,8 +15,8 @@ Build the root image and browser assets from the repository root:
     ./examples/risclet/build-web-assets.sh
 
 `build-rootfs.sh` expects the pinned Alpine minirootfs and standard ISO under
-`image/`. It creates a 64 MiB image with Python 3, Make, and Risclet 0.4.8, but
-does not copy demo source into the disk.
+`image/`. It creates a 64 MiB image with Python 3, Make, the America/Denver time
+zone, and Risclet 0.4.8, but does not copy demo source into the disk.
 `build-web-assets.sh` expects the configured kernel image at
 `image/build/kernel/arch/riscv/boot/Image`; its paths can be overridden through
 the environment variables defined at the top of each script. Demo source files

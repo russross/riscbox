@@ -67,8 +67,11 @@ cp /etc/resolv.conf "$ROOTFS_DIR/etc/resolv.conf"
     add \
     --repository https://dl-cdn.alpinelinux.org/alpine/v3.24/main \
     --repository https://dl-cdn.alpinelinux.org/alpine/v3.24/community \
-    python3 make
+    python3 make tzdata
 rm -f "$ROOTFS_DIR/etc/resolv.conf"
+
+ln -sf /usr/share/zoneinfo/America/Denver "$ROOTFS_DIR/etc/localtime"
+printf 'America/Denver\n' > "$ROOTFS_DIR/etc/timezone"
 
 mkdir -p "$ROOTFS_DIR/etc/init.d" "$ROOTFS_DIR/dev" "$ROOTFS_DIR/proc" \
     "$ROOTFS_DIR/sys" "$ROOTFS_DIR/run" "$ROOTFS_DIR/tmp"
@@ -164,6 +167,11 @@ curl --fail --location --silent --show-error \
 printf '%s  %s\n' "$RISCLET_SHA256" \
     "$ROOTFS_DIR/usr/local/bin/risclet" | sha256sum --check --status
 chmod 755 "$ROOTFS_DIR/usr/local/bin/risclet"
+cat > "$ROOTFS_DIR/usr/local/bin/update-grind" <<'EOF'
+#!/bin/sh
+exit 0
+EOF
+chmod 755 "$ROOTFS_DIR/usr/local/bin/update-grind"
 
 chown 1000:1000 "$ROOTFS_DIR/home/student"
 

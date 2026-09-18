@@ -154,9 +154,10 @@ Decision log
     into a browser-owned 9p tree. The guest and editor share that live tree;
     `doc/doc.md` alone controls whether the instructions view exists.
 *   2026-09-18: Preserve the proven CodeGrinder frontend stack for the Risclet
-    demo: CodeMirror, xterm.js, Split.js, and CommonMark. The locked frontend
-    graph contains 36 production packages; the removed gRPC and protobuf stack
-    is absent. Keep the raw emulator adapter dependency-free.
+    demo: CodeMirror, Split.js, and CommonMark. Use ghostty-web's xterm-compatible
+    terminal and fit addon in place of xterm.js and its WebGL renderer. The
+    locked frontend graph contains 34 production packages; the removed gRPC and
+    protobuf stack is absent. Keep the raw emulator adapter dependency-free.
 *   2026-09-18: Pass browser epoch milliseconds through the raw WASM ABI as
     explicit low and high 32-bit words. JavaScript numbers represent the full
     millisecond value exactly, while the split avoids an i64/BigInt boundary

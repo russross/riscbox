@@ -60,7 +60,9 @@ if [ -d "$image_dir/web" ]; then
     cp -R "$image_dir/web/." "$stage_dir/"
 fi
 if [ -f "$image_dir/build/ui/bundle.js" ]; then
-    install -m 644 "$image_dir/build/ui/bundle.js" "$stage_dir/bundle.js"
+    for built_javascript in "$image_dir/build/ui/"*.js; do
+        install -m 644 "$built_javascript" "$stage_dir/$(basename "$built_javascript")"
+    done
 fi
 if [ -d "$image_dir/examples" ]; then
     cp -R "$image_dir/examples" "$stage_dir/examples"

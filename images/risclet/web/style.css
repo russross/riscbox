@@ -220,7 +220,7 @@ body {
 
 #terminal {
     flex-grow: 1; /* Allow terminal to grow and fill space */
-    overflow: hidden; /* Let xterm handle scrolling */
+    overflow: hidden; /* Let the terminal handle scrolling */
 }
 
 #vm-tab-content {

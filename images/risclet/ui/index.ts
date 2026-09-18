@@ -9,10 +9,7 @@ import { gas } from "@codemirror/legacy-modes/mode/gas";
 import { shell } from "@codemirror/legacy-modes/mode/shell";
 import { Compartment, EditorSelection, EditorState } from "@codemirror/state";
 import { EditorView, keymap, ViewUpdate } from "@codemirror/view";
-import { FitAddon } from "@xterm/addon-fit";
-import { WebglAddon } from "@xterm/addon-webgl";
-import { Terminal } from "@xterm/xterm";
-import "@xterm/xterm/css/xterm.css";
+import { FitAddon, init as initializeGhostty, Terminal } from "ghostty-web";
 import { basicSetup } from "codemirror";
 import { Memory9PServer, P9Change } from "../../../js/p9.js";
 
@@ -399,20 +396,12 @@ class VmController {
         this.bootButton = bootButton;
         this.terminal = new Terminal({
             convertEol: false,
-            customGlyphs: true,
             cursorBlink: true,
             scrollback: 1000,
             theme: { background: "#1e1e1e", foreground: "#d4d4d4" },
         });
         this.terminal.loadAddon(this.fitAddon);
         this.terminal.open(host);
-        try {
-            const webgl = new WebglAddon();
-            webgl.onContextLoss((): void => webgl.dispose());
-            this.terminal.loadAddon(webgl);
-        } catch (error: unknown) {
-            console.warn("VM terminal WebGL renderer is unavailable", error);
-        }
         this.fitAddon.fit();
         this.terminal.onData((text: string): void => {
             this.runtime?.consoleInput(encoder.encode(text));
@@ -626,6 +615,7 @@ function switchExample(example: ExampleState): void {
 }
 
 async function initialize(): Promise<void> {
+    await initializeGhostty();
     Split(["#file-tree-pane", "#editor-pane", "#info-pane"], {
         sizes: [10, 45, 45],
         gutterSize: 8,

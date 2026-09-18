@@ -8,6 +8,11 @@ use crate::memory::{
     AccessWidth, ArenaOffset, GuestAddress, MemoryError, PhysicalMemory, RamFlags, RegionId,
 };
 use crate::platform::{Clint, FinishStatus, Finisher, GoldfishRtc, Plic, Uart16550};
+use crate::virtio::{MMIO_SIZE, VirtioTransport};
+use crate::virtio_devices::{
+    BlockBackend, BlockDevice, ConsoleDevice, DeviceError, InputDevice, InputKind, NetworkBackend,
+    NetworkDevice, NinePBackend, NinePDevice, VirtioMmioDevice,
+};
 
 pub const RAM_BASE: u64 = 0x8000_0000;
 pub const RESET_RAM_SIZE: u64 = 0x1_0000;
@@ -17,6 +22,7 @@ pub const CLINT_BASE: u64 = 0x200_0000;
 pub const FRAMEBUFFER_BASE: u64 = 0x410_0000;
 pub const PLIC_BASE: u64 = 0xc00_0000;
 pub const UART_BASE: u64 = 0x1000_0000;
+pub const VIRTIO_BASE: u64 = 0x1000_1000;
 
 const KERNEL_OFFSET: u64 = 0x20_0000;
 const FDT_ALIGNMENT: u64 = 0x20_0000;
@@ -31,7 +37,6 @@ pub struct FramebufferConfig {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct MachineConfig {
     pub ram_size: u64,
-    pub virtio_count: u8,
     pub framebuffer: Option<FramebufferConfig>,
 }
 
@@ -69,6 +74,9 @@ pub enum MachineError {
     KernelOverlapsInitrd,
     InitrdTooLarge,
     DeviceTreeTooLarge,
+    Virtio(DeviceError),
+    VirtioSlotLimit,
+    WrongVirtioDevice,
 }
 
 impl fmt::Display for MachineError {
@@ -85,6 +93,11 @@ impl fmt::Display for MachineError {
             Self::KernelOverlapsInitrd => formatter.write_str("kernel overlaps initrd"),
             Self::InitrdTooLarge => formatter.write_str("initrd does not fit in RAM"),
             Self::DeviceTreeTooLarge => formatter.write_str("device tree does not fit in RAM"),
+            Self::Virtio(error) => error.fmt(formatter),
+            Self::VirtioSlotLimit => formatter.write_str("too many `VirtIO` MMIO devices"),
+            Self::WrongVirtioDevice => {
+                formatter.write_str("`VirtIO` slot has the wrong device type")
+            }
         }
     }
 }
@@ -97,6 +110,12 @@ impl From<MemoryError> for MachineError {
     }
 }
 
+impl From<DeviceError> for MachineError {
+    fn from(value: DeviceError) -> Self {
+        Self::Virtio(value)
+    }
+}
+
 #[derive(Clone, Debug)]
 struct Framebuffer {
     region: RegionId,
@@ -106,7 +125,56 @@ struct Framebuffer {
     size: u32,
 }
 
-#[derive(Clone, Debug)]
+type DynBlock = VirtioMmioDevice<BlockDevice<Box<dyn BlockBackend>>>;
+type DynNetwork = VirtioMmioDevice<NetworkDevice<Box<dyn NetworkBackend>>>;
+type DynNineP = VirtioMmioDevice<NinePDevice<Box<dyn NinePBackend>>>;
+
+enum VirtioSlot {
+    Block(DynBlock),
+    Console(VirtioMmioDevice<ConsoleDevice>),
+    Network(DynNetwork),
+    NineP(DynNineP),
+    Input(VirtioMmioDevice<InputDevice>),
+}
+
+impl VirtioSlot {
+    fn read(&self, offset: u32, width: AccessWidth) -> u32 {
+        match self {
+            Self::Block(device) => device.read(offset, width),
+            Self::Console(device) => device.read(offset, width),
+            Self::Network(device) => device.read(offset, width),
+            Self::NineP(device) => device.read(offset, width),
+            Self::Input(device) => device.read(offset, width),
+        }
+    }
+
+    fn write(
+        &mut self,
+        memory: &mut PhysicalMemory,
+        offset: u32,
+        value: u32,
+        width: AccessWidth,
+    ) -> Result<(), DeviceError> {
+        match self {
+            Self::Block(device) => device.write(memory, offset, value, width),
+            Self::Console(device) => device.write(memory, offset, value, width),
+            Self::Network(device) => device.write(memory, offset, value, width),
+            Self::NineP(device) => device.write(memory, offset, value, width),
+            Self::Input(device) => device.write(memory, offset, value, width),
+        }
+    }
+
+    fn irq(&self) -> bool {
+        match self {
+            Self::Block(device) => device.transport.irq(),
+            Self::Console(device) => device.transport.irq(),
+            Self::Network(device) => device.transport.irq(),
+            Self::NineP(device) => device.transport.irq(),
+            Self::Input(device) => device.transport.irq(),
+        }
+    }
+}
+
 pub struct PlatformBus {
     memory: PhysicalMemory,
     clint: Clint,
@@ -115,6 +183,7 @@ pub struct PlatformBus {
     rtc: GoldfishRtc,
     finisher: Finisher,
     framebuffer: Option<Framebuffer>,
+    virtio: Vec<VirtioSlot>,
     timer_ticks: u64,
     host_nanoseconds: u64,
 }
@@ -167,6 +236,7 @@ impl PlatformBus {
             rtc: GoldfishRtc::default(),
             finisher: Finisher::default(),
             framebuffer,
+            virtio: Vec::new(),
             timer_ticks: 0,
             host_nanoseconds: 0,
         })
@@ -175,6 +245,9 @@ impl PlatformBus {
     fn update_device_irqs(&mut self) {
         self.plic.set_irq(10, self.uart.irq());
         self.plic.set_irq(11, self.rtc.irq());
+        for (index, device) in self.virtio.iter().enumerate() {
+            self.plic.set_irq(virtio_irq(index), device.irq());
+        }
     }
 
     fn read_mmio(&mut self, address: u64, width: AccessWidth) -> Result<u64, BusError> {
@@ -200,6 +273,9 @@ impl PlatformBus {
             u64::from(self.plic.read(offset(address, PLIC_BASE)?))
         } else if (UART_BASE..UART_BASE + 0x100).contains(&address) && width == AccessWidth::Byte {
             u64::from(self.uart.read(offset(address, UART_BASE)?))
+        } else if let Some((index, device_offset)) = virtio_location(address) {
+            let device = self.virtio.get(index).ok_or(BusError::AccessFault)?;
+            u64::from(device.read(device_offset, width))
         } else {
             return Err(BusError::AccessFault);
         };
@@ -227,6 +303,11 @@ impl PlatformBus {
         } else if (UART_BASE..UART_BASE + 0x100).contains(&address) && width == AccessWidth::Byte {
             self.uart
                 .write(offset(address, UART_BASE)?, value.to_le_bytes()[0]);
+        } else if let Some((index, device_offset)) = virtio_location(address) {
+            let device = self.virtio.get_mut(index).ok_or(BusError::AccessFault)?;
+            device
+                .write(&mut self.memory, device_offset, value32, width)
+                .map_err(|_| BusError::AccessFault)?;
         } else {
             return Err(BusError::AccessFault);
         }
@@ -275,7 +356,6 @@ impl CpuBus for PlatformBus {
     }
 }
 
-#[derive(Clone, Debug)]
 pub struct Machine {
     cpu: Cpu,
     bus: PlatformBus,
@@ -294,6 +374,87 @@ impl Machine {
             bus: PlatformBus::new(config)?,
             config,
         })
+    }
+
+    /// Adds a `VirtIO` block device and returns its MMIO slot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error after the 32 available PLIC sources are exhausted.
+    pub fn add_block_device(
+        &mut self,
+        backend: Box<dyn BlockBackend>,
+        id: [u8; 20],
+    ) -> Result<usize, MachineError> {
+        self.add_virtio(VirtioSlot::Block(VirtioMmioDevice::new(
+            VirtioTransport::new(2, 0, &[16]),
+            BlockDevice::new(backend, id),
+        )))
+    }
+
+    /// Adds a `VirtIO` console and returns its MMIO slot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error after the 32 available PLIC sources are exhausted.
+    pub fn add_console_device(&mut self, width: u16, height: u16) -> Result<usize, MachineError> {
+        self.add_virtio(VirtioSlot::Console(VirtioMmioDevice::new(
+            VirtioTransport::new(3, 1, &[16, 16]),
+            ConsoleDevice::new(width, height),
+        )))
+    }
+
+    /// Adds a `VirtIO` network device and returns its MMIO slot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error after the 32 available PLIC sources are exhausted.
+    pub fn add_network_device(
+        &mut self,
+        backend: Box<dyn NetworkBackend>,
+        mac: [u8; 6],
+    ) -> Result<usize, MachineError> {
+        self.add_virtio(VirtioSlot::Network(VirtioMmioDevice::new(
+            VirtioTransport::new(1, 1 << 5, &[16, 16]),
+            NetworkDevice::new(backend, mac),
+        )))
+    }
+
+    /// Adds a raw-protocol `VirtIO` 9p device and returns its MMIO slot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error after the 32 available PLIC sources are exhausted.
+    pub fn add_ninep_device(
+        &mut self,
+        backend: Box<dyn NinePBackend>,
+        tag: &[u8],
+    ) -> Result<usize, MachineError> {
+        self.add_virtio(VirtioSlot::NineP(VirtioMmioDevice::new(
+            VirtioTransport::new(9, 1, &[128]),
+            NinePDevice::new(backend, tag),
+        )))
+    }
+
+    /// Adds a `VirtIO` input device and returns its MMIO slot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error after the 32 available PLIC sources are exhausted.
+    pub fn add_input_device(&mut self, kind: InputKind) -> Result<usize, MachineError> {
+        self.add_virtio(VirtioSlot::Input(VirtioMmioDevice::new(
+            VirtioTransport::new(18, 0, &[256, 256]),
+            InputDevice::new(kind),
+        )))
+    }
+
+    fn add_virtio(&mut self, device: VirtioSlot) -> Result<usize, MachineError> {
+        let index = self.bus.virtio.len();
+        if virtio_irq_checked(index).is_none() {
+            return Err(MachineError::VirtioSlotLimit);
+        }
+        self.bus.virtio.push(device);
+        Ok(index)
     }
 
     /// Loads firmware and optional kernel/initrd images and installs the reset vector and FDT.
@@ -349,7 +510,8 @@ impl Machine {
             ram_size: self.config.ram_size,
             command_line: images.command_line,
             initrd,
-            virtio_count: self.config.virtio_count,
+            virtio_count: u8::try_from(self.bus.virtio.len())
+                .map_err(|_| MachineError::VirtioSlotLimit)?,
             framebuffer,
         });
         let limit = self.config.ram_size.min(FDT_MAX_OFFSET);
@@ -455,6 +617,146 @@ impl Machine {
         self.bus.uart.take_transmitted()
     }
 
+    /// Delivers host input to a `VirtIO` console slot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid slot, wrong device type, or malformed queue.
+    pub fn virtio_console_receive(
+        &mut self,
+        slot: usize,
+        bytes: &[u8],
+    ) -> Result<(), MachineError> {
+        let PlatformBus { memory, virtio, .. } = &mut self.bus;
+        let VirtioSlot::Console(device) = virtio
+            .get_mut(slot)
+            .ok_or(MachineError::WrongVirtioDevice)?
+        else {
+            return Err(MachineError::WrongVirtioDevice);
+        };
+        device
+            .device
+            .receive(&mut device.transport, memory, bytes)?;
+        self.bus.update_device_irqs();
+        Ok(())
+    }
+
+    /// Takes bytes transmitted by a `VirtIO` console slot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid slot or wrong device type.
+    pub fn take_virtio_console_output(&mut self, slot: usize) -> Result<Vec<u8>, MachineError> {
+        let VirtioSlot::Console(device) = self
+            .bus
+            .virtio
+            .get_mut(slot)
+            .ok_or(MachineError::WrongVirtioDevice)?
+        else {
+            return Err(MachineError::WrongVirtioDevice);
+        };
+        Ok(core::mem::take(&mut device.device.output))
+    }
+
+    /// Updates a `VirtIO` console's reported dimensions.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid slot or wrong device type.
+    pub fn resize_virtio_console(
+        &mut self,
+        slot: usize,
+        width: u16,
+        height: u16,
+    ) -> Result<(), MachineError> {
+        let VirtioSlot::Console(device) = self
+            .bus
+            .virtio
+            .get_mut(slot)
+            .ok_or(MachineError::WrongVirtioDevice)?
+        else {
+            return Err(MachineError::WrongVirtioDevice);
+        };
+        device.device.resize(&mut device.transport, width, height);
+        self.bus.update_device_irqs();
+        Ok(())
+    }
+
+    /// Delivers one host network packet to a `VirtIO` network slot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid slot, wrong device type, or malformed queue.
+    pub fn virtio_network_receive(
+        &mut self,
+        slot: usize,
+        packet: Vec<u8>,
+    ) -> Result<(), MachineError> {
+        let PlatformBus { memory, virtio, .. } = &mut self.bus;
+        let VirtioSlot::Network(device) = virtio
+            .get_mut(slot)
+            .ok_or(MachineError::WrongVirtioDevice)?
+        else {
+            return Err(MachineError::WrongVirtioDevice);
+        };
+        device
+            .device
+            .receive_packet(&mut device.transport, memory, packet)?;
+        self.bus.update_device_irqs();
+        Ok(())
+    }
+
+    /// Sends a host key transition to a `VirtIO` keyboard slot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid slot, wrong device type, or unavailable queue.
+    pub fn virtio_key_event(
+        &mut self,
+        slot: usize,
+        code: u16,
+        down: bool,
+    ) -> Result<(), MachineError> {
+        let PlatformBus { memory, virtio, .. } = &mut self.bus;
+        let VirtioSlot::Input(device) = virtio
+            .get_mut(slot)
+            .ok_or(MachineError::WrongVirtioDevice)?
+        else {
+            return Err(MachineError::WrongVirtioDevice);
+        };
+        device
+            .device
+            .send_key(&mut device.transport, memory, code, down)?;
+        self.bus.update_device_irqs();
+        Ok(())
+    }
+
+    /// Sends movement, wheel, and button state to a `VirtIO` pointer slot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid slot, wrong device type, or unavailable queue.
+    pub fn virtio_pointer_event(
+        &mut self,
+        slot: usize,
+        position: (i32, i32),
+        wheel: i32,
+        buttons: u32,
+    ) -> Result<(), MachineError> {
+        let PlatformBus { memory, virtio, .. } = &mut self.bus;
+        let VirtioSlot::Input(device) = virtio
+            .get_mut(slot)
+            .ok_or(MachineError::WrongVirtioDevice)?
+        else {
+            return Err(MachineError::WrongVirtioDevice);
+        };
+        device
+            .device
+            .send_pointer(&mut device.transport, memory, position, wheel, buttons)?;
+        self.bus.update_device_irqs();
+        Ok(())
+    }
+
     #[must_use]
     pub const fn finish_status(&self) -> FinishStatus {
         self.bus.finisher.status()
@@ -536,6 +838,28 @@ impl Machine {
 
 fn offset(address: u64, base: u64) -> Result<u32, BusError> {
     u32::try_from(address - base).map_err(|_| BusError::AccessFault)
+}
+
+fn virtio_location(address: u64) -> Option<(usize, u32)> {
+    let relative = address.checked_sub(VIRTIO_BASE)?;
+    let index = usize::try_from(relative / MMIO_SIZE).ok()?;
+    let device_offset = u32::try_from(relative % MMIO_SIZE).ok()?;
+    virtio_irq_checked(index).map(|_| (index, device_offset))
+}
+
+fn virtio_irq(index: usize) -> u8 {
+    virtio_irq_checked(index).expect("registered `VirtIO` slot has a PLIC source")
+}
+
+fn virtio_irq_checked(index: usize) -> Option<u8> {
+    let mut irq = u8::try_from(index).ok()?.checked_add(1)?;
+    if irq >= 10 {
+        irq = irq.checked_add(1)?;
+    }
+    if irq >= 11 {
+        irq = irq.checked_add(1)?;
+    }
+    (irq < 32).then_some(irq)
 }
 
 fn low_u32(value: u64) -> u32 {

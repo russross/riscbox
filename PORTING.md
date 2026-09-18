@@ -64,28 +64,30 @@ Milestones
 | Complete | Remaining integer ISA | Atomics, compressed instructions, and advertised scalar extensions |
 | Complete | SoftFP | Exact F/D arithmetic, conversions, rounding, flags, NaN boxing, and floating-point CSRs |
 | Complete | Platform foundation | Reset path, FDT, CLINT, PLIC, UART, RTC, finisher, and framebuffer |
-| Next | VirtIO devices | MMIO transport plus block, console, 9p, network, and input |
-| Pending | Browser services | Configuration, HTTP storage, encrypted filesystem support, JS adapter, and browser entry points |
+| Complete | VirtIO devices | MMIO transport plus block, console, 9p, network, and input |
+| Next | Browser services | Configuration, HTTP storage, encrypted filesystem support, JS adapter, and browser entry points |
 | Pending | Complete-platform acceptance | Shared native/WASM suite, Chrome validation, xv6 user tests, and Alpine login/shutdown |
 
 Current status
 --------------
 
-The platform foundation milestone is complete. Rust now composes the CPU and
-physical memory with CLINT, PLIC, 16550A UART, Goldfish RTC, SiFive test
-finisher, and optional simple framebuffer devices. Boot loading places
-firmware, kernel, initrd, and a version-17 flattened device tree in RAM and
-installs the QEMU-compatible reset trampoline. Host-facing methods provide
-explicit clock updates, UART input and output, finish status, and consumed
-framebuffer redraw spans. Matching sanitizer-backed C and Rust tests cover
-device registers, interrupt transitions, FDT contents, boot layout, reset
-state, and framebuffer dirty tracking. The tests corrected C PLIC claims below
-the configured threshold and made framebuffer refresh consume dirty pages.
+The VirtIO milestone is complete. Rust now implements the modern MMIO
+transport, strict split-ring validation, feature negotiation, reset and
+interrupt state, and block, console, raw 9p, network, keyboard, mouse, and
+tablet protocols. The machine owns ordered MMIO slots, routes their PLIC
+sources while reserving the UART and RTC interrupts, emits corresponding FDT
+nodes, and exposes explicit host ingress methods. Matching sanitizer-backed C
+and Rust tests cover transport registers, malformed chains, ring publication,
+device requests, configuration, and manual receive queues. The tests corrected
+C notification gating, descriptor bounds and cycle handling, used-ring
+publication order, the non-merged network header size, and console input
+clipping.
 
 Rust 1.92, the `wasm32-unknown-unknown` standard library, Clang 19, Emscripten
 3.1.69, Node 20, and Chrome 152 were present when the port was initialized. The
-next milestone is VirtIO MMIO transport and the block, console, 9p, network,
-and input devices.
+next milestone is browser services: configuration, HTTP-backed storage,
+encrypted filesystem support, the JavaScript adapter, and browser entry
+points.
 
 Decision log
 ------------
@@ -114,3 +116,7 @@ Decision log
     buffers; the machine applies CPU interrupt lines at scheduler boundaries.
     Inject both timer ticks and wall-clock nanoseconds so native and WASM tests
     remain deterministic.
+*   2026-09-18: Port only the modern VirtIO MMIO transport; PCI remains outside
+    the browser platform boundary. Validate every descriptor chain before
+    device dispatch, keep host receive queues pending until explicit ingress,
+    and use backend traits for block, network, and raw 9p services.

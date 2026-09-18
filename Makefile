@@ -124,11 +124,17 @@ build/tests/platform_foundation_c: tests/platform_foundation_c.c \
 		tests/platform_foundation_c.c riscv_machine.c uart16550.c \
 		goldfish_rtc.c simplefb.c riscv_cpu.c iomem.c cutils.c softfp.c
 
+build/tests/virtio_c: tests/virtio_c.c virtio.c virtio.h iomem.c cutils.c
+	mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(PORT_TEST_CFLAGS) -ffunction-sections -I. \
+		-Wl,--gc-sections -o $@ tests/virtio_c.c iomem.c cutils.c
+
 test-port: build/tests/physical_memory_c build/tests/cpu_foundation_c \
-    build/tests/platform_foundation_c
+    build/tests/platform_foundation_c build/tests/virtio_c
 	./build/tests/physical_memory_c
 	./build/tests/cpu_foundation_c
 	./build/tests/platform_foundation_c
+	./build/tests/virtio_c
 	cargo test
 	cargo clippy --all-targets -- -D warnings
 	cargo build --target wasm32-unknown-unknown

@@ -8,13 +8,39 @@ use riscbox::platform::FinishStatus;
 fn machine(framebuffer: bool) -> Machine {
     Machine::new(MachineConfig {
         ram_size: 64 << 20,
-        virtio_count: 2,
         framebuffer: framebuffer.then_some(FramebufferConfig {
             width: 640,
             height: 480,
         }),
     })
     .expect("valid machine")
+}
+
+#[test]
+fn virtio_slots_route_mmio_and_appear_in_the_device_tree() {
+    let mut machine = machine(false);
+    let slot = machine.add_console_device(80, 25).expect("console slot");
+    assert_eq!(slot, 0);
+    assert_eq!(
+        machine
+            .bus_mut()
+            .read(GuestAddress(0x1000_1000), AccessWidth::Word)
+            .expect("VirtIO magic"),
+        0x7472_6976
+    );
+    let layout = machine
+        .load_boot(BootImages {
+            firmware: &[0; 64],
+            kernel: None,
+            initrd: None,
+            command_line: "",
+        })
+        .expect("boot layout");
+    let tree = machine
+        .read_ram(layout.fdt_address, layout.fdt_size as usize)
+        .expect("FDT RAM");
+    let node = b"virtio@10001000";
+    assert!(tree.windows(node.len()).any(|window| window == node));
 }
 
 #[test]

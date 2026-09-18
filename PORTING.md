@@ -88,7 +88,9 @@ the finisher, and runs current xv6 user tests over its UART and VirtIO block
 device. Chrome 152 boots the deployed Rust WASM Alpine image to its login
 prompt. The standalone Risclet page boots its in-memory JavaScript 9p service,
 loads either tracked example without RPC, mirrors guest-created and deleted
-files, and updates optional instructions from `doc/doc.md`. Clean
+files, and updates optional instructions from `doc/doc.md`. Its interface
+retains the deployed CodeGrinder editor, terminal, draggable panes, and sizing
+behavior while removing the RPC and grading workflows. Clean
 C release, sanitizer, and reference WASM builds remain compatibility checks;
 the Rust workspace, strict Clippy checks, WASM build, Node adapter tests, and
 the ignored full-guest acceptance tests are the port's validation surfaces.
@@ -151,6 +153,10 @@ Decision log
 *   2026-09-18: Package Risclet examples as tracked static files and load them
     into a browser-owned 9p tree. The guest and editor share that live tree;
     `doc/doc.md` alone controls whether the instructions view exists.
+*   2026-09-18: Preserve the proven CodeGrinder frontend stack for the Risclet
+    demo: CodeMirror, xterm.js, Split.js, and CommonMark. The locked frontend
+    graph contains 36 production packages; the removed gRPC and protobuf stack
+    is absent. Keep the raw emulator adapter dependency-free.
 
 Next milestone
 --------------

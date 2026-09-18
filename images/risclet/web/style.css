@@ -1,22 +1,264 @@
-:root { color-scheme: light; font-family: system-ui, sans-serif; color: #252525; background: #f5f5f5; }
-* { box-sizing: border-box; }
-body { margin: 0; height: 100vh; overflow: hidden; display: flex; flex-direction: column; }
-header { min-height: 3.5rem; padding: .65rem 1rem; display: flex; gap: .7rem; align-items: center; background: #e7e7e7; border-bottom: 1px solid #bbb; }
-header label { font-weight: 650; } select, button { font: inherit; padding: .4rem .7rem; } #status { margin-left: auto; color: #555; }
-main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(10rem, 15rem) minmax(20rem, 1fr) minmax(20rem, 1fr); }
-nav, section { min-width: 0; min-height: 0; background: white; border-right: 1px solid #ccc; }
-#files { overflow: auto; padding: .65rem 0; }
-.file-tree, .file-tree ul { list-style: none; margin: 0; padding: 0; }
-.file-tree button, .folder-label { display: block; width: 100%; padding: .25rem .6rem .25rem calc(.6rem + var(--depth) * 1rem); border: 0; background: transparent; text-align: left; white-space: nowrap; }
-.file-tree button { cursor: pointer; } .file-tree button:hover { background: #eaf3fd; } .file-tree button.selected { background: #d2e7fb; }
-.folder-label { font-weight: 650; } .folder-label::before { content: "📁 "; } .file-tree button::before { content: "📄 "; }
-#editor-pane, #info-pane { display: flex; flex-direction: column; }
-.pane-title { padding: .55rem .75rem; min-height: 2.4rem; border-bottom: 1px solid #ccc; font-weight: 650; background: #fafafa; }
-#editor { flex: 1; width: 100%; min-height: 0; resize: none; padding: .8rem; border: 0; outline: none; font: 14px/1.45 ui-monospace, "Cascadia Mono", monospace; tab-size: 4; }
-#tabs { display: flex; gap: .2rem; padding: .35rem .35rem 0; border-bottom: 1px solid #bbb; background: #eee; }
-#tabs button { border: 1px solid #aaa; border-bottom: 0; background: #ddd; cursor: pointer; } #tabs button[aria-selected="true"] { background: white; font-weight: 650; }
-#instructions, #vm { flex: 1; min-height: 0; overflow: auto; padding: 1rem; }
-#instructions pre { white-space: pre-wrap; background: #f1f1f1; padding: .75rem; } #instructions code { font-family: ui-monospace, monospace; }
-#vm { padding: 0; background: #181818; } #terminal { height: 100%; margin: 0; padding: .8rem; overflow: auto; color: #ddd; background: #181818; white-space: pre-wrap; font: 14px/1.35 ui-monospace, monospace; outline: none; }
-#terminal:focus { box-shadow: inset 0 0 0 2px #6599ca; } [hidden] { display: none !important; }
-@media (max-width: 60rem) { body { overflow: auto; height: auto; } main { grid-template-columns: 12rem 1fr; grid-template-rows: minmax(30rem, 60vh) minmax(25rem, 50vh); } #info-pane { grid-column: 1 / -1; } }
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden; /* Prevent scrollbars on body */
+    background-color: #f8f8f8; /* Light background */
+    color: #333; /* Dark text */
+}
+
+#menu-bar {
+    display: flex;
+    align-items: center;
+    padding: 10px;
+    background-color: #e0e0e0; /* Light grey for menu bar */
+    border-bottom: 1px solid #ccc;
+    min-height: 40px;
+}
+
+#menu-items {
+    display: flex;
+    flex: 1 1 auto;
+    align-items: center;
+    min-width: 0;
+}
+
+#menu-bar button,
+#menu-bar select {
+    margin-right: 10px;
+    padding: 8px 15px;
+    border: 1px solid #a0a0a0;
+    border-radius: 4px;
+    background-color: #c0e0ff; /* Cheerful blue */
+    color: #333;
+    cursor: pointer;
+    font-size: 14px;
+}
+
+#menu-bar button:hover:not(:disabled),
+#menu-bar select:hover {
+    background-color: #90c0ff;
+}
+
+#menu-bar button:disabled {
+    background-color: #e0e0e0;
+    color: #999;
+    cursor: not-allowed;
+}
+
+.menu-divider {
+    border-left: 1px solid #999;
+    height: 25px;
+    margin: 0 10px;
+}
+
+.menu-label {
+    margin-right: 10px;
+}
+
+.actions-label {
+    margin-left: 40px;
+}
+
+#main-content {
+    display: flex;
+    flex-grow: 1;
+    overflow: hidden;
+}
+
+.gutter-horizontal {
+    cursor: grab;
+}
+
+.pane {
+    padding: 10px;
+    border: 1px solid #eee;
+    overflow: auto;
+    background-color: #ffffff; /* White background for panes */
+}
+
+#editor-pane {
+    flex-grow: 1;
+}
+
+/* File Tree Styling */
+#file-tree-pane {
+    padding: 10px 0;
+    min-width: 0;
+    border-inline: 0;
+}
+
+.file-tree,
+.file-tree ul {
+    margin: 0;
+    padding: 0;
+    list-style-type: none;
+}
+
+.file-tree {
+    width: max-content;
+    min-width: 100%;
+}
+
+.file-tree li {
+    list-style-type: none; /* Ensure no bullet points */
+}
+
+.file-tree .item-content-wrapper {
+    display: flex;
+    align-items: center;
+    padding: 2px 8px 2px calc(8px + var(--tree-depth) * 16px);
+    white-space: nowrap;
+}
+
+.file-tree .icon {
+    flex-shrink: 0;
+    margin-right: 5px;
+    font-style: normal;
+    font-size: 1.2em;
+}
+
+.file-tree li.folder > .item-content-wrapper .icon::after {
+    content: '📁';
+    color: #ffbf00;
+}
+
+.file-tree li.file > .item-content-wrapper .icon::after {
+    content: '📄';
+    color: #007bff;
+}
+
+/* Interactive Styling */
+.file-tree li.file {
+    cursor: pointer;
+}
+
+.file-tree li.folder {
+    cursor: default;
+}
+
+.file-tree li.file:hover > .item-content-wrapper {
+    background-color: #e0f0ff; /* Hover highlight for files */
+}
+
+.file-tree li.selected > .item-content-wrapper {
+    background-color: #d0e0ff; /* Persistent highlight for selected file */
+}
+
+#info-pane {
+    flex-grow: 1;
+    display: flex;
+    flex-direction: column;
+}
+
+#info-tabs {
+    display: flex;
+    gap: 3px;
+    padding: 6px 6px 0;
+    border-bottom: 1px solid #ccc;
+    background-color: #f0f0f0;
+    flex-shrink: 0; /* Prevent tabs from shrinking */
+}
+
+#info-content {
+    flex-grow: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.tab-button {
+    margin-bottom: -1px;
+    padding: 8px 14px;
+    cursor: pointer;
+    border: 1px solid transparent;
+    border-bottom-color: #ccc;
+    border-radius: 4px 4px 0 0;
+    background-color: #e0e0e0;
+    color: #555;
+    font: inherit;
+}
+
+.tab-button:hover:not(.active) {
+    background-color: #d7e7f7;
+    color: #333;
+}
+
+.tab-button.active {
+    background-color: #fff;
+    border-color: #bbb #bbb #fff;
+    color: #222;
+    font-weight: 600;
+    box-shadow: inset 0 2px #5795ce;
+}
+
+.tab-button:focus-visible {
+    outline: 2px solid #5795ce;
+    outline-offset: 1px;
+}
+
+.tab-content {
+    display: none;
+    flex-grow: 1;
+    min-height: 0;
+    overflow: auto;
+}
+
+.tab-content.active {
+    display: flex; /* Use flexbox for active tab content */
+    flex-direction: column;
+}
+
+#instructions-tab-content {
+    overflow-y: auto;
+    flex-shrink: 1;
+}
+
+#terminal {
+    flex-grow: 1; /* Allow terminal to grow and fill space */
+    overflow: hidden; /* Let xterm handle scrolling */
+}
+
+#vm-tab-content {
+    min-height: 0;
+    overflow: hidden;
+}
+
+#vm-boot-button {
+    flex-shrink: 0;
+    margin-left: auto;
+    margin-right: 0;
+}
+
+#vm-terminal {
+    min-height: 0;
+    flex-grow: 1;
+    overflow: hidden;
+}
+
+pre {
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    background-color: #f0f0f0;
+    padding: 10px;
+    border-radius: 4px;
+    border: 1px solid #ddd;
+}
+
+#status {
+    flex-shrink: 0;
+    margin-inline: 10px;
+    color: #555;
+}
+
+#editor-pane .cm-editor {
+    height: 100%;
+}
+
+#editor-pane .cm-scroller {
+    overflow: auto;
+}

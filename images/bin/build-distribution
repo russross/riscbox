@@ -28,6 +28,15 @@ done
 make -C "$ROOT_DIR" splitimg
 make -C "$ROOT_DIR" rust-wasm
 
+if [ -d "$image_dir/ui" ]; then
+    if [ ! -d "$image_dir/ui/node_modules" ] || \
+        [ "$image_dir/ui/package-lock.json" -nt "$image_dir/ui/node_modules/.package-lock.json" ]; then
+        npm --prefix "$image_dir/ui" ci
+    fi
+    npm --prefix "$image_dir/ui" run check
+    npm --prefix "$image_dir/ui" run build
+fi
+
 stage_dir=$(mktemp -d "$image_dir/build/dist.XXXXXX")
 cleanup() {
     rm -rf "$stage_dir"
@@ -50,10 +59,14 @@ install -m 644 "$IMAGES_DIR/web/index.html" "$stage_dir/index.html"
 if [ -d "$image_dir/web" ]; then
     cp -R "$image_dir/web/." "$stage_dir/"
 fi
+if [ -f "$image_dir/build/ui/bundle.js" ]; then
+    install -m 644 "$image_dir/build/ui/bundle.js" "$stage_dir/bundle.js"
+fi
 if [ -d "$image_dir/examples" ]; then
     cp -R "$image_dir/examples" "$stage_dir/examples"
 fi
-if grep -R -q 'p9\.js' "$stage_dir" --include='*.html' --include='*.js'; then
+if grep -R -q 'p9\.js' "$stage_dir" --include='*.html' --include='*.js' \
+    --exclude='bundle.js'; then
     install -m 644 "$ROOT_DIR/js/p9.js" "$stage_dir/p9.js"
     install -m 644 "$ROOT_DIR/js/p9.d.ts" "$stage_dir/p9.d.ts"
 fi

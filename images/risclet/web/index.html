@@ -1,17 +1,35 @@
-<!doctype html>
-<html lang="en"><head>
-  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Risclet examples</title><link rel="stylesheet" href="./style.css">
-</head><body>
-  <header><label for="example">Example</label><select id="example"></select><span id="status" role="status">Loading example…</span></header>
-  <main>
-    <nav id="files" aria-label="Example files"></nav>
-    <section id="editor-pane" aria-label="Editor"><div class="pane-title" id="editor-title">Select a file</div><textarea id="editor" spellcheck="false" disabled></textarea></section>
-    <section id="info-pane">
-      <div id="tabs" role="tablist"><button id="instructions-tab" role="tab" aria-controls="instructions" aria-selected="true">Instructions</button><button id="vm-tab" role="tab" aria-controls="vm" aria-selected="false">VM</button></div>
-      <article id="instructions" role="tabpanel" aria-labelledby="instructions-tab"></article>
-      <div id="vm" role="tabpanel" aria-labelledby="vm-tab" hidden><pre id="terminal" tabindex="0" aria-label="Virtual machine console"></pre></div>
-    </section>
-  </main>
-  <script src="./riscbox.js"></script><script type="module" src="./app.js"></script>
-</body></html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Risclet examples</title>
+    <link rel="icon" href="favicon.svg" type="image/svg+xml">
+    <script src="riscbox.js"></script>
+    <script src="bundle.js"></script>
+</head>
+<body>
+    <div id="menu-bar">
+        <div id="menu-items"></div>
+        <span id="status" role="status">Loading examples…</span>
+        <button id="vm-boot-button" type="button" hidden>Boot VM</button>
+    </div>
+    <div id="main-content">
+        <div id="file-tree-pane" class="pane"></div>
+        <div id="editor-pane" class="pane"></div>
+        <div id="info-pane" class="pane">
+            <div id="info-tabs">
+                <button id="instructions-tab-button" class="tab-button active">Instructions</button>
+                <button id="vm-tab-button" class="tab-button">VM</button>
+            </div>
+            <div id="info-content">
+                <div id="instructions-tab-content" class="tab-content active"></div>
+                <div id="vm-tab-content" class="tab-content">
+                    <div id="vm-terminal"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <link rel="stylesheet" href="style.css">
+</body>
+</html>

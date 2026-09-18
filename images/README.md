@@ -32,7 +32,10 @@ The browser Risclet application loads its workspaces from the tracked
 the files copied into its in-memory 9p tree. The distribution builder copies
 the complete directory, including dotfiles and documentation, to
 `dist/examples/`. The application is entirely static and needs only an HTTP
-server; it does not use an RPC service.
+server; it does not use an RPC service. Its TypeScript source and locked npm
+dependencies live under `risclet/ui/`. The distribution build installs them
+when needed, runs the type checker, and bundles the CodeMirror, xterm.js,
+Split.js, and CommonMark frontend into `dist/bundle.js`.
 
 Shared artifacts are kept under `images/build/`; per-image work and output are
 kept under that image's `build/` and `dist/`. None is tracked. The Alpine

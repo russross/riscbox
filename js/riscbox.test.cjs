@@ -17,6 +17,7 @@ function fakeModule() {
         riscbox_free(ptr, length) {
             calls.push(["free", ptr, length]);
         },
+        riscbox_next_action() { return 0; },
     };
     for (const name of [
         "start", "console_input", "console_resize", "key_event", "pointer_event",
@@ -40,6 +41,33 @@ test("adapter copies host input into WASM memory and releases it", () => {
     assert.deepEqual(fake.calls[1], ["free", 1024, 3]);
 });
 
+test("HTTP actions complete requests and continue draining startup", async () => {
+    const fake = fakeModule();
+    const url = Buffer.from("https://host/vm.cfg");
+    new Uint8Array(fake.exports.memory.buffer, 64, url.length).set(url);
+    const actions = [1, 0, 2, 0];
+    fake.exports.riscbox_next_action = () => actions.shift();
+    fake.exports.riscbox_action_value = () => 17;
+    fake.exports.riscbox_action_data_address = () => 64;
+    fake.exports.riscbox_action_data_length = () => url.length;
+    fake.exports.riscbox_http_complete = (...args) => {
+        fake.calls.push(["http_complete", ...args]);
+        return 0;
+    };
+    let started = 0;
+    const runtime = new Riscbox(fake.exports, {
+        fetch: async (requestUrl) => {
+            assert.equal(requestUrl, "https://host/vm.cfg");
+            return { status: 200, arrayBuffer: async () => Uint8Array.of(1, 2).buffer };
+        },
+        onVmStarted: () => started++,
+    });
+    runtime.drainActions();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(fake.calls.find((call) => call[0] === "http_complete")[1], 17);
+    assert.equal(started, 1);
+});
+
 test("host imports copy output and validate memory ranges", () => {
     const output = [];
     const host = Riscbox.hostImports({
@@ -54,6 +82,40 @@ test("host imports copy output and validate memory ranges", () => {
     assert.equal(output[0], "hello");
     assert.deepEqual(output[1], Uint8Array.of(104, 101, 108));
     assert.throws(() => runtime.bytes(65535, 2), RangeError);
+});
+
+test("9p host import invokes the configured server and copies its reply", () => {
+    let request;
+    let capacity;
+    const host = Riscbox.hostImports({
+        p9Server: {
+            request(bytes, replyCapacity) {
+                request = bytes;
+                capacity = replyCapacity;
+                return Uint8Array.of(7, 0, 0, 0, 101, 3, 0);
+            },
+        },
+    });
+    const fake = fakeModule();
+    const runtime = host.attach(fake.exports);
+    new Uint8Array(fake.exports.memory.buffer, 32, 7)
+        .set(Uint8Array.of(7, 0, 0, 0, 100, 3, 0));
+    assert.equal(host.imports.p9_request(32, 7, 64, 128), 7);
+    assert.deepEqual(request, Uint8Array.of(7, 0, 0, 0, 100, 3, 0));
+    assert.equal(capacity, 128);
+    assert.deepEqual(runtime.bytes(64, 7), Uint8Array.of(7, 0, 0, 0, 101, 3, 0));
+});
+
+test("9p host import rejects absent and oversized server replies", () => {
+    const missing = Riscbox.hostImports();
+    missing.attach(fakeModule().exports);
+    assert.equal(missing.imports.p9_request(0, 0, 0, 8), -5);
+
+    const oversized = Riscbox.hostImports({
+        p9Server: { request: () => new Uint8Array(9) },
+    });
+    oversized.attach(fakeModule().exports);
+    assert.equal(oversized.imports.p9_request(0, 0, 0, 8), -71);
 });
 
 test("host scheduling delegates exactly once", () => {

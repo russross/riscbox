@@ -1,0 +1,179 @@
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use riscbox::browser::BrowserController;
+use riscbox::browser_runtime::{
+    BrowserRuntime, CallbackNineP, HostAction, RuntimeError, RuntimeStart,
+};
+use riscbox::virtio_devices::{DeviceError, NinePBackend};
+
+fn start() -> RuntimeStart {
+    RuntimeStart {
+        config_url: "https://host/vm/riscbox.cfg".into(),
+        ram_mib: 32,
+        command_line: "quiet".into(),
+        width: 0,
+        height: 0,
+        has_network: false,
+    }
+}
+
+fn request(runtime: &mut BrowserRuntime) -> (u32, String) {
+    let Some(HostAction::Request(request)) = runtime.next_action() else {
+        panic!("expected HTTP request");
+    };
+    (request.id, request.url)
+}
+
+#[test]
+fn configuration_and_boot_assets_load_in_dependency_order() {
+    let mut runtime = BrowserRuntime::default();
+    runtime.start(start()).expect("start");
+    let (config_id, url) = request(&mut runtime);
+    assert_eq!(url, "https://host/vm/riscbox.cfg");
+
+    runtime
+        .complete_http(
+            config_id,
+            200,
+            br#"{version:1,machine:"riscv64",memory_size:128,bios:"fw.bin",kernel:"linux",initrd:"initrd.img",console:"uart"}"#.to_vec(),
+        )
+        .expect("configuration");
+    let (firmware_id, url) = request(&mut runtime);
+    assert_eq!(url, "https://host/vm/fw.bin");
+    runtime
+        .complete_http(firmware_id, 200, vec![0; 64])
+        .expect("firmware");
+    let (kernel_id, url) = request(&mut runtime);
+    assert_eq!(url, "https://host/vm/linux");
+    runtime
+        .complete_http(kernel_id, 200, vec![0; 64])
+        .expect("kernel");
+    let (initrd_id, url) = request(&mut runtime);
+    assert_eq!(url, "https://host/vm/initrd.img");
+    runtime
+        .complete_http(initrd_id, 200, vec![0; 64])
+        .expect("initrd");
+
+    assert!(runtime.is_running());
+    assert_eq!(runtime.next_action(), Some(HostAction::Started));
+    assert_eq!(runtime.next_action(), Some(HostAction::Schedule(0)));
+}
+
+#[test]
+fn responses_must_match_the_single_pending_request() {
+    let mut runtime = BrowserRuntime::default();
+    runtime.start(start()).expect("start");
+    let (config_id, _) = request(&mut runtime);
+    assert_eq!(
+        runtime.complete_http(config_id + 1, 200, Vec::new()),
+        Err(RuntimeError::UnexpectedResponse(config_id + 1))
+    );
+    assert_eq!(
+        runtime.complete_http(config_id, 404, Vec::new()),
+        Err(RuntimeError::HttpStatus(404))
+    );
+}
+
+#[test]
+fn run_delivers_queued_input_and_always_reschedules() {
+    let mut runtime = BrowserRuntime::default();
+    runtime.start(start()).expect("start");
+    let (config_id, _) = request(&mut runtime);
+    runtime
+        .complete_http(
+            config_id,
+            200,
+            br#"{version:1,machine:"riscv64",memory_size:32,bios:"fw.bin",console:"uart"}"#
+                .to_vec(),
+        )
+        .expect("configuration");
+    let (firmware_id, _) = request(&mut runtime);
+    runtime
+        .complete_http(firmware_id, 200, vec![0; 64])
+        .expect("firmware");
+    assert_eq!(runtime.next_action(), Some(HostAction::Started));
+    assert_eq!(runtime.next_action(), Some(HostAction::Schedule(0)));
+
+    let mut controller = BrowserController::default();
+    assert_eq!(controller.queue_console(b"x"), 1);
+    runtime.run(&mut controller, 0, 0).expect("execution slice");
+    assert_eq!(runtime.next_action(), Some(HostAction::Schedule(10)));
+}
+
+#[test]
+fn drive_manifest_precedes_machine_start_and_prefetch_requests_follow_it() {
+    let mut runtime = BrowserRuntime::default();
+    runtime.start(start()).expect("start");
+    let (config_id, _) = request(&mut runtime);
+    runtime
+        .complete_http(
+            config_id,
+            200,
+            br#"{version:1,machine:"riscv64",memory_size:32,bios:"fw.bin",drive0:{file:"disk/blk.txt"},console:"uart"}"#.to_vec(),
+        )
+        .expect("configuration");
+    let (firmware_id, _) = request(&mut runtime);
+    runtime
+        .complete_http(firmware_id, 200, vec![0; 64])
+        .expect("firmware");
+    let (manifest_id, url) = request(&mut runtime);
+    assert_eq!(url, "https://host/vm/disk/blk.txt");
+    runtime
+        .complete_http(
+            manifest_id,
+            200,
+            br"{block_size:1,n_block:2,prefetch:[1]}".to_vec(),
+        )
+        .expect("manifest");
+    assert_eq!(runtime.next_action(), Some(HostAction::Started));
+    assert_eq!(runtime.next_action(), Some(HostAction::Schedule(0)));
+    let (_, url) = request(&mut runtime);
+    assert_eq!(url, "https://host/vm/disk/blk000000001.bin");
+}
+
+#[test]
+fn javascript_9p_callback_is_installed_while_file_backends_remain_unsupported() {
+    let callback = Rc::new(RefCell::new(|request: &[u8]| {
+        let mut reply = request.to_vec();
+        reply[4] = reply[4].wrapping_add(1);
+        Ok::<_, DeviceError>(reply)
+    }));
+    let mut backend = CallbackNineP::new(callback.clone());
+    let message = [7, 0, 0, 0, 100, 1, 0];
+    assert_eq!(backend.transact(&message).expect("callback reply")[4], 101);
+
+    let mut runtime = BrowserRuntime::default();
+    runtime.set_ninep_callback(callback);
+    runtime.start(start()).expect("start");
+    let (config_id, _) = request(&mut runtime);
+    runtime
+        .complete_http(
+            config_id,
+            200,
+            br#"{version:1,machine:"riscv64",memory_size:32,bios:"fw.bin",console:"uart",fs0:{js9p:true,tag:"shared"}}"#.to_vec(),
+        )
+        .expect("JavaScript 9p configuration");
+    let (firmware_id, _) = request(&mut runtime);
+    runtime
+        .complete_http(firmware_id, 200, vec![0; 64])
+        .expect("firmware");
+    assert!(runtime.is_running());
+
+    let mut unsupported = BrowserRuntime::default();
+    unsupported.start(start()).expect("start");
+    let (config_id, _) = request(&mut unsupported);
+    unsupported
+        .complete_http(
+            config_id,
+            200,
+            br#"{version:1,machine:"riscv64",memory_size:32,bios:"fw.bin",fs0:{file:"root"}}"#
+                .to_vec(),
+        )
+        .expect("configuration");
+    let (firmware_id, _) = request(&mut unsupported);
+    assert_eq!(
+        unsupported.complete_http(firmware_id, 200, vec![0; 64]),
+        Err(RuntimeError::Unsupported("file and socket 9p filesystems"))
+    );
+}

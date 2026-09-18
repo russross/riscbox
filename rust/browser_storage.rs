@@ -5,7 +5,7 @@ use std::fmt;
 
 use crate::config::{Value, parse_value};
 use crate::crypto::{CryptoError, decrypt_legacy_file};
-use crate::virtio_devices::{BlockBackend, DeviceError};
+use crate::virtio_devices::{BlockBackend, BlockRequestStatus, DeviceError};
 
 const SECTOR_SIZE: usize = 512;
 const CLUSTER_SIZE: usize = 4096;
@@ -303,6 +303,30 @@ impl BlockBackend for HttpBlockStore {
     fn write(&mut self, sector: u64, data: &[u8]) -> Result<(), DeviceError> {
         self.write_sectors(sector, data)
             .map_err(|_| DeviceError::Backend)
+    }
+
+    fn read_request(
+        &mut self,
+        sector: u64,
+        data: &mut [u8],
+    ) -> Result<BlockRequestStatus, DeviceError> {
+        match self.read_sectors(sector, data) {
+            Ok(()) => Ok(BlockRequestStatus::Complete),
+            Err(StorageError::MissingBlock(_)) => Ok(BlockRequestStatus::Pending),
+            Err(_) => Err(DeviceError::Backend),
+        }
+    }
+
+    fn write_request(
+        &mut self,
+        sector: u64,
+        data: &[u8],
+    ) -> Result<BlockRequestStatus, DeviceError> {
+        match self.write_sectors(sector, data) {
+            Ok(()) => Ok(BlockRequestStatus::Complete),
+            Err(StorageError::MissingBlock(_)) => Ok(BlockRequestStatus::Pending),
+            Err(_) => Err(DeviceError::Backend),
+        }
     }
 }
 

@@ -2,6 +2,7 @@
 
 use core::fmt;
 
+use crate::browser_storage::{HttpBlockStore, HttpRequest, StorageError};
 use crate::cpu::{BusError, Cpu, CpuBus, MIP_MEIP, MIP_MSIP, MIP_MTIP, MIP_SEIP, RunOutcome};
 use crate::fdt::{FdtConfig, FramebufferDescription, build as build_fdt};
 use crate::memory::{
@@ -77,6 +78,7 @@ pub enum MachineError {
     Virtio(DeviceError),
     VirtioSlotLimit,
     WrongVirtioDevice,
+    Storage(StorageError),
 }
 
 impl fmt::Display for MachineError {
@@ -98,6 +100,7 @@ impl fmt::Display for MachineError {
             Self::WrongVirtioDevice => {
                 formatter.write_str("`VirtIO` slot has the wrong device type")
             }
+            Self::Storage(error) => error.fmt(formatter),
         }
     }
 }
@@ -116,6 +119,12 @@ impl From<DeviceError> for MachineError {
     }
 }
 
+impl From<StorageError> for MachineError {
+    fn from(value: StorageError) -> Self {
+        Self::Storage(value)
+    }
+}
+
 #[derive(Clone, Debug)]
 struct Framebuffer {
     region: RegionId,
@@ -126,11 +135,13 @@ struct Framebuffer {
 }
 
 type DynBlock = VirtioMmioDevice<BlockDevice<Box<dyn BlockBackend>>>;
+type HttpBlock = VirtioMmioDevice<BlockDevice<HttpBlockStore>>;
 type DynNetwork = VirtioMmioDevice<NetworkDevice<Box<dyn NetworkBackend>>>;
 type DynNineP = VirtioMmioDevice<NinePDevice<Box<dyn NinePBackend>>>;
 
 enum VirtioSlot {
     Block(DynBlock),
+    HttpBlock(HttpBlock),
     Console(VirtioMmioDevice<ConsoleDevice>),
     Network(DynNetwork),
     NineP(DynNineP),
@@ -141,6 +152,7 @@ impl VirtioSlot {
     fn read(&self, offset: u32, width: AccessWidth) -> u32 {
         match self {
             Self::Block(device) => device.read(offset, width),
+            Self::HttpBlock(device) => device.read(offset, width),
             Self::Console(device) => device.read(offset, width),
             Self::Network(device) => device.read(offset, width),
             Self::NineP(device) => device.read(offset, width),
@@ -157,6 +169,7 @@ impl VirtioSlot {
     ) -> Result<(), DeviceError> {
         match self {
             Self::Block(device) => device.write(memory, offset, value, width),
+            Self::HttpBlock(device) => device.write(memory, offset, value, width),
             Self::Console(device) => device.write(memory, offset, value, width),
             Self::Network(device) => device.write(memory, offset, value, width),
             Self::NineP(device) => device.write(memory, offset, value, width),
@@ -167,6 +180,7 @@ impl VirtioSlot {
     fn irq(&self) -> bool {
         match self {
             Self::Block(device) => device.transport.irq(),
+            Self::HttpBlock(device) => device.transport.irq(),
             Self::Console(device) => device.transport.irq(),
             Self::Network(device) => device.transport.irq(),
             Self::NineP(device) => device.transport.irq(),
@@ -261,12 +275,15 @@ impl PlatformBus {
                     .read(offset(address, RTC_BASE)?, self.host_nanoseconds),
             )
         } else if (CLINT_BASE..CLINT_BASE + 0x1_0000).contains(&address)
-            && width == AccessWidth::Word
+            && matches!(width, AccessWidth::Word | AccessWidth::DoubleWord)
         {
-            u64::from(
-                self.clint
-                    .read(offset(address, CLINT_BASE)?, self.timer_ticks),
-            )
+            let device_offset = offset(address, CLINT_BASE)?;
+            let low = u64::from(self.clint.read(device_offset, self.timer_ticks));
+            if width == AccessWidth::DoubleWord {
+                low | (u64::from(self.clint.read(device_offset + 4, self.timer_ticks)) << 32)
+            } else {
+                low
+            }
         } else if (PLIC_BASE..PLIC_BASE + 0x400_0000).contains(&address)
             && width == AccessWidth::Word
         {
@@ -293,9 +310,13 @@ impl PlatformBus {
             self.rtc
                 .write(offset(address, RTC_BASE)?, value32, self.host_nanoseconds);
         } else if (CLINT_BASE..CLINT_BASE + 0x1_0000).contains(&address)
-            && width == AccessWidth::Word
+            && matches!(width, AccessWidth::Word | AccessWidth::DoubleWord)
         {
-            self.clint.write(offset(address, CLINT_BASE)?, value32);
+            let device_offset = offset(address, CLINT_BASE)?;
+            self.clint.write(device_offset, value32);
+            if width == AccessWidth::DoubleWord {
+                self.clint.write(device_offset + 4, (value >> 32) as u32);
+            }
         } else if (PLIC_BASE..PLIC_BASE + 0x400_0000).contains(&address)
             && width == AccessWidth::Word
         {
@@ -387,6 +408,22 @@ impl Machine {
         id: [u8; 20],
     ) -> Result<usize, MachineError> {
         self.add_virtio(VirtioSlot::Block(VirtioMmioDevice::new(
+            VirtioTransport::new(2, 0, &[16]),
+            BlockDevice::new(backend, id),
+        )))
+    }
+
+    /// Adds an asynchronous HTTP-backed block device and returns its MMIO slot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error after the 32 available PLIC sources are exhausted.
+    pub fn add_http_block_device(
+        &mut self,
+        backend: HttpBlockStore,
+        id: [u8; 20],
+    ) -> Result<usize, MachineError> {
+        self.add_virtio(VirtioSlot::HttpBlock(VirtioMmioDevice::new(
             VirtioTransport::new(2, 0, &[16]),
             BlockDevice::new(backend, id),
         )))
@@ -656,6 +693,50 @@ impl Machine {
             return Err(MachineError::WrongVirtioDevice);
         };
         Ok(core::mem::take(&mut device.device.output))
+    }
+
+    /// Removes the next HTTP request queued by a block device.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid slot or wrong device type.
+    pub fn next_http_block_request(
+        &mut self,
+        slot: usize,
+    ) -> Result<Option<HttpRequest>, MachineError> {
+        let VirtioSlot::HttpBlock(device) = self
+            .bus
+            .virtio
+            .get_mut(slot)
+            .ok_or(MachineError::WrongVirtioDevice)?
+        else {
+            return Err(MachineError::WrongVirtioDevice);
+        };
+        Ok(device.device.backend_mut().next_request())
+    }
+
+    /// Supplies one HTTP block response and resumes its pending guest request.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid slot, response, device request, or queue.
+    pub fn complete_http_block_request(
+        &mut self,
+        slot: usize,
+        request: u32,
+        data: Vec<u8>,
+    ) -> Result<(), MachineError> {
+        let PlatformBus { memory, virtio, .. } = &mut self.bus;
+        let VirtioSlot::HttpBlock(device) = virtio
+            .get_mut(slot)
+            .ok_or(MachineError::WrongVirtioDevice)?
+        else {
+            return Err(MachineError::WrongVirtioDevice);
+        };
+        device.device.backend_mut().complete(request, data)?;
+        device.device.resume(&mut device.transport, memory)?;
+        self.bus.update_device_irqs();
+        Ok(())
     }
 
     /// Updates a `VirtIO` console's reported dimensions.

@@ -3,6 +3,7 @@
 use std::cell::RefCell;
 
 use crate::browser::BrowserController;
+use crate::browser_runtime::{BrowserRuntime, HostAction, NinePCallback, RuntimeStart};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StartRequest {
@@ -20,10 +21,16 @@ struct AbiState {
     allocations: Vec<Box<[u8]>>,
     controller: BrowserController,
     start: Option<StartRequest>,
+    runtime: BrowserRuntime,
+    action: Option<HostAction>,
 }
 
 thread_local! {
     static STATE: RefCell<AbiState> = RefCell::new(AbiState::default());
+}
+
+pub fn set_ninep_callback(callback: NinePCallback) {
+    STATE.with_borrow_mut(|state| state.runtime.set_ninep_callback(callback));
 }
 
 #[must_use]
@@ -81,6 +88,14 @@ pub extern "C" fn riscbox_start(
         if config_url.is_empty() || ram_mib == 0 {
             return -1;
         }
+        let request = RuntimeStart {
+            config_url: config_url.clone(),
+            ram_mib,
+            command_line: command_line.clone(),
+            width,
+            height,
+            has_network: has_network != 0,
+        };
         state.start = Some(StartRequest {
             config_url,
             ram_mib,
@@ -90,7 +105,11 @@ pub extern "C" fn riscbox_start(
             height,
             has_network: has_network != 0,
         });
-        0
+        if state.runtime.start(request).is_err() {
+            -1
+        } else {
+            0
+        }
     })
 }
 
@@ -151,7 +170,82 @@ pub extern "C" fn riscbox_network_carrier(up: u32) -> i32 {
     0
 }
 
-pub extern "C" fn riscbox_run() {}
+#[must_use]
+pub extern "C" fn riscbox_run(now_milliseconds: u32) -> i32 {
+    STATE.with_borrow_mut(|state| {
+        let milliseconds = u64::from(now_milliseconds);
+        let AbiState {
+            runtime,
+            controller,
+            ..
+        } = state;
+        runtime
+            .run(
+                controller,
+                milliseconds.saturating_mul(10_000),
+                milliseconds.saturating_mul(1_000_000),
+            )
+            .map_or(-1, |()| 0)
+    })
+}
+
+#[must_use]
+pub extern "C" fn riscbox_next_action() -> u32 {
+    STATE.with_borrow_mut(|state| {
+        state.action = state.runtime.next_action();
+        match state.action {
+            Some(HostAction::Request(_)) => 1,
+            Some(HostAction::Started) => 2,
+            Some(HostAction::Console(_)) => 3,
+            Some(HostAction::Network(_)) => 4,
+            Some(HostAction::Schedule(_)) => 5,
+            None => 0,
+        }
+    })
+}
+
+#[must_use]
+pub extern "C" fn riscbox_action_value() -> u32 {
+    STATE.with_borrow(|state| match state.action.as_ref() {
+        Some(HostAction::Request(request)) => request.id,
+        Some(HostAction::Schedule(delay)) => *delay,
+        _ => 0,
+    })
+}
+
+#[must_use]
+pub extern "C" fn riscbox_action_data_address() -> u32 {
+    STATE.with_borrow(|state| {
+        action_bytes(state.action.as_ref())
+            .and_then(|bytes| u32::try_from(bytes.as_ptr() as usize).ok())
+            .unwrap_or(0)
+    })
+}
+
+#[must_use]
+pub extern "C" fn riscbox_action_data_length() -> u32 {
+    STATE.with_borrow(|state| {
+        action_bytes(state.action.as_ref())
+            .and_then(|bytes| u32::try_from(bytes.len()).ok())
+            .unwrap_or(0)
+    })
+}
+
+#[must_use]
+pub extern "C" fn riscbox_http_complete(id: u32, status: u32, address: u32, length: u32) -> i32 {
+    let Ok(status) = u16::try_from(status) else {
+        return -1;
+    };
+    STATE.with_borrow_mut(|state| {
+        let Some(bytes) = allocated_bytes(state, address, length).map(<[u8]>::to_vec) else {
+            return -1;
+        };
+        state
+            .runtime
+            .complete_http(id, status, bytes)
+            .map_or(-1, |()| 0)
+    })
+}
 
 #[must_use]
 pub fn take_start_request() -> Option<StartRequest> {
@@ -175,4 +269,12 @@ fn allocated_string(state: &AbiState, address: u32, length: u32) -> Option<Strin
         return Some(String::new());
     }
     String::from_utf8(allocated_bytes(state, address, length)?.to_vec()).ok()
+}
+
+fn action_bytes(action: Option<&HostAction>) -> Option<&[u8]> {
+    match action? {
+        HostAction::Request(request) => Some(request.url.as_bytes()),
+        HostAction::Console(bytes) | HostAction::Network(bytes) => Some(bytes),
+        HostAction::Started | HostAction::Schedule(_) => None,
+    }
 }

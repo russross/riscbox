@@ -24,7 +24,7 @@
                     if (options.schedule)
                         options.schedule(milliseconds);
                     else
-                        setTimeout(() => runtime.exports.riscbox_run?.(), milliseconds);
+                        setTimeout(() => runtime.run(), milliseconds);
                 },
                 console_write(ptr, len) {
                     const data = bytes(ptr, len);
@@ -38,6 +38,24 @@
                 },
                 network_write(ptr, len) {
                     options.networkWrite?.(bytes(ptr, len));
+                },
+                p9_request(requestPtr, requestLength, replyPtr, replyCapacity) {
+                    const server = options.p9Server;
+                    if (!server || typeof server.request !== "function")
+                        return -5;
+                    try {
+                        const reply = server.request(
+                            bytes(requestPtr, requestLength), replyCapacity,
+                        );
+                        if (!(reply instanceof Uint8Array) || reply.length > replyCapacity)
+                            return -71;
+                        new Uint8Array(runtime.exports.memory.buffer, replyPtr, reply.length)
+                            .set(reply);
+                        return reply.length;
+                    } catch (error) {
+                        options.onError?.(error);
+                        return -5;
+                    }
                 },
             };
             return {
@@ -86,7 +104,7 @@
 
         start(configUrl, ramMiB, commandLine = "", password = "", width = 0,
               height = 0, hasNetwork = false) {
-            return this.withBytes(configUrl, (urlPtr, urlLen) =>
+            const result = this.withBytes(configUrl, (urlPtr, urlLen) =>
                 this.withBytes(commandLine, (commandPtr, commandLen) =>
                     this.withBytes(password ?? "", (passwordPtr, passwordLen) =>
                         this.exports.riscbox_start(
@@ -94,6 +112,59 @@
                             passwordPtr, passwordLen, width, height,
                             hasNetwork ? 1 : 0,
                         ))));
+            this.drainActions();
+            return result;
+        }
+
+        run() {
+            const result = this.exports.riscbox_run?.(Date.now() >>> 0) ?? 0;
+            this.drainActions();
+            return result;
+        }
+
+        drainActions() {
+            if (!this.exports.riscbox_next_action)
+                return;
+            for (;;) {
+                const kind = this.exports.riscbox_next_action();
+                if (kind === 0)
+                    return;
+                const value = this.exports.riscbox_action_value();
+                const ptr = this.exports.riscbox_action_data_address();
+                const len = this.exports.riscbox_action_data_length();
+                if (kind === 1) {
+                    const url = decoder.decode(this.bytes(ptr, len));
+                    const fetchRequest = this.options.fetch ?? globalThis.fetch;
+                    if (typeof fetchRequest !== "function")
+                        throw new Error("Riscbox HTTP fetch is not available");
+                    Promise.resolve(fetchRequest(url)).then(async (response) => {
+                        const data = new Uint8Array(await response.arrayBuffer());
+                        const status = response.status ?? 200;
+                        this.withBytes(data, (dataPtr, dataLen) => {
+                            const result = this.exports.riscbox_http_complete(
+                                value, status, dataPtr, dataLen,
+                            );
+                            if (result !== 0)
+                                throw new Error(`Riscbox rejected HTTP response ${value}`);
+                        });
+                        this.drainActions();
+                    }).catch((error) => this.options.onError?.(error));
+                } else if (kind === 2) {
+                    this.options.onVmStarted?.();
+                } else if (kind === 3) {
+                    this.options.consoleWrite?.(decoder.decode(this.bytes(ptr, len)));
+                } else if (kind === 4) {
+                    this.options.networkWrite?.(this.bytes(ptr, len));
+                } else if (kind === 5) {
+                    const milliseconds = Math.max(0, value | 0);
+                    if (this.options.schedule)
+                        this.options.schedule(milliseconds);
+                    else
+                        setTimeout(() => this.run(), milliseconds);
+                } else {
+                    throw new Error(`unknown Riscbox host action ${kind}`);
+                }
+            }
         }
 
         consoleInput(data) {

@@ -8,7 +8,7 @@ Files
 -----
 
 *   `index.html` is the supplied browser integration.
-*   `riscbox-wasm.js` and `riscbox-wasm.wasm` are the emulator runtime.
+*   `riscbox.js` and `riscbox.wasm` are the emulator runtime.
 *   `riscbox.cfg` describes the virtual machine. Boot paths are relative to
     this file.
 *   `riscbox-native.cfg` is the native equivalent when included. It selects
@@ -95,17 +95,19 @@ backend with `driver: "tap"` and `ifname`.
 9p file sharing
 ---------------
 
-A browser-backed filesystem uses `js9p: true`. Before starting the VM, set
-`Module.p9Server` to a synchronous object with a
+A browser-backed filesystem uses `js9p: true`. When instantiating the runtime,
+pass `p9Server` as a synchronous object with a
 `request(request, replyCapacity)` method. The supplied `p9.js` provides
 `Memory9PServer`:
 
 ```js
 import { Memory9PServer } from "./p9.js";
 
-Module.p9Server = new Memory9PServer({
+const p9Server = new Memory9PServer({
     "hello.txt": "shared with the guest\n",
 });
+
+const runtime = await Riscbox.instantiate(wasmBytes, { p9Server });
 ```
 
 Mount it in Linux with the same tag used by the configuration:
@@ -114,23 +116,22 @@ Mount it in Linux with the same tag used by the configuration:
 
 Native integrations may instead use `fsN: { file: "directory", tag: "shared" }`
 for a directory backend, or `fsN: { socket: "server.sock", tag: "shared" }`
-for a Unix-domain 9p server. Browser HTTP filesystems use a `file` manifest but
-are read-only from the server's perspective.
+for a Unix-domain 9p server. The Rust browser runtime accepts `js9p` backends;
+native file and socket backends remain part of the C reference implementation.
 
 Browser integration
 -------------------
 
-Define the host objects before loading `riscbox-wasm.js`:
+The supplied page loads `riscbox.js`, instantiates `riscbox.wasm`, and calls
+`runtime.start()` with the configuration URL. Custom integrations use the same
+small adapter:
 
-*   `Module.onRuntimeInitialized()` calls `Module.ccall("vm_start", ...)` with
-    the configuration URL. `Module.onVmStarted()` runs when devices are ready.
-*   `term.write(text)` receives console output and `term.getSize()` returns
-    `[columns, rows]`. Send input bytes with
-    `Module._console_queue_char(byte)` and notify size changes with
-    `Module._console_resize()`.
-*   `update_downloading(active)` reports asset fetch activity.
-*   `graphic_display` and `net_state` may be `null` when those devices are not
-    configured.
+*   Pass `consoleWrite`, `onVmStarted`, `onError`, `networkWrite`, and optional
+    scheduling callbacks to `Riscbox.instantiate()`.
+*   Send terminal bytes with `runtime.consoleInput(bytes)` and size changes with
+    `runtime.consoleResize(columns, rows)`.
+*   Forward keyboard, pointer, wheel, network packet, and carrier events through
+    the corresponding runtime methods.
 
 Native testing and updates
 --------------------------

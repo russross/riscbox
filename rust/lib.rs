@@ -2,6 +2,7 @@
 
 pub mod browser;
 pub mod browser_abi;
+pub mod browser_runtime;
 pub mod browser_storage;
 pub mod config;
 pub mod cpu;

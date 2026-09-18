@@ -27,9 +27,11 @@ Image builds also require the RISC-V cross compiler, QEMU system emulator,
 
     sudo apt install curl e2fsprogs gcc-riscv64-linux-gnu opensbi qemu-system-misc
 
-The WASM build requires Emscripten:
+The reference C WASM build requires Emscripten. The deployed Rust WASM build
+requires Rust and the `wasm32-unknown-unknown` target:
 
     sudo apt install emscripten
+    rustup target add wasm32-unknown-unknown
 
 
 Getting started
@@ -42,13 +44,14 @@ Clone and build the native emulator:
     make -j4
     ./riscbox --help
 
-There are three supported build targets:
+There are four supported build targets:
 
 | Target            | Output                                            | Use                                           |
 | ----------------- | ------------------------------------------------- | --------------------------------------------- |
 | `make release`    | `riscbox`, `splitimg`, `build_filelist`           | Fast native iteration; this is the default    |
 | `make debug`      | `riscbox-debug`                                   | Strict warnings, debug information, AddressSanitizer, and UndefinedBehaviorSanitizer |
-| `make wasm`       | `js/riscbox-wasm.js` and `js/riscbox-wasm.wasm`   | Browser deployment |
+| `make wasm`       | `js/riscbox-wasm.js` and `js/riscbox-wasm.wasm`   | Reference C browser build |
+| `make rust-wasm`  | `target/wasm32-unknown-unknown/release/riscbox_wasm.wasm` | Browser deployment |
 
 `make clean` removes all generated outputs. `make install` installs the native release programs under `/usr/local/bin` by default; set `DESTDIR` or `bindir` to stage them elsewhere.
 

@@ -1,6 +1,44 @@
 //! Stable raw WebAssembly exports for the handwritten browser adapter.
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use riscbox::browser_abi;
+use riscbox::virtio_devices::DeviceError;
+
+const P9_REPLY_CAPACITY: usize = 64 * 1024;
+
+#[cfg(target_arch = "wasm32")]
+#[link(wasm_import_module = "riscbox_host")]
+unsafe extern "C" {
+    fn p9_request(request: u32, request_length: u32, reply: u32, reply_capacity: u32) -> i32;
+}
+
+fn install_ninep_callback() {
+    browser_abi::set_ninep_callback(Rc::new(RefCell::new(|request_bytes: &[u8]| {
+        let mut reply = vec![0; P9_REPLY_CAPACITY];
+        #[cfg(target_arch = "wasm32")]
+        let length = unsafe {
+            p9_request(
+                request_bytes.as_ptr() as u32,
+                request_bytes.len() as u32,
+                reply.as_mut_ptr() as u32,
+                reply.len() as u32,
+            )
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        let length = {
+            let _ = request_bytes;
+            -1
+        };
+        let length = usize::try_from(length).map_err(|_| DeviceError::Backend)?;
+        if length > reply.len() {
+            return Err(DeviceError::Backend);
+        }
+        reply.truncate(length);
+        Ok(reply)
+    })));
+}
 
 #[unsafe(no_mangle)]
 pub extern "C" fn riscbox_alloc(length: u32) -> u32 {
@@ -25,6 +63,7 @@ pub extern "C" fn riscbox_start(
     height: u32,
     has_network: u32,
 ) -> i32 {
+    install_ninep_callback();
     browser_abi::riscbox_start(
         url_address,
         url_length,
@@ -75,6 +114,31 @@ pub extern "C" fn riscbox_network_carrier(up: u32) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn riscbox_run() {
-    browser_abi::riscbox_run();
+pub extern "C" fn riscbox_run(now_milliseconds: u32) -> i32 {
+    browser_abi::riscbox_run(now_milliseconds)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn riscbox_next_action() -> u32 {
+    browser_abi::riscbox_next_action()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn riscbox_action_value() -> u32 {
+    browser_abi::riscbox_action_value()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn riscbox_action_data_address() -> u32 {
+    browser_abi::riscbox_action_data_address()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn riscbox_action_data_length() -> u32 {
+    browser_abi::riscbox_action_data_length()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn riscbox_http_complete(id: u32, status: u32, address: u32, length: u32) -> i32 {
+    browser_abi::riscbox_http_complete(id, status, address, length)
 }

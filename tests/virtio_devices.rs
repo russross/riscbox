@@ -1,3 +1,4 @@
+use riscbox::browser_storage::HttpBlockStore;
 use riscbox::memory::{AccessWidth, GuestAddress, PhysicalMemory, RamFlags};
 use riscbox::virtio::VirtioTransport;
 use riscbox::virtio_devices::{
@@ -166,6 +167,70 @@ fn block_reads_writes_identification_and_unsupported_status() {
     assert_eq!(&memory.arena()[0x4100..0x4114], b"riscbox-disk-0000000");
     assert_eq!(memory.arena()[0x4114], 0);
     assert_eq!(device.read(0x100, AccessWidth::DoubleWord), 0); // MMIO only exposes up to words
+}
+
+#[test]
+fn http_block_read_waits_for_completion_before_updating_the_used_ring() {
+    let mut memory = test_memory();
+    let store = HttpBlockStore::from_manifest("images/disk.json", "{block_size:1,n_block:1}", 1024)
+        .expect("valid manifest");
+    let mut device = VirtioMmioDevice::new(
+        VirtioTransport::new(2, 0, &[8]),
+        BlockDevice::new(store, *b"riscbox-http-0000000"),
+    );
+    configure(&mut device, &mut memory, 0);
+    bytes(&mut memory, DATA, &[0; 16]);
+    descriptor(&mut memory, 0, DATA, 16, 1, 1);
+    descriptor(&mut memory, 1, DATA + 0x100, 513, 2, 0);
+    available(&mut memory, 0);
+
+    device
+        .write(&mut memory, 0x50, 0, AccessWidth::Word)
+        .expect("queue cache-missing request");
+    assert_eq!(
+        memory
+            .read(GuestAddress(USED + 2), AccessWidth::HalfWord)
+            .unwrap(),
+        0
+    );
+    let request = device
+        .device
+        .backend_mut()
+        .next_request()
+        .expect("HTTP request");
+    assert_eq!(request.url, "images/blk000000000.bin");
+
+    device
+        .write(&mut memory, 0x70, 0, AccessWidth::Word)
+        .expect("device reset");
+
+    device
+        .device
+        .backend_mut()
+        .complete(request.id, vec![0x6d; 1024])
+        .expect("HTTP completion");
+    device
+        .device
+        .resume(&mut device.transport, &mut memory)
+        .expect("discarded request stays idle");
+    assert_eq!(
+        memory
+            .read(GuestAddress(USED + 2), AccessWidth::HalfWord)
+            .unwrap(),
+        0
+    );
+    configure(&mut device, &mut memory, 0);
+    device
+        .write(&mut memory, 0x50, 0, AccessWidth::Word)
+        .expect("retry cached request");
+    assert_eq!(
+        memory
+            .read(GuestAddress(USED + 2), AccessWidth::HalfWord)
+            .unwrap(),
+        1
+    );
+    assert_eq!(&memory.arena()[0x4100..0x4300], &[0x6d; 512]);
+    assert_eq!(memory.arena()[0x4300], 0);
 }
 
 #[test]

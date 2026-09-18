@@ -26,7 +26,7 @@ for required_file in "$image_dir/riscbox.cfg" "$rootfs_image" \
 done
 
 make -C "$ROOT_DIR" splitimg
-make -C "$ROOT_DIR" -f Makefile.js
+make -C "$ROOT_DIR" rust-wasm
 
 stage_dir=$(mktemp -d "$image_dir/build/dist.XXXXXX")
 cleanup() {
@@ -38,8 +38,9 @@ mkdir -p "$stage_dir/drive"
 install -m 644 "$rootfs_image" "$stage_dir/rootfs.ext4"
 install -m 644 "$KERNEL_IMAGE" "$stage_dir/linux"
 install -m 644 "$OPENSBI" "$stage_dir/fw_jump.bin"
-install -m 644 "$ROOT_DIR/js/riscbox-wasm.js" "$stage_dir/riscbox-wasm.js"
-install -m 644 "$ROOT_DIR/js/riscbox-wasm.wasm" "$stage_dir/riscbox-wasm.wasm"
+install -m 644 "$ROOT_DIR/js/riscbox.js" "$stage_dir/riscbox.js"
+install -m 644 "$ROOT_DIR/target/wasm32-unknown-unknown/release/riscbox_wasm.wasm" \
+    "$stage_dir/riscbox.wasm"
 install -m 644 "$image_dir/riscbox.cfg" "$stage_dir/riscbox.cfg"
 if [ -f "$image_dir/riscbox-native.cfg" ]; then
     install -m 644 "$image_dir/riscbox-native.cfg" "$stage_dir/riscbox-native.cfg"

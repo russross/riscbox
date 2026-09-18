@@ -66,29 +66,32 @@ Milestones
 | Complete | Platform foundation | Reset path, FDT, CLINT, PLIC, UART, RTC, finisher, and framebuffer |
 | Complete | VirtIO devices | MMIO transport plus block, console, 9p, network, and input |
 | Complete | Browser services | Configuration, HTTP storage, encrypted filesystem support, JS adapter, and browser entry points |
-| Next | Complete-platform acceptance | Shared native/WASM suite, Chrome validation, xv6 user tests, and Alpine login/shutdown |
+| Complete | Complete-platform acceptance | Shared native/WASM suite, Chrome validation, xv6 user tests, and Alpine login/shutdown |
 
 Current status
 --------------
 
-The browser-services milestone is complete. Rust now parses the deployed
-relaxed configuration syntax into strong types, resolves relative assets,
-models browser events and scheduling, caches split HTTP block images with
-copy-on-write overlays, and supports the legacy AES-128-CBC encrypted-file and
-PBKDF2-HMAC-SHA256 formats. A small companion crate provides stable raw WASM
-exports without weakening the main crate's safe-Rust policy, and the
-dependency-free JavaScript adapter owns memory copies and compatibility entry
-points. Sanitizer-backed C and matching Rust tests cover configuration, path
-resolution, crypto vectors, malformed encrypted files, block manifests, cache
-misses, cross-block reads, and overlays. Node tests cover the adapter and the
-JavaScript 9p service. The tests also corrected a C configuration failure leak
-and undefined signed shifts in big-endian reads.
+The planned Rust port is complete through the browser integration boundary.
+The runtime loads configuration, boot images, and split HTTP disks through
+explicit request/completion queues; pending VirtIO block descriptors resume
+after their blocks arrive. The raw WASM ABI and dependency-free JavaScript
+adapter provide scheduling, console and device events, and synchronous browser
+9p service calls. Both supplied pages now load the Rust artifact, and the image
+distribution script packages it as `riscbox.wasm`.
 
-Rust 1.92, the `wasm32-unknown-unknown` standard library, Clang 19, Emscripten
-3.1.69, Node 20, and Chrome 152 were present when the port was initialized. The
-next milestone is complete-platform acceptance. It will connect asynchronous
-HTTP completions to pending VirtIO requests, replace the example page's
-Emscripten module with the Rust artifact, and validate xv6 and Alpine in Chrome.
+Focused native tests cover the complete machine and browser runtime. The
+release acceptance suite boots Alpine 3.24.1, logs in, and shuts down through
+the finisher, and runs current xv6 user tests over its UART and VirtIO block
+device. Chrome 152 boots the deployed Rust WASM Alpine image to its login
+prompt; the Risclet page starts with its in-memory JavaScript 9p service. Clean
+C release, sanitizer, and reference WASM builds remain compatibility checks;
+the Rust workspace, strict Clippy checks, WASM build, Node adapter tests, and
+the ignored full-guest acceptance tests are the port's validation surfaces.
+Run the full guests explicitly with:
+
+    cargo test --release --test platform_acceptance alpine_reaches_login_and_shuts_down -- --ignored
+    RISCBOX_XV6_KERNEL=/path/to/kernel.bin RISCBOX_XV6_DISK=/path/to/fs.img \
+        cargo test --release --test platform_acceptance xv6_boots_over_uart_and_passes_user_tests -- --ignored
 
 Decision log
 ------------
@@ -131,3 +134,9 @@ Decision log
     cipher/digest traits and buffers, HMAC, constant-time helpers, and fixed
     arrays; allocator, password-format, randomness, and zeroization features
     remain disabled.
+*   2026-09-18: Keep HTTP disk requests asynchronous through the machine and
+    VirtIO layers so browser fetches never block the interpreter. Resume the
+    retained descriptor chain only after the matching completion arrives.
+*   2026-09-18: Keep browser 9p synchronous at the existing JavaScript service
+    boundary. The WASM wrapper supplies a fixed reply buffer and rejects absent
+    servers, oversized replies, and backend errors without adding an executor.

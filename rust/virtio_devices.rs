@@ -32,6 +32,7 @@ impl From<QueueError> for DeviceError {
 pub trait VirtioDevice {
     fn read_config(&self, offset: u32, width: AccessWidth) -> u32;
     fn write_config(&mut self, offset: u32, value: u32, width: AccessWidth);
+    fn reset(&mut self) {}
     /// Services all available chains in the notified queue.
     ///
     /// # Errors
@@ -93,6 +94,9 @@ impl<D: VirtioDevice> VirtioMmioDevice<D> {
             self.device
                 .notify(&mut self.transport, memory, QueueIndex(queue))?;
         } else {
+            if offset == 0x070 && width == AccessWidth::Word && value == 0 {
+                self.device.reset();
+            }
             self.transport.write_mmio(offset, value, width);
         }
         Ok(())
@@ -113,6 +117,40 @@ pub trait BlockBackend {
     ///
     /// Returns `DeviceError::Backend` when host storage cannot be written.
     fn write(&mut self, sector: u64, data: &[u8]) -> Result<(), DeviceError>;
+
+    /// Starts a read which may remain pending on a host service.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DeviceError::Backend` when host storage cannot be read.
+    fn read_request(
+        &mut self,
+        sector: u64,
+        data: &mut [u8],
+    ) -> Result<BlockRequestStatus, DeviceError> {
+        self.read(sector, data)?;
+        Ok(BlockRequestStatus::Complete)
+    }
+
+    /// Starts a write which may remain pending on a host service.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DeviceError::Backend` when host storage cannot be written.
+    fn write_request(
+        &mut self,
+        sector: u64,
+        data: &[u8],
+    ) -> Result<BlockRequestStatus, DeviceError> {
+        self.write(sector, data)?;
+        Ok(BlockRequestStatus::Complete)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BlockRequestStatus {
+    Complete,
+    Pending,
 }
 
 impl<T: BlockBackend + ?Sized> BlockBackend for Box<T> {
@@ -125,19 +163,43 @@ impl<T: BlockBackend + ?Sized> BlockBackend for Box<T> {
     fn write(&mut self, sector: u64, data: &[u8]) -> Result<(), DeviceError> {
         (**self).write(sector, data)
     }
+
+    fn read_request(
+        &mut self,
+        sector: u64,
+        data: &mut [u8],
+    ) -> Result<BlockRequestStatus, DeviceError> {
+        (**self).read_request(sector, data)
+    }
+    fn write_request(
+        &mut self,
+        sector: u64,
+        data: &[u8],
+    ) -> Result<BlockRequestStatus, DeviceError> {
+        (**self).write_request(sector, data)
+    }
 }
 
 pub struct BlockDevice<B> {
     backend: B,
     id: [u8; 20],
+    pending: Option<(QueueIndex, DescriptorChain)>,
 }
 
 impl<B> BlockDevice<B> {
     pub const fn new(backend: B, id: [u8; 20]) -> Self {
-        Self { backend, id }
+        Self {
+            backend,
+            id,
+            pending: None,
+        }
     }
     pub fn backend(&self) -> &B {
         &self.backend
+    }
+
+    pub fn backend_mut(&mut self) -> &mut B {
+        &mut self.backend
     }
 }
 
@@ -146,27 +208,56 @@ impl<B: BlockBackend> VirtioDevice for BlockDevice<B> {
         config_u64(self.backend.capacity_sectors(), offset, width)
     }
     fn write_config(&mut self, _: u32, _: u32, _: AccessWidth) {}
+    fn reset(&mut self) {
+        self.pending = None;
+    }
     fn notify(
         &mut self,
         transport: &mut VirtioTransport,
         memory: &mut PhysicalMemory,
         queue: QueueIndex,
     ) -> Result<(), DeviceError> {
+        if self.pending.is_some() {
+            return Ok(());
+        }
         while let Some(chain) = transport.next_chain(memory, queue)? {
-            self.request(transport, memory, queue, &chain)?;
+            if self.request(transport, memory, queue, &chain)? == BlockRequestStatus::Pending {
+                self.pending = Some((queue, chain));
+                break;
+            }
         }
         Ok(())
     }
 }
 
 impl<B: BlockBackend> BlockDevice<B> {
+    /// Retries an outstanding request after its host operation has completed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a malformed request or queue.
+    pub fn resume(
+        &mut self,
+        transport: &mut VirtioTransport,
+        memory: &mut PhysicalMemory,
+    ) -> Result<(), DeviceError> {
+        let Some((queue, chain)) = self.pending.take() else {
+            return Ok(());
+        };
+        if self.request(transport, memory, queue, &chain)? == BlockRequestStatus::Pending {
+            self.pending = Some((queue, chain));
+            return Ok(());
+        }
+        self.notify(transport, memory, queue)
+    }
+
     fn request(
         &mut self,
         transport: &mut VirtioTransport,
         memory: &mut PhysicalMemory,
         queue: QueueIndex,
         chain: &DescriptorChain,
-    ) -> Result<(), DeviceError> {
+    ) -> Result<BlockRequestStatus, DeviceError> {
         if chain.readable < 16 || chain.writable < 1 {
             return Err(DeviceError::InvalidRequest);
         }
@@ -181,8 +272,10 @@ impl<B: BlockBackend> BlockDevice<B> {
                     usize::try_from(chain.writable - 1).map_err(|_| DeviceError::InvalidRequest)?;
                 self.validate_range(sector, len)?;
                 let mut data = vec![0; len];
-                if self.backend.read(sector, &mut data).is_err() {
-                    status = 1;
+                match self.backend.read_request(sector, &mut data) {
+                    Ok(BlockRequestStatus::Pending) => return Ok(BlockRequestStatus::Pending),
+                    Ok(BlockRequestStatus::Complete) => {}
+                    Err(_) => status = 1,
                 }
                 transport.write_chain(memory, chain, 0, &data)?;
                 u32::try_from(len).expect("descriptor length is u32") + 1
@@ -193,8 +286,10 @@ impl<B: BlockBackend> BlockDevice<B> {
                 self.validate_range(sector, len)?;
                 let mut data = vec![0; len];
                 transport.read_chain(memory, chain, 16, &mut data)?;
-                if self.backend.write(sector, &data).is_err() {
-                    status = 1;
+                match self.backend.write_request(sector, &data) {
+                    Ok(BlockRequestStatus::Pending) => return Ok(BlockRequestStatus::Pending),
+                    Ok(BlockRequestStatus::Complete) => {}
+                    Err(_) => status = 1,
                 }
                 1
             }
@@ -209,7 +304,7 @@ impl<B: BlockBackend> BlockDevice<B> {
         };
         transport.write_chain(memory, chain, written - 1, &[status])?;
         transport.complete_chain(memory, queue, chain, written)?;
-        Ok(())
+        Ok(BlockRequestStatus::Complete)
     }
 
     fn validate_range(&self, sector: u64, len: usize) -> Result<(), DeviceError> {

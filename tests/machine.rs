@@ -1,3 +1,4 @@
+use riscbox::browser_storage::HttpBlockStore;
 use riscbox::cpu::CpuBus;
 use riscbox::machine::{
     BootImages, FRAMEBUFFER_BASE, FramebufferConfig, Machine, MachineConfig, RAM_BASE,
@@ -41,6 +42,86 @@ fn virtio_slots_route_mmio_and_appear_in_the_device_tree() {
         .expect("FDT RAM");
     let node = b"virtio@10001000";
     assert!(tree.windows(node.len()).any(|window| window == node));
+}
+
+#[test]
+fn machine_routes_http_completions_back_to_a_pending_block_request() {
+    const DESC: u64 = RAM_BASE + 0x1000;
+    const AVAIL: u64 = RAM_BASE + 0x2000;
+    const USED: u64 = RAM_BASE + 0x3000;
+    const DATA: u64 = RAM_BASE + 0x4000;
+    const MMIO: u64 = 0x1000_1000;
+
+    let mut machine = machine(false);
+    let store = HttpBlockStore::from_manifest("disk.json", "{block_size:1,n_block:1}", 1024)
+        .expect("valid manifest");
+    let slot = machine
+        .add_http_block_device(store, *b"riscbox-http-0000000")
+        .expect("HTTP block slot");
+    for (register, address) in [(0x80, DESC), (0x90, AVAIL), (0xa0, USED)] {
+        machine
+            .bus_mut()
+            .write(
+                GuestAddress(MMIO + register),
+                AccessWidth::Word,
+                address & 0xffff_ffff,
+            )
+            .expect("low queue address");
+        machine
+            .bus_mut()
+            .write(
+                GuestAddress(MMIO + register + 4),
+                AccessWidth::Word,
+                address >> 32,
+            )
+            .expect("high queue address");
+    }
+    for (address, width, value) in [
+        (MMIO + 0x44, AccessWidth::Word, 1),
+        (MMIO + 0x70, AccessWidth::Word, 4),
+        (DESC, AccessWidth::DoubleWord, DATA),
+        (DESC + 8, AccessWidth::Word, 16),
+        (DESC + 12, AccessWidth::HalfWord, 1),
+        (DESC + 14, AccessWidth::HalfWord, 1),
+        (DESC + 16, AccessWidth::DoubleWord, DATA + 0x100),
+        (DESC + 24, AccessWidth::Word, 513),
+        (DESC + 28, AccessWidth::HalfWord, 2),
+        (AVAIL + 2, AccessWidth::HalfWord, 1),
+    ] {
+        machine
+            .bus_mut()
+            .write(GuestAddress(address), width, value)
+            .expect("queue setup");
+    }
+    machine
+        .bus_mut()
+        .write(GuestAddress(MMIO + 0x50), AccessWidth::Word, 0)
+        .expect("queue notify");
+    assert_eq!(
+        machine
+            .bus_mut()
+            .read(GuestAddress(USED + 2), AccessWidth::HalfWord)
+            .expect("used index"),
+        0
+    );
+    let request = machine
+        .next_http_block_request(slot)
+        .expect("HTTP block slot")
+        .expect("block request");
+    machine
+        .complete_http_block_request(slot, request.id, vec![0x37; 1024])
+        .expect("HTTP completion");
+    assert_eq!(
+        machine
+            .bus_mut()
+            .read(GuestAddress(USED + 2), AccessWidth::HalfWord)
+            .expect("used index"),
+        1
+    );
+    assert_eq!(
+        machine.read_ram(DATA + 0x100, 513).expect("block data"),
+        &[vec![0x37; 512], vec![0]].concat()
+    );
 }
 
 #[test]
@@ -101,6 +182,21 @@ fn bus_dispatches_uart_and_finisher_mmio() {
         .write(GuestAddress(0x10_0000), AccessWidth::Word, 0x5555)
         .expect("finisher write");
     assert_eq!(machine.finish_status(), FinishStatus::Passed);
+    machine
+        .bus_mut()
+        .write(
+            GuestAddress(0x0200_4000),
+            AccessWidth::DoubleWord,
+            0x1234_5678_9abc_def0,
+        )
+        .expect("64-bit CLINT time comparison write");
+    assert_eq!(
+        machine
+            .bus_mut()
+            .read(GuestAddress(0x0200_4000), AccessWidth::DoubleWord)
+            .expect("64-bit CLINT time comparison read"),
+        0x1234_5678_9abc_def0
+    );
 }
 
 #[test]

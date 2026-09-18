@@ -63,29 +63,29 @@ Milestones
 | Complete | CPU foundation | RV64I/M execution, traps, CSRs, privilege, counters, interrupts, PMP, and Sv39 |
 | Complete | Remaining integer ISA | Atomics, compressed instructions, and advertised scalar extensions |
 | Complete | SoftFP | Exact F/D arithmetic, conversions, rounding, flags, NaN boxing, and floating-point CSRs |
-| Next | Platform foundation | Reset path, FDT, CLINT, PLIC, UART, RTC, finisher, and framebuffer |
-| Pending | VirtIO devices | MMIO transport plus block, console, 9p, network, and input |
+| Complete | Platform foundation | Reset path, FDT, CLINT, PLIC, UART, RTC, finisher, and framebuffer |
+| Next | VirtIO devices | MMIO transport plus block, console, 9p, network, and input |
 | Pending | Browser services | Configuration, HTTP storage, encrypted filesystem support, JS adapter, and browser entry points |
 | Pending | Complete-platform acceptance | Shared native/WASM suite, Chrome validation, xv6 user tests, and Alpine login/shutdown |
 
 Current status
 --------------
 
-The SoftFP milestone is complete. Rust now implements binary32 and binary64
-with integer arithmetic, all five RISC-V rounding modes, sticky exception
-flags, fused multiply-add, square root, comparisons, classification, and all
-RV64 integer and format conversions. CPU integration covers F/D state and
-CSRs, NaN boxing, scalar and compressed memory operations, and every F/D
-instruction family. Matching C and Rust tests cover arithmetic, rounding,
-flags, NaNs, conversions, moves, memory access, and disabled floating-point
-state. Random differential checks cover the arithmetic core, FMA, and format
-conversion. The tests also corrected C reference handling for single-precision
-moves, NaN-boxed operands, reserved dynamic rounding modes, and dirty FS state.
+The platform foundation milestone is complete. Rust now composes the CPU and
+physical memory with CLINT, PLIC, 16550A UART, Goldfish RTC, SiFive test
+finisher, and optional simple framebuffer devices. Boot loading places
+firmware, kernel, initrd, and a version-17 flattened device tree in RAM and
+installs the QEMU-compatible reset trampoline. Host-facing methods provide
+explicit clock updates, UART input and output, finish status, and consumed
+framebuffer redraw spans. Matching sanitizer-backed C and Rust tests cover
+device registers, interrupt transitions, FDT contents, boot layout, reset
+state, and framebuffer dirty tracking. The tests corrected C PLIC claims below
+the configured threshold and made framebuffer refresh consume dirty pages.
 
 Rust 1.92, the `wasm32-unknown-unknown` standard library, Clang 19, Emscripten
 3.1.69, Node 20, and Chrome 152 were present when the port was initialized. The
-next milestone is the platform foundation: machine reset and device tree,
-interrupt controllers, UART, RTC, finisher, and framebuffer.
+next milestone is VirtIO MMIO transport and the block, console, 9p, network,
+and input devices.
 
 Decision log
 ------------
@@ -109,3 +109,8 @@ Decision log
 *   2026-09-18: Represent floating-point values as raw bits throughout the CPU
     and SoftFP boundary. Arithmetic returns sticky flags explicitly; the CPU
     owns architectural state, NaN boxing, and FS dirty transitions.
+*   2026-09-18: Keep platform devices as concrete state owned by the machine.
+    Device MMIO updates explicit interrupt levels and host-visible event
+    buffers; the machine applies CPU interrupt lines at scheduler boundaries.
+    Inject both timer ticks and wall-clock nanoseconds so native and WASM tests
+    remain deterministic.

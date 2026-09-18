@@ -115,9 +115,20 @@ build/tests/cpu_foundation_c: tests/cpu_foundation_c.c iomem.c cutils.c softfp.c
 	$(CC) $(CPPFLAGS) $(PORT_TEST_CFLAGS) -I. -o $@ \
 		tests/cpu_foundation_c.c iomem.c cutils.c softfp.c
 
-test-port: build/tests/physical_memory_c build/tests/cpu_foundation_c
+build/tests/platform_foundation_c: tests/platform_foundation_c.c \
+    riscv_machine.c riscv_machine_test.h uart16550.c goldfish_rtc.c simplefb.c \
+    riscv_cpu.c iomem.c cutils.c softfp.c
+	mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(PORT_TEST_CFLAGS) -ffunction-sections -I. \
+		-DRISCV_MACHINE_TEST -Wl,--gc-sections -o $@ \
+		tests/platform_foundation_c.c riscv_machine.c uart16550.c \
+		goldfish_rtc.c simplefb.c riscv_cpu.c iomem.c cutils.c softfp.c
+
+test-port: build/tests/physical_memory_c build/tests/cpu_foundation_c \
+    build/tests/platform_foundation_c
 	./build/tests/physical_memory_c
 	./build/tests/cpu_foundation_c
+	./build/tests/platform_foundation_c
 	cargo test
 	cargo clippy --all-targets -- -D warnings
 	cargo build --target wasm32-unknown-unknown

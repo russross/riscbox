@@ -68,6 +68,7 @@ void simplefb_refresh(FBDevice *fb_dev,
                 dirty_val &= ~(1 << bit_pos);
 
                 byte_pos = (page_index + bit_pos) * DEVRAM_PAGE_SIZE;
+                phys_mem_reset_dirty_bit(mem_range, byte_pos);
                 page_y0 = byte_pos / fb_dev->stride;
                 page_y1 = ((byte_pos + DEVRAM_PAGE_SIZE - 1) / fb_dev->stride) + 1;
                 page_y1 = min_int(page_y1, fb_dev->height);

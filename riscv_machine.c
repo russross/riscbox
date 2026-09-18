@@ -285,7 +285,7 @@ static uint32_t plic_claim(RISCVMachine *s, int context)
     uint32_t mask;
     int irq;
 
-    irq = plic_find_irq(s, context, FALSE);
+    irq = plic_find_irq(s, context, TRUE);
     if (irq != 0) {
         mask = UINT32_C(1) << irq;
         s->plic_pending_irq &= ~mask;
@@ -1031,6 +1031,7 @@ static void riscv_flush_tlb_write_range(void *opaque, uint8_t *ram_addr,
     riscv_cpu_flush_tlb_write_range_ram(s->cpu_state, ram_addr, ram_size);
 }
 
+#ifndef RISCV_MACHINE_TEST
 static VirtMachine *riscv_machine_init(const VirtMachineParams *p)
 {
     RISCVMachine *s;
@@ -1294,7 +1295,100 @@ static void riscv_vm_send_mouse_event(VirtMachine *s1, int dx, int dy, int dz,
         virtio_input_send_mouse_event(s->mouse_dev, dx, dy, dz, buttons);
     }
 }
+#endif
 
+#ifdef RISCV_MACHINE_TEST
+#include "riscv_machine_test.h"
+
+struct RISCVMachineTest {
+    RISCVMachine machine;
+    FBDevice framebuffer;
+};
+
+RISCVMachineTest *riscv_machine_test_init(void)
+{
+    RISCVMachineTest *test = mallocz(sizeof(*test));
+    RISCVMachine *s = &test->machine;
+    int i;
+
+    (void)rtc_get_time_for_cpu;
+    (void)test_read;
+    (void)uart_tx_func;
+    (void)copy_bios;
+    (void)riscv_flush_tlb_write_range;
+
+    s->mem_map = phys_mem_map_init();
+    s->cpu_state = riscv_cpu_init(s->mem_map);
+    s->ram_size = UINT64_C(128) << 20;
+    s->timecmp = UINT64_MAX;
+    for (i = 1; i < 32; i++)
+        irq_init(&s->plic_irq[i], plic_set_irq, s, i);
+    return test;
+}
+
+void riscv_machine_test_end(RISCVMachineTest *test)
+{
+    riscv_cpu_end(test->machine.cpu_state);
+    phys_mem_map_end(test->machine.mem_map);
+    free(test);
+}
+
+uint32_t riscv_machine_test_clint_read(RISCVMachineTest *test, uint32_t offset)
+{
+    return clint_read(&test->machine, offset, 2);
+}
+
+void riscv_machine_test_clint_write(RISCVMachineTest *test, uint32_t offset,
+                                    uint32_t value)
+{
+    clint_write(&test->machine, offset, value, 2);
+}
+
+uint32_t riscv_machine_test_plic_read(RISCVMachineTest *test, uint32_t offset)
+{
+    return plic_read(&test->machine, offset, 2);
+}
+
+void riscv_machine_test_plic_write(RISCVMachineTest *test, uint32_t offset,
+                                   uint32_t value)
+{
+    plic_write(&test->machine, offset, value, 2);
+}
+
+void riscv_machine_test_plic_set_irq(RISCVMachineTest *test, int irq,
+                                     int level)
+{
+    plic_set_irq(&test->machine, irq, level);
+}
+
+uint32_t riscv_machine_test_mip(RISCVMachineTest *test)
+{
+    return riscv_cpu_get_mip(test->machine.cpu_state);
+}
+
+void riscv_machine_test_finisher_write(uint32_t offset, uint32_t value)
+{
+    test_write(NULL, offset, value, 2);
+}
+
+uint8_t *riscv_machine_test_fdt(RISCVMachineTest *test, size_t *size)
+{
+    int fdt_size;
+    uint8_t *result;
+
+    test->framebuffer.width = 640;
+    test->framebuffer.height = 480;
+    test->framebuffer.stride = 2560;
+    test->framebuffer.fb_size = UINT64_C(0x130000);
+    test->machine.common.fb_dev = &test->framebuffer;
+    result = riscv_build_fdt(&test->machine, &fdt_size, UINT64_C(0x84000000),
+                             UINT64_C(0x100000), "console=ttyS0");
+    *size = fdt_size;
+    return result;
+}
+#endif
+
+#ifndef RISCV_MACHINE_TEST
 const VirtMachineClass riscv_machine_class = {
     riscv_machine_init,
     riscv_machine_end,
@@ -1307,3 +1401,4 @@ const VirtMachineClass riscv_machine_class = {
     riscv_vm_console_receive,
     riscv_vm_console_resize,
 };
+#endif

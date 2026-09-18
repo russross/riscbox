@@ -12,6 +12,7 @@ pub const MIP_MSIP: u32 = 1 << 3;
 pub const MIP_STIP: u32 = 1 << 5;
 pub const MIP_MTIP: u32 = 1 << 7;
 pub const MIP_SEIP: u32 = 1 << 9;
+pub const MIP_MEIP: u32 = 1 << 11;
 
 const MSTATUS_SIE: u64 = 1 << 1;
 const MSTATUS_MIE: u64 = 1 << 3;

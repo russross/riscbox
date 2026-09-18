@@ -60,8 +60,8 @@ Milestones
 | State | Milestone | Completion boundary |
 | ----- | --------- | ------------------- |
 | Complete | Physical memory map | Fixed arena, RAM/device regions, lookup, mapping changes, dirty-page snapshots and invalidation records |
-| Next | CPU foundation | Integer execution, traps, CSRs, privilege, counters, PMP, and Sv39 before optional instruction groups |
-| Pending | SoftFP and remaining ISA | F/D semantics, compressed and advertised scalar extensions |
+| Complete | CPU foundation | RV64I/M execution, traps, CSRs, privilege, counters, interrupts, PMP, and Sv39 |
+| Next | SoftFP and remaining ISA | F/D semantics, atomics, compressed and advertised scalar extensions |
 | Pending | Platform foundation | Reset path, FDT, CLINT, PLIC, UART, RTC, finisher, and framebuffer |
 | Pending | VirtIO devices | MMIO transport plus block, console, 9p, network, and input |
 | Pending | Browser services | Configuration, HTTP storage, encrypted filesystem support, JS adapter, and browser entry points |
@@ -70,18 +70,20 @@ Milestones
 Current status
 --------------
 
-The physical memory milestone is complete. Rust now provides a fixed byte arena
-with typed guest addresses and 32-bit arena offsets, ordered RAM and device
-regions, enable/move/disable operations, and double-buffered dirty-page
-snapshots that return explicit TLB invalidation ranges. Matching native C and
-Rust tests cover mapping boundaries, zero initialization, devices, disabled and
-moved RAM, dirty bitmap rollover, and page-level clearing. The sanitizer tests
-also found and fixed a null zero-length `memset` and a dirty-bitmap teardown leak
-in the C reference.
+The CPU foundation milestone is complete. Rust now executes RV64I and M from
+the fixed memory arena, maintains precise trap and interrupt state, implements
+machine and supervisor CSRs and returns, exposes architectural counters and
+Sstc state, enforces 16 PMP entries, and translates Sv39 with Svadu, Svpbmt,
+and 64 KiB Svnapot leaf handling. Its TLB stores arena offsets and keeps page
+walk, permission, and PMP work off cached accesses. Matching sanitizer-backed
+C and Rust tests cover integer and M execution, memory access, privilege
+return, precise illegal-instruction traps, PMP denial, and Sv39 hardware
+accessed-bit updates. The C test seam adds exact single-instruction execution,
+and testing corrected CPU-state teardown in the C reference.
 
 Rust 1.92, the `wasm32-unknown-unknown` standard library, Clang 19, Emscripten
 3.1.69, Node 20, and Chrome 152 were present when the port was initialized. The
-next milestone is CPU foundation; no CPU port has started.
+next milestone is SoftFP and the remaining ISA groups.
 
 Decision log
 ------------
@@ -95,3 +97,6 @@ Decision log
 *   2026-09-18: Represent RAM as one grow-during-construction arena and return
     invalidation records to callers instead of storing callbacks in the memory
     map. Execution will begin only after machine construction fixes the arena.
+*   2026-09-18: Keep the CPU interpreter direct and cache guest virtual-page to
+    32-bit arena-offset translations. Port atomics, compressed instructions,
+    floating point, and optional scalar groups after the base CPU boundary.

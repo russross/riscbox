@@ -109,8 +109,15 @@ build/tests/physical_memory_c: tests/physical_memory_c.c iomem.c cutils.c \
 	$(CC) $(CPPFLAGS) $(PORT_TEST_CFLAGS) -I. -o $@ \
 		tests/physical_memory_c.c iomem.c cutils.c
 
-test-port: build/tests/physical_memory_c
+build/tests/cpu_foundation_c: tests/cpu_foundation_c.c iomem.c cutils.c softfp.c \
+    riscv_cpu.c riscv_cpu_template.h riscv_cpu_priv.h riscv_cpu.h iomem.h cutils.h
+	mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(PORT_TEST_CFLAGS) -I. -o $@ \
+		tests/cpu_foundation_c.c iomem.c cutils.c softfp.c
+
+test-port: build/tests/physical_memory_c build/tests/cpu_foundation_c
 	./build/tests/physical_memory_c
+	./build/tests/cpu_foundation_c
 	cargo test
 	cargo clippy --all-targets -- -D warnings
 	cargo build --target wasm32-unknown-unknown

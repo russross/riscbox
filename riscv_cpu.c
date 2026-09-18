@@ -1498,9 +1498,9 @@ static RISCVCPUState *glue(riscv_cpu_init, MAX_XLEN)(PhysMemoryMap *mem_map)
 static void glue(riscv_cpu_end, MAX_XLEN)(RISCVCPUState *s)
 {
 #ifdef USE_GLOBAL_STATE
-    free(s);
-#else
     (void)s;
+#else
+    free(s);
 #endif
 }
 

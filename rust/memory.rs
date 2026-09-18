@@ -13,6 +13,26 @@ pub struct GuestAddress(pub u64);
 pub struct ArenaOffset(pub u32);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AccessWidth {
+    Byte,
+    HalfWord,
+    Word,
+    DoubleWord,
+}
+
+impl AccessWidth {
+    #[must_use]
+    pub const fn bytes(self) -> usize {
+        match self {
+            Self::Byte => 1,
+            Self::HalfWord => 2,
+            Self::Word => 4,
+            Self::DoubleWord => 8,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RegionId(usize);
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -70,6 +90,8 @@ pub enum MemoryError {
     InvalidRegion(usize),
     RegionLimit,
     RegionTooLarge(u64),
+    ReadOnly,
+    Unmapped(GuestAddress),
     WrongRegionKind,
 }
 
@@ -90,6 +112,10 @@ impl fmt::Display for MemoryError {
             ),
             Self::RegionTooLarge(size) => {
                 write!(formatter, "device region size {size:#x} exceeds 32 bits")
+            }
+            Self::ReadOnly => formatter.write_str("write to read-only memory"),
+            Self::Unmapped(address) => {
+                write!(formatter, "unmapped physical address {:#x}", address.0)
             }
             Self::WrongRegionKind => formatter.write_str("operation does not apply to this region"),
         }
@@ -264,24 +290,98 @@ impl PhysicalMemory {
     }
 
     pub fn ram_offset(&mut self, address: GuestAddress, write: bool) -> Option<ArenaOffset> {
-        let id = self.region_at(address)?;
+        self.ram_range(address, 1, write).ok()
+    }
+
+    /// Resolves a complete physical RAM range to its arena offset.
+    ///
+    /// A successful write lookup marks every touched page dirty.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the range is unmapped, crosses a region boundary,
+    /// resolves to a device, is read-only, or cannot be represented by an arena
+    /// offset.
+    pub fn ram_range(
+        &mut self,
+        address: GuestAddress,
+        len: usize,
+        write: bool,
+    ) -> Result<ArenaOffset, MemoryError> {
+        let id = self
+            .region_at(address)
+            .ok_or(MemoryError::Unmapped(address))?;
         let region = &mut self.regions[id.0];
         let byte_offset = address.0 - region.base.0;
         let RegionKind::Ram {
             arena_offset,
+            flags,
             dirty,
-            ..
         } = &mut region.kind
         else {
-            return None;
+            return Err(MemoryError::WrongRegionKind);
         };
-        if write && let Some(dirty) = dirty {
-            dirty.mark(byte_offset);
+        let len = u64::try_from(len).map_err(|_| MemoryError::ArenaTooLarge)?;
+        let end = byte_offset
+            .checked_add(len)
+            .ok_or(MemoryError::Unmapped(address))?;
+        if end > region.mapped_len {
+            return Err(MemoryError::Unmapped(address));
+        }
+        if write && flags.contains(RamFlags::ROM_BIT) {
+            return Err(MemoryError::ReadOnly);
+        }
+        if write
+            && len != 0
+            && let Some(dirty) = dirty
+        {
+            let last = end - 1;
+            let mut page_offset = byte_offset & !(PAGE_SIZE - 1);
+            loop {
+                dirty.mark(page_offset);
+                if page_offset / PAGE_SIZE == last / PAGE_SIZE {
+                    break;
+                }
+                page_offset += PAGE_SIZE;
+            }
         }
         let offset = arena_offset
             .0
-            .checked_add(u32::try_from(byte_offset).ok()?)?;
-        Some(ArenaOffset(offset))
+            .checked_add(u32::try_from(byte_offset).map_err(|_| MemoryError::ArenaTooLarge)?)
+            .ok_or(MemoryError::ArenaTooLarge)?;
+        Ok(ArenaOffset(offset))
+    }
+
+    /// Reads a little-endian value from physical RAM.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the complete value does not resolve to RAM.
+    pub fn read(&mut self, address: GuestAddress, width: AccessWidth) -> Result<u64, MemoryError> {
+        let len = width.bytes();
+        let offset = self.ram_range(address, len, false)?.0 as usize;
+        let bytes = &self.arena[offset..offset + len];
+        let mut value = [0_u8; 8];
+        value[..len].copy_from_slice(bytes);
+        Ok(u64::from_le_bytes(value))
+    }
+
+    /// Writes a little-endian value to physical RAM.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the complete value does not resolve to writable
+    /// RAM.
+    pub fn write(
+        &mut self,
+        address: GuestAddress,
+        width: AccessWidth,
+        value: u64,
+    ) -> Result<(), MemoryError> {
+        let len = width.bytes();
+        let offset = self.ram_range(address, len, true)?.0 as usize;
+        self.arena[offset..offset + len].copy_from_slice(&value.to_le_bytes()[..len]);
+        Ok(())
     }
 
     /// Enables, disables, or moves an existing mapping.

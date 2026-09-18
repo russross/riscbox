@@ -193,6 +193,17 @@ static inline uintx_t glue(mulhsu, XLEN)(intx_t a, uintx_t b)
             s->minstret_counter++; \
         minstret_write = FALSE; \
     } while (0)
+#ifdef CONFIG_CPU_TEST_SINGLE_STEP
+#define C_NEXT_INSN do { RETIRE_INSN; s->pc = GET_PC() + 2; goto done_interp; } while (0)
+#define NEXT_INSN do { RETIRE_INSN; s->pc = GET_PC() + 4; goto done_interp; } while (0)
+#define JUMP_INSN do {              \
+        RETIRE_INSN;                \
+        code_ptr = NULL;            \
+        code_end = NULL;            \
+        code_to_pc_addend = s->pc;  \
+        goto jump_insn;             \
+    } while (0)
+#else
 #define C_NEXT_INSN RETIRE_INSN; code_ptr += 2; break
 #define NEXT_INSN RETIRE_INSN; code_ptr += 4; break
 #define JUMP_INSN do {   \
@@ -202,6 +213,7 @@ static inline uintx_t glue(mulhsu, XLEN)(intx_t a, uintx_t b)
         code_to_pc_addend = s->pc; \
         goto jump_insn;            \
     } while (0)
+#endif
 
 static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
                                                    int n_cycles1)

@@ -114,8 +114,8 @@ pub extern "C" fn riscbox_network_carrier(up: u32) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn riscbox_run(now_milliseconds: u32) -> i32 {
-    browser_abi::riscbox_run(now_milliseconds)
+pub extern "C" fn riscbox_run(now_milliseconds_low: u32, now_milliseconds_high: u32) -> i32 {
+    browser_abi::riscbox_run(now_milliseconds_low, now_milliseconds_high)
 }
 
 #[unsafe(no_mangle)]

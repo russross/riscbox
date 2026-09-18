@@ -117,7 +117,10 @@
         }
 
         run() {
-            const result = this.exports.riscbox_run?.(Date.now() >>> 0) ?? 0;
+            const nowMilliseconds = Date.now();
+            const low = nowMilliseconds >>> 0;
+            const high = Math.floor(nowMilliseconds / 0x1_0000_0000) >>> 0;
+            const result = this.exports.riscbox_run?.(low, high) ?? 0;
             this.drainActions();
             return result;
         }

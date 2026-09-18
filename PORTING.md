@@ -157,6 +157,10 @@ Decision log
     demo: CodeMirror, xterm.js, Split.js, and CommonMark. The locked frontend
     graph contains 36 production packages; the removed gRPC and protobuf stack
     is absent. Keep the raw emulator adapter dependency-free.
+*   2026-09-18: Pass browser epoch milliseconds through the raw WASM ABI as
+    explicit low and high 32-bit words. JavaScript numbers represent the full
+    millisecond value exactly, while the split avoids an i64/BigInt boundary
+    and preserves the host wall clock used by the Goldfish RTC.
 
 Next milestone
 --------------

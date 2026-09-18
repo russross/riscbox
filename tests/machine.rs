@@ -1,7 +1,8 @@
 use riscbox::browser_storage::HttpBlockStore;
 use riscbox::cpu::CpuBus;
 use riscbox::machine::{
-    BootImages, FRAMEBUFFER_BASE, FramebufferConfig, Machine, MachineConfig, RAM_BASE, RedrawSpan,
+    BootImages, FRAMEBUFFER_BASE, FramebufferConfig, Machine, MachineConfig, RAM_BASE, RTC_BASE,
+    RedrawSpan,
 };
 use riscbox::memory::{AccessWidth, GuestAddress};
 use riscbox::platform::FinishStatus;
@@ -292,4 +293,22 @@ fn framebuffer_snapshot_invalidates_cached_cpu_write_translation() {
         machine.take_redraw_spans().expect("second dirty snapshot"),
         [RedrawSpan { y: 0, height: 2 }]
     );
+}
+
+#[test]
+fn machine_exposes_complete_host_time_through_the_rtc() {
+    let mut machine = machine(false);
+    let milliseconds = 1_730_000_000_123_u64;
+    let nanoseconds = milliseconds * 1_000_000;
+    machine.update_time(milliseconds * 10_000, nanoseconds);
+
+    let low = machine
+        .bus_mut()
+        .read(GuestAddress(RTC_BASE), AccessWidth::Word)
+        .expect("RTC low word");
+    let high = machine
+        .bus_mut()
+        .read(GuestAddress(RTC_BASE + 4), AccessWidth::Word)
+        .expect("RTC high word");
+    assert_eq!((high << 32) | low, nanoseconds);
 }

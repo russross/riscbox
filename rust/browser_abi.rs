@@ -171,9 +171,9 @@ pub extern "C" fn riscbox_network_carrier(up: u32) -> i32 {
 }
 
 #[must_use]
-pub extern "C" fn riscbox_run(now_milliseconds: u32) -> i32 {
+pub extern "C" fn riscbox_run(now_milliseconds_low: u32, now_milliseconds_high: u32) -> i32 {
     STATE.with_borrow_mut(|state| {
-        let milliseconds = u64::from(now_milliseconds);
+        let milliseconds = milliseconds_from_parts(now_milliseconds_low, now_milliseconds_high);
         let AbiState {
             runtime,
             controller,
@@ -187,6 +187,10 @@ pub extern "C" fn riscbox_run(now_milliseconds: u32) -> i32 {
             )
             .map_or(-1, |()| 0)
     })
+}
+
+fn milliseconds_from_parts(low: u32, high: u32) -> u64 {
+    u64::from(low) | (u64::from(high) << 32)
 }
 
 #[must_use]
@@ -311,4 +315,17 @@ fn framebuffer_action(value: impl FnOnce(&crate::machine::FramebufferUpdate) -> 
         Some(HostAction::Framebuffer(update)) => value(update),
         _ => 0,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::milliseconds_from_parts;
+
+    #[test]
+    fn reconstructs_epoch_milliseconds_without_truncation() {
+        assert_eq!(
+            milliseconds_from_parts(0xcc09_147b, 0x0000_0192),
+            1_730_000_000_123,
+        );
+    }
 }

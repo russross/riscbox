@@ -126,6 +126,23 @@ test("host scheduling delegates exactly once", () => {
     assert.deepEqual(delays, [7]);
 });
 
+test("run passes complete epoch milliseconds across the 32-bit WASM ABI", () => {
+    const fake = fakeModule();
+    const calls = [];
+    fake.exports.riscbox_run = (low, high) => {
+        calls.push([low, high]);
+        return 0;
+    };
+    const originalNow = Date.now;
+    Date.now = () => 1_730_000_000_123;
+    try {
+        new Riscbox(fake.exports).run();
+    } finally {
+        Date.now = originalNow;
+    }
+    assert.deepEqual(calls, [[0xcc09_147b, 0x192]]);
+});
+
 test("vm_start compatibility call marshals strings and scalar options", () => {
     const fake = fakeModule();
     const runtime = new Riscbox(fake.exports);

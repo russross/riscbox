@@ -11,39 +11,8 @@ impl Cpu {
         let funct3 = instruction >> 13;
         match (quadrant, funct3) {
             (0, 0) => self.execute_addi4spn(instruction)?,
-            (0, 2 | 3 | 6 | 7) => {
-                let rd = compact_register(instruction, 2);
-                let rs1 = compact_register(instruction, 7);
-                let (width, immediate, store) = match funct3 {
-                    2 | 6 => (
-                        AccessWidth::Word,
-                        bits(instruction, 10, 3) << 3
-                            | bits(instruction, 6, 1) << 2
-                            | bits(instruction, 5, 1) << 6,
-                        funct3 == 6,
-                    ),
-                    _ => (
-                        AccessWidth::DoubleWord,
-                        bits(instruction, 10, 3) << 3 | bits(instruction, 5, 2) << 6,
-                        funct3 == 7,
-                    ),
-                };
-                let address = self.registers[rs1].wrapping_add(immediate);
-                if store {
-                    self.store(bus, address, width, self.registers[rd])?;
-                    self.reservation = None;
-                } else {
-                    let value = self.load(bus, address, width, Access::Read)?;
-                    self.write_register(
-                        rd,
-                        if width == AccessWidth::Word {
-                            sext(value, 32)
-                        } else {
-                            value
-                        },
-                    );
-                }
-            }
+            (0, 1 | 5) => self.execute_compressed_fp_memory(bus, instruction, funct3)?,
+            (0, 2 | 3 | 6 | 7) => self.execute_compressed_memory(bus, instruction, funct3)?,
             (0, 4) => self.execute_zcb_memory(bus, instruction)?,
             (1, 0) => {
                 let rd = register(instruction, 7);
@@ -93,12 +62,14 @@ impl Cpu {
                     self.write_register(rd, self.registers[rd] << shift);
                 }
             }
+            (2, 1) => self.execute_compressed_fp_stack_load(bus, instruction)?,
             (2, 2 | 3) => self.execute_compressed_stack_load(bus, instruction, funct3)?,
             (2, 4) => {
                 if self.execute_compressed_jump(instruction)? {
                     return Ok(true);
                 }
             }
+            (2, 5) => self.execute_compressed_fp_stack_store(bus, instruction)?,
             (2, 6 | 7) => self.execute_compressed_stack_store(bus, instruction, funct3)?,
             _ => return Err(illegal(instruction)),
         }
@@ -106,6 +77,103 @@ impl Cpu {
             self.pc = pc.wrapping_add(2);
         }
         Ok(true)
+    }
+
+    fn execute_compressed_memory<B: CpuBus>(
+        &mut self,
+        bus: &mut B,
+        instruction: u16,
+        funct3: u16,
+    ) -> Result<(), Trap> {
+        let rd = compact_register(instruction, 2);
+        let rs1 = compact_register(instruction, 7);
+        let (width, immediate, store) = match funct3 {
+            2 | 6 => (
+                AccessWidth::Word,
+                bits(instruction, 10, 3) << 3
+                    | bits(instruction, 6, 1) << 2
+                    | bits(instruction, 5, 1) << 6,
+                funct3 == 6,
+            ),
+            _ => (
+                AccessWidth::DoubleWord,
+                bits(instruction, 10, 3) << 3 | bits(instruction, 5, 2) << 6,
+                funct3 == 7,
+            ),
+        };
+        let address = self.registers[rs1].wrapping_add(immediate);
+        if store {
+            self.store(bus, address, width, self.registers[rd])?;
+            self.reservation = None;
+        } else {
+            let value = self.load(bus, address, width, Access::Read)?;
+            self.write_register(
+                rd,
+                if width == AccessWidth::Word {
+                    sext(value, 32)
+                } else {
+                    value
+                },
+            );
+        }
+        Ok(())
+    }
+
+    fn execute_compressed_fp_memory<B: CpuBus>(
+        &mut self,
+        bus: &mut B,
+        instruction: u16,
+        funct3: u16,
+    ) -> Result<(), Trap> {
+        self.require_fp_trap(instruction)?;
+        let fp = compact_register(instruction, 2);
+        let base = compact_register(instruction, 7);
+        let immediate = bits(instruction, 10, 3) << 3 | bits(instruction, 5, 2) << 6;
+        let address = self.registers[base].wrapping_add(immediate);
+        if funct3 == 1 {
+            let value = self.load(bus, address, AccessWidth::DoubleWord, Access::Read)?;
+            self.write_fp64(fp, value);
+        } else {
+            self.store(bus, address, AccessWidth::DoubleWord, self.fp_registers[fp])?;
+        }
+        Ok(())
+    }
+
+    fn execute_compressed_fp_stack_load<B: CpuBus>(
+        &mut self,
+        bus: &mut B,
+        instruction: u16,
+    ) -> Result<(), Trap> {
+        self.require_fp_trap(instruction)?;
+        let fp = register(instruction, 7);
+        let immediate = bits(instruction, 12, 1) << 5
+            | bits(instruction, 5, 2) << 3
+            | bits(instruction, 2, 3) << 6;
+        let value = self.load(
+            bus,
+            self.registers[2].wrapping_add(immediate),
+            AccessWidth::DoubleWord,
+            Access::Read,
+        )?;
+        self.write_fp64(fp, value);
+        Ok(())
+    }
+
+    fn execute_compressed_fp_stack_store<B: CpuBus>(
+        &mut self,
+        bus: &mut B,
+        instruction: u16,
+    ) -> Result<(), Trap> {
+        self.require_fp_trap(instruction)?;
+        let fp = register(instruction, 2);
+        let immediate = bits(instruction, 10, 3) << 3 | bits(instruction, 7, 3) << 6;
+        self.store(
+            bus,
+            self.registers[2].wrapping_add(immediate),
+            AccessWidth::DoubleWord,
+            self.fp_registers[fp],
+        )?;
+        Ok(())
     }
 
     fn execute_addi4spn(&mut self, instruction: u16) -> Result<(), Trap> {

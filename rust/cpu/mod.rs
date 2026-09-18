@@ -2,6 +2,7 @@
 
 mod compressed;
 mod execute;
+mod floating;
 mod mmu;
 
 use crate::memory::{AccessWidth, ArenaOffset, GuestAddress, MemoryError, PhysicalMemory};
@@ -18,6 +19,7 @@ const MSTATUS_SPIE: u64 = 1 << 5;
 const MSTATUS_MPIE: u64 = 1 << 7;
 const MSTATUS_SPP: u64 = 1 << 8;
 const MSTATUS_MPP: u64 = 3 << 11;
+const MSTATUS_FS: u64 = 3 << 13;
 const MSTATUS_MPRV: u64 = 1 << 17;
 const MSTATUS_SUM: u64 = 1 << 18;
 const MSTATUS_MXR: u64 = 1 << 19;
@@ -31,13 +33,15 @@ const MSTATUS_MASK: u64 = MSTATUS_SIE
     | MSTATUS_MPIE
     | MSTATUS_SPP
     | MSTATUS_MPP
+    | MSTATUS_FS
     | MSTATUS_MPRV
     | MSTATUS_SUM
     | MSTATUS_MXR
     | MSTATUS_TVM
     | MSTATUS_TW
     | MSTATUS_TSR;
-const SSTATUS_MASK: u64 = MSTATUS_SIE | MSTATUS_SPIE | MSTATUS_SPP | MSTATUS_SUM | MSTATUS_MXR;
+const SSTATUS_MASK: u64 =
+    MSTATUS_SIE | MSTATUS_SPIE | MSTATUS_SPP | MSTATUS_FS | MSTATUS_SUM | MSTATUS_MXR;
 
 const MENVCFG_ADUE: u64 = 1 << 61;
 const MENVCFG_PBMTE: u64 = 1 << 62;
@@ -60,11 +64,16 @@ const PMP_ADDR_MASK: u64 = (1 << 54) - 1;
 const MISA_I: u64 = 1 << (b'I' - b'A');
 const MISA_A: u64 = 1;
 const MISA_C: u64 = 1 << (b'C' - b'A');
+const MISA_D: u64 = 1 << (b'D' - b'A');
+const MISA_F: u64 = 1 << (b'F' - b'A');
 const MISA_M: u64 = 1 << (b'M' - b'A');
 const MISA_S: u64 = 1 << (b'S' - b'A');
 const MISA_U: u64 = 1 << (b'U' - b'A');
 
 const CSR_SSTATUS: u16 = 0x100;
+const CSR_FFLAGS: u16 = 0x001;
+const CSR_FRM: u16 = 0x002;
+const CSR_FCSR: u16 = 0x003;
 const CSR_SIE: u16 = 0x104;
 const CSR_STVEC: u16 = 0x105;
 const CSR_SCOUNTEREN: u16 = 0x106;
@@ -246,6 +255,9 @@ impl Default for TlbEntry {
 pub struct Cpu {
     pc: u64,
     registers: [u64; 32],
+    fp_registers: [u64; 32],
+    fflags: u8,
+    frm: u8,
     privilege: Privilege,
     power_down: bool,
     elapsed_cycles: u64,
@@ -295,6 +307,9 @@ impl Cpu {
         Self {
             pc: 0x1000,
             registers: [0; 32],
+            fp_registers: [u64::MAX; 32],
+            fflags: 0,
+            frm: 0,
             privilege: Privilege::Machine,
             power_down: false,
             elapsed_cycles: 0,
@@ -308,7 +323,7 @@ impl Cpu {
             mcause: 0,
             mtval: 0,
             mhartid: hart_id,
-            misa: MISA_A | MISA_C | MISA_I | MISA_M | MISA_S | MISA_U,
+            misa: MISA_A | MISA_C | MISA_D | MISA_F | MISA_I | MISA_M | MISA_S | MISA_U,
             mie: 0,
             mip: 0,
             medeleg: 0,
@@ -399,6 +414,15 @@ impl Cpu {
         if index != 0 {
             self.registers[index] = value;
         }
+    }
+
+    #[must_use]
+    pub const fn fp_register_bits(&self, index: usize) -> u64 {
+        self.fp_registers[index]
+    }
+
+    pub fn set_fp_register_bits(&mut self, index: usize, value: u64) {
+        self.fp_registers[index] = value;
     }
 
     fn write_register(&mut self, index: usize, value: u64) {
@@ -573,7 +597,14 @@ impl Cpu {
     }
 
     fn get_mstatus(&self, mask: u64) -> u64 {
-        (self.mstatus | (2_u64 << 32) | (2_u64 << 34)) & mask
+        let value = self.mstatus | (2_u64 << 32) | (2_u64 << 34);
+        (value
+            | if value & MSTATUS_FS == MSTATUS_FS {
+                1 << 63
+            } else {
+                0
+            })
+            & mask
     }
 
     fn set_mstatus(&mut self, value: u64) {
@@ -611,6 +642,9 @@ impl Cpu {
             return Err(CsrError::IllegalAccess);
         }
         let value = match csr {
+            CSR_FFLAGS if self.fp_enabled() => u64::from(self.fflags),
+            CSR_FRM if self.fp_enabled() => u64::from(self.frm),
+            CSR_FCSR if self.fp_enabled() => u64::from(self.fflags | self.frm << 5),
             CSR_CYCLE if self.counter_enabled(0) => self.cycle,
             CSR_TIME if self.counter_enabled(1) => self.time.ok_or(CsrError::IllegalAccess)?,
             CSR_INSTRET if self.counter_enabled(2) => self.instret,
@@ -654,6 +688,22 @@ impl Cpu {
 
     fn csr_write(&mut self, csr: u16, value: u64) -> Result<(), CsrError> {
         match csr {
+            CSR_FFLAGS => {
+                self.require_fp()?;
+                self.fflags = u8::try_from(value & 0x1f).expect("masked flags fit u8");
+                self.mark_fp_dirty();
+            }
+            CSR_FRM => {
+                self.require_fp()?;
+                self.frm = u8::try_from(value & 7).expect("masked rounding mode fits u8");
+                self.mark_fp_dirty();
+            }
+            CSR_FCSR => {
+                self.require_fp()?;
+                self.fflags = u8::try_from(value & 0x1f).expect("masked flags fit u8");
+                self.frm = u8::try_from(value >> 5 & 7).expect("masked rounding mode fits u8");
+                self.mark_fp_dirty();
+            }
             CSR_SSTATUS => {
                 self.set_mstatus((self.mstatus & !SSTATUS_MASK) | (value & SSTATUS_MASK));
             }

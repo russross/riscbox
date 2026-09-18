@@ -215,6 +215,12 @@ static inline uintx_t glue(mulhsu, XLEN)(intx_t a, uintx_t b)
     } while (0)
 #endif
 
+#if FLEN > 32
+#define READ_FP32(index)                                                \
+    (((s->fp_reg[index] & F32_HIGH) == F32_HIGH) ?                     \
+     s->fp_reg[index] : UINT32_C(0x7fc00000))
+#endif
+
 static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
                                                    int n_cycles1)
 {
@@ -1662,8 +1668,9 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
                 goto illegal_insn;
             switch(funct3) {
             case 0:
-                s->fp_reg[rd] = fma_sf32(s->fp_reg[rs1], s->fp_reg[rs2],
-                                         s->fp_reg[rs3], rm, &s->fflags) | F32_HIGH;
+                s->fp_reg[rd] = fma_sf32(READ_FP32(rs1), READ_FP32(rs2),
+                                         READ_FP32(rs3), rm, &s->fflags) |
+                    F32_HIGH;
                 break;
 #if FLEN >= 64
             case 1:
@@ -1686,9 +1693,9 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
                 goto illegal_insn;
             switch(funct3) {
             case 0:
-                s->fp_reg[rd] = fma_sf32(s->fp_reg[rs1],
-                                         s->fp_reg[rs2],
-                                         s->fp_reg[rs3] ^ FSIGN_MASK32,
+                s->fp_reg[rd] = fma_sf32(READ_FP32(rs1),
+                                         READ_FP32(rs2),
+                                         READ_FP32(rs3) ^ FSIGN_MASK32,
                                          rm, &s->fflags) | F32_HIGH;
                 break;
 #if FLEN >= 64
@@ -1714,9 +1721,9 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
                 goto illegal_insn;
             switch(funct3) {
             case 0:
-                s->fp_reg[rd] = fma_sf32(s->fp_reg[rs1] ^ FSIGN_MASK32,
-                                         s->fp_reg[rs2],
-                                         s->fp_reg[rs3],
+                s->fp_reg[rd] = fma_sf32(READ_FP32(rs1) ^ FSIGN_MASK32,
+                                         READ_FP32(rs2),
+                                         READ_FP32(rs3),
                                          rm, &s->fflags) | F32_HIGH;
                 break;
 #if FLEN >= 64
@@ -1742,9 +1749,9 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
                 goto illegal_insn;
             switch(funct3) {
             case 0:
-                s->fp_reg[rd] = fma_sf32(s->fp_reg[rs1] ^ FSIGN_MASK32,
-                                         s->fp_reg[rs2],
-                                         s->fp_reg[rs3] ^ FSIGN_MASK32,
+                s->fp_reg[rd] = fma_sf32(READ_FP32(rs1) ^ FSIGN_MASK32,
+                                         READ_FP32(rs2),
+                                         READ_FP32(rs3) ^ FSIGN_MASK32,
                                          rm, &s->fflags) | F32_HIGH;
                 break;
 #if FLEN >= 64
@@ -1812,3 +1819,6 @@ the_end:
 #undef XLEN
 #undef OP_A
 #undef RETIRE_INSN
+#if FLEN > 32
+#undef READ_FP32
+#endif

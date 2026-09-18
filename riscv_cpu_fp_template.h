@@ -24,9 +24,13 @@
 #if F_SIZE == 32
 #define OPID 0
 #define F_HIGH F32_HIGH
+#define F_READ(reg)                                                     \
+    (((s->fp_reg[reg] & F32_HIGH) == F32_HIGH) ?                       \
+     s->fp_reg[reg] : UINT32_C(0x7fc00000))
 #elif F_SIZE == 64
 #define OPID 1
 #define F_HIGH F64_HIGH
+#define F_READ(reg) s->fp_reg[reg]
 #else
 #error unsupported F_SIZE
 #endif
@@ -37,8 +41,8 @@
                 rm = get_insn_rm(s, rm);
                 if (rm < 0)
                     goto illegal_insn;
-                s->fp_reg[rd] = glue(add_sf, F_SIZE)(s->fp_reg[rs1],
-                                         s->fp_reg[rs2],
+                s->fp_reg[rd] = glue(add_sf, F_SIZE)(F_READ(rs1),
+                                         F_READ(rs2),
                                          rm, &s->fflags) | F_HIGH;
                 s->fs = 3;                                             
                 break;
@@ -46,8 +50,8 @@
                 rm = get_insn_rm(s, rm);
                 if (rm < 0)
                     goto illegal_insn;
-                s->fp_reg[rd] = glue(sub_sf, F_SIZE)(s->fp_reg[rs1],
-                                               s->fp_reg[rs2],
+                s->fp_reg[rd] = glue(sub_sf, F_SIZE)(F_READ(rs1),
+                                               F_READ(rs2),
                                                rm, &s->fflags) | F_HIGH;
                 s->fs = 3;                                             
                 break;
@@ -55,8 +59,8 @@
                 rm = get_insn_rm(s, rm);
                 if (rm < 0)
                     goto illegal_insn;
-                s->fp_reg[rd] = glue(mul_sf, F_SIZE)(s->fp_reg[rs1],
-                                               s->fp_reg[rs2],
+                s->fp_reg[rd] = glue(mul_sf, F_SIZE)(F_READ(rs1),
+                                               F_READ(rs2),
                                                rm, &s->fflags) | F_HIGH;
                 s->fs = 3;                                             
                 break;
@@ -64,8 +68,8 @@
                 rm = get_insn_rm(s, rm);
                 if (rm < 0)
                     goto illegal_insn;
-                s->fp_reg[rd] = glue(div_sf, F_SIZE)(s->fp_reg[rs1],
-                                               s->fp_reg[rs2],
+                s->fp_reg[rd] = glue(div_sf, F_SIZE)(F_READ(rs1),
+                                               F_READ(rs2),
                                                rm, &s->fflags) | F_HIGH;
                 s->fs = 3;                                             
                 break;
@@ -73,23 +77,23 @@
                 rm = get_insn_rm(s, rm);
                 if (rm < 0 || rs2 != 0)
                     goto illegal_insn;
-                s->fp_reg[rd] = glue(sqrt_sf, F_SIZE)(s->fp_reg[rs1],
+                s->fp_reg[rd] = glue(sqrt_sf, F_SIZE)(F_READ(rs1),
                                                 rm, &s->fflags) | F_HIGH;
                 s->fs = 3;                                             
                 break;
             case (0x04 << 2) | OPID:
                 switch(rm) {
                 case 0: /* fsgnj */
-                    s->fp_reg[rd] = (s->fp_reg[rs1] & ~FSIGN_MASK) |
-                        (s->fp_reg[rs2] & FSIGN_MASK);
+                    s->fp_reg[rd] = (F_READ(rs1) & ~FSIGN_MASK) |
+                        (F_READ(rs2) & FSIGN_MASK);
                     break;
                 case 1: /* fsgnjn */
-                    s->fp_reg[rd] = (s->fp_reg[rs1] & ~FSIGN_MASK) |
-                        ((s->fp_reg[rs2] & FSIGN_MASK) ^ FSIGN_MASK);
+                    s->fp_reg[rd] = (F_READ(rs1) & ~FSIGN_MASK) |
+                        ((F_READ(rs2) & FSIGN_MASK) ^ FSIGN_MASK);
                     break;
                 case 2: /* fsgnjx */
-                    s->fp_reg[rd] = s->fp_reg[rs1] ^
-                        (s->fp_reg[rs2] & FSIGN_MASK);
+                    s->fp_reg[rd] = F_READ(rs1) ^
+                        (F_READ(rs2) & FSIGN_MASK);
                     break;
                 default:
                     goto illegal_insn;
@@ -99,14 +103,14 @@
             case (0x05 << 2) | OPID:
                 switch(rm) {
                 case 0: /* fmin */
-                    s->fp_reg[rd] = glue(min_sf, F_SIZE)(s->fp_reg[rs1],
-                                                   s->fp_reg[rs2],
+                    s->fp_reg[rd] = glue(min_sf, F_SIZE)(F_READ(rs1),
+                                                   F_READ(rs2),
                                                    &s->fflags,
                                                    FMINMAX_IEEE754_201X) | F_HIGH;
                     break;
                 case 1: /* fmax */
-                    s->fp_reg[rd] = glue(max_sf, F_SIZE)(s->fp_reg[rs1],
-                                                   s->fp_reg[rs2],
+                    s->fp_reg[rd] = glue(max_sf, F_SIZE)(F_READ(rs1),
+                                                   F_READ(rs2),
                                                    &s->fflags,
                                                    FMINMAX_IEEE754_201X) | F_HIGH;
                     break;
@@ -121,19 +125,19 @@
                     goto illegal_insn;
                 switch(rs2) {
                 case 0: /* fcvt.w.[sdq] */
-                    val = (int32_t)glue(glue(cvt_sf, F_SIZE), _i32)(s->fp_reg[rs1], rm,
+                    val = (int32_t)glue(glue(cvt_sf, F_SIZE), _i32)(F_READ(rs1), rm,
                                                           &s->fflags);
                     break;
                 case 1: /* fcvt.wu.[sdq] */
-                    val = (int32_t)glue(glue(cvt_sf, F_SIZE), _u32)(s->fp_reg[rs1], rm,
+                    val = (int32_t)glue(glue(cvt_sf, F_SIZE), _u32)(F_READ(rs1), rm,
                                                           &s->fflags);
                     break;
                 case 2: /* fcvt.l.[sdq] */
-                    val = (int64_t)glue(glue(cvt_sf, F_SIZE), _i64)(s->fp_reg[rs1], rm,
+                    val = (int64_t)glue(glue(cvt_sf, F_SIZE), _i64)(F_READ(rs1), rm,
                                                           &s->fflags);
                     break;
                 case 3: /* fcvt.lu.[sdq] */
-                    val = (int64_t)glue(glue(cvt_sf, F_SIZE), _u64)(s->fp_reg[rs1], rm,
+                    val = (int64_t)glue(glue(cvt_sf, F_SIZE), _u64)(F_READ(rs1), rm,
                                                           &s->fflags);
                     break;
                 default:
@@ -141,19 +145,20 @@
                 }
                 if (rd != 0)
                     s->reg[rd] = val;
+                s->fs = 3;
                 break;
             case (0x14 << 2) | OPID:
                 switch(rm) {
                 case 0: /* fle */
-                    val = glue(le_sf, F_SIZE)(s->fp_reg[rs1], s->fp_reg[rs2],
+                    val = glue(le_sf, F_SIZE)(F_READ(rs1), F_READ(rs2),
                                      &s->fflags);
                     break;
                 case 1: /* flt */
-                    val = glue(lt_sf, F_SIZE)(s->fp_reg[rs1], s->fp_reg[rs2],
+                    val = glue(lt_sf, F_SIZE)(F_READ(rs1), F_READ(rs2),
                                      &s->fflags);
                     break;
                 case 2: /* feq */
-                    val = glue(eq_quiet_sf, F_SIZE)(s->fp_reg[rs1], s->fp_reg[rs2],
+                    val = glue(eq_quiet_sf, F_SIZE)(F_READ(rs1), F_READ(rs2),
                                            &s->fflags);
                     break;
                 default:
@@ -161,6 +166,7 @@
                 }
                 if (rd != 0)
                     s->reg[rd] = val;
+                s->fs = 3;
                 break;
             case (0x1a << 2) | OPID:
                 rm = get_insn_rm(s, rm);
@@ -196,12 +202,16 @@
                 switch(rs2) {
 #if F_SIZE == 32 && FLEN >= 64
                 case 1: /* cvt.s.d */
-                    s->fp_reg[rd] = cvt_sf64_sf32(s->fp_reg[rs1], rm, &s->fflags) | F32_HIGH;
+                    s->fp_reg[rd] = cvt_sf64_sf32(s->fp_reg[rs1], rm,
+                                                  &s->fflags) | F32_HIGH;
                     break;
 #endif /* F_SIZE == 32 */
 #if F_SIZE == 64
                 case 0: /* cvt.d.s */
-                    s->fp_reg[rd] = cvt_sf32_sf64(s->fp_reg[rs1], &s->fflags) | F64_HIGH;
+                    val = ((s->fp_reg[rs1] & F32_HIGH) == F32_HIGH) ?
+                        s->fp_reg[rs1] : UINT32_C(0x7fc00000);
+                    s->fp_reg[rd] = cvt_sf32_sf64(val, &s->fflags) |
+                        F64_HIGH;
                     break;
 #endif /* F_SIZE == 64 */
                     
@@ -219,13 +229,14 @@
                 case 0: /* fmv.x.s */
 #if F_SIZE == 32
                     val = (int32_t)s->fp_reg[rs1];
+                    break;
 #elif F_SIZE == 64
                     val = (int64_t)s->fp_reg[rs1];
                     break;
 #endif
 #endif /* F_SIZE <= XLEN */
                 case 1: /* fclass */
-                    val = glue(fclass_sf, F_SIZE)(s->fp_reg[rs1]);
+                    val = glue(fclass_sf, F_SIZE)(F_READ(rs1));
                     break;
                 default:
                     goto illegal_insn;
@@ -239,15 +250,16 @@
                 if (rs2 != 0 || rm != 0)
                     goto illegal_insn;
 #if F_SIZE == 32
-                s->fp_reg[rd] = (int32_t)s->reg[rs1];
+                s->fp_reg[rd] = (uint32_t)s->reg[rs1] | F32_HIGH;
 #elif F_SIZE == 64
                 s->fp_reg[rd] = (int64_t)s->reg[rs1];
+#endif
                 s->fs = 3;
                 break;
-#endif
 #endif /* F_SIZE <= XLEN */
 
 #undef F_SIZE
 #undef F_HIGH
+#undef F_READ
 #undef OPID
 #undef FSIGN_MASK

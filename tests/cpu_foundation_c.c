@@ -97,6 +97,34 @@ static uint32_t encode_amo(uint32_t operation, uint32_t rs2, uint32_t rs1,
         rd << 7 | 0x2f;
 }
 
+static uint32_t encode_fp(uint32_t funct7, uint32_t rs2, uint32_t rs1,
+                          uint32_t rounding, uint32_t rd)
+{
+    return encode_r(funct7, rs2, rs1, rounding, rd, 0x53);
+}
+
+static uint32_t encode_fp_load(int32_t immediate, uint32_t rs1,
+                               uint32_t width, uint32_t rd)
+{
+    return encode_i(immediate, rs1, width, rd, 0x07);
+}
+
+static uint32_t encode_fp_store(int32_t immediate, uint32_t rs2,
+                                uint32_t rs1, uint32_t width)
+{
+    uint32_t value = immediate;
+
+    return ((value >> 5) & 0x7f) << 25 | rs2 << 20 | rs1 << 15 |
+        width << 12 | (value & 0x1f) << 7 | 0x27;
+}
+
+static uint32_t encode_fma(uint32_t format, uint32_t rs3, uint32_t rs2,
+                           uint32_t rs1, uint32_t rounding, uint32_t rd)
+{
+    return rs3 << 27 | format << 25 | rs2 << 20 | rs1 << 15 |
+        rounding << 12 | rd << 7 | 0x43;
+}
+
 static void test_integer_memory_and_multiply_divide(void)
 {
     Machine machine = machine_new();
@@ -210,12 +238,166 @@ static void test_atomic_compressed_and_scalar_extensions(void)
     machine_end(&machine);
 }
 
+static void test_float_arithmetic_rounding_and_flags(void)
+{
+    Machine machine = machine_new();
+    RISCVCPUState *cpu = machine.cpu;
+
+    cpu->fs = 1;
+    cpu->fp_reg[1] = F32_HIGH | UINT32_C(0x3fc00000); /* 1.5 */
+    cpu->fp_reg[2] = F32_HIGH | UINT32_C(0x40100000); /* 2.25 */
+    run_one(&machine, encode_fp(0x00, 2, 1, RM_RNE, 3)); /* fadd.s */
+    CHECK(cpu->fp_reg[3] == (F32_HIGH | UINT32_C(0x40700000)));
+    CHECK(cpu->fflags == 0);
+    CHECK(cpu->fs == 3);
+
+    cpu->fs = 1;
+    cpu->fflags = 0;
+    cpu->fp_reg[2] = F32_HIGH;
+    run_one(&machine, encode_fp(0x0c, 2, 1, RM_RNE, 3)); /* fdiv.s */
+    CHECK(cpu->fp_reg[3] == (F32_HIGH | UINT32_C(0x7f800000)));
+    CHECK(cpu->fflags == FFLAG_DIVIDE_ZERO);
+    CHECK(cpu->fs == 3);
+
+    cpu->fflags = 0;
+    cpu->fp_reg[1] = F32_HIGH | UINT32_C(0xbf800000);
+    run_one(&machine, encode_fp(0x2c, 0, 1, RM_RNE, 3)); /* fsqrt.s */
+    CHECK(cpu->fp_reg[3] == (F32_HIGH | UINT32_C(0x7fc00000)));
+    CHECK(cpu->fflags == FFLAG_INVALID_OP);
+
+    cpu->fflags = 0;
+    cpu->fp_reg[1] = F32_HIGH | UINT32_C(0x3fc00000);
+    run_one(&machine, encode_fp(0x60, 0, 1, RM_RTZ, 3)); /* fcvt.w.s */
+    CHECK(cpu->reg[3] == 1);
+    CHECK(cpu->fflags == FFLAG_INEXACT);
+    CHECK(cpu->fs == 3);
+
+    cpu->fflags = 0;
+    cpu->frm = RM_RUP;
+    run_one(&machine, encode_fp(0x60, 0, 1, 7, 3));
+    CHECK(cpu->reg[3] == 2);
+    CHECK(cpu->fflags == FFLAG_INEXACT);
+
+    CHECK(csr_write(cpu, 0x002, 5) == CSR_WRITE_OK);
+    CHECK(cpu->frm == 5);
+    cpu->mtvec = 0x2000;
+    run_one(&machine, encode_fp(0x60, 0, 1, 7, 3));
+    CHECK(cpu->mcause == CAUSE_ILLEGAL_INSTRUCTION);
+    CHECK(cpu->pc == 0x2000);
+    machine_end(&machine);
+}
+
+static void test_float_nan_boxing_moves_and_conversions(void)
+{
+    Machine machine = machine_new();
+    RISCVCPUState *cpu = machine.cpu;
+
+    cpu->fs = 1;
+    cpu->fp_reg[1] = UINT32_C(0x3f800000); /* Unboxed 1.0 is a NaN input. */
+    cpu->fp_reg[2] = F32_HIGH | UINT32_C(0x3f800000);
+    run_one(&machine, encode_fp(0x00, 2, 1, RM_RNE, 3));
+    CHECK(cpu->fp_reg[3] == (F32_HIGH | UINT32_C(0x7fc00000)));
+
+    cpu->fp_reg[3] = F32_HIGH | UINT32_C(0x3f800000);
+    run_one(&machine, encode_fma(0, 3, 2, 1, RM_RNE, 4));
+    CHECK(cpu->fp_reg[4] == (F32_HIGH | UINT32_C(0x7fc00000)));
+
+    cpu->fp_reg[1] = F32_HIGH | UINT32_C(0x80000001);
+    run_one(&machine, encode_fp(0x70, 0, 1, 0, 4)); /* fmv.x.w */
+    CHECK(cpu->reg[4] == UINT64_C(0xffffffff80000001));
+
+    cpu->fs = 1;
+    cpu->reg[4] = UINT64_C(0x1234567880000001);
+    run_one(&machine, encode_fp(0x78, 0, 4, 0, 5)); /* fmv.w.x */
+    CHECK(cpu->fp_reg[5] == (F32_HIGH | UINT32_C(0x80000001)));
+    CHECK(cpu->fs == 3);
+
+    cpu->fp_reg[1] = F32_HIGH | UINT32_C(0x3fc00000);
+    run_one(&machine, encode_fp(0x21, 0, 1, RM_RNE, 6)); /* fcvt.d.s */
+    CHECK(cpu->fp_reg[6] == UINT64_C(0x3ff8000000000000));
+    run_one(&machine, encode_fp(0x20, 1, 6, RM_RNE, 7)); /* fcvt.s.d */
+    CHECK(cpu->fp_reg[7] == (F32_HIGH | UINT32_C(0x3fc00000)));
+
+    cpu->fp_reg[1] = F32_HIGH | UINT32_C(0x7f800001); /* signaling NaN */
+    cpu->fp_reg[2] = F32_HIGH | UINT32_C(0x3f800000);
+    cpu->fflags = 0;
+    run_one(&machine, encode_fp(0x00, 2, 1, RM_RNE, 3));
+    CHECK(cpu->fp_reg[3] == (F32_HIGH | UINT32_C(0x7fc00000)));
+    CHECK(cpu->fflags == FFLAG_INVALID_OP);
+    machine_end(&machine);
+}
+
+static void test_float_memory_and_fs_state(void)
+{
+    Machine machine = machine_new();
+    RISCVCPUState *cpu = machine.cpu;
+
+    cpu->reg[1] = 0x8000;
+    write_le32(machine.ram->phys_mem + 0x8004, UINT32_C(0x3f800000));
+    cpu->fs = 1;
+    run_one(&machine, encode_fp_load(4, 1, 2, 2)); /* flw */
+    CHECK(cpu->fp_reg[2] == (F32_HIGH | UINT32_C(0x3f800000)));
+    CHECK(cpu->fs == 3);
+    run_one(&machine, encode_fp_store(8, 2, 1, 2)); /* fsw */
+    CHECK(read_le64(machine.ram->phys_mem + 0x8008) == UINT32_C(0x3f800000));
+
+    cpu->fs = 0;
+    cpu->mtvec = 0x2000;
+    run_one(&machine, encode_fp(0x00, 2, 2, RM_RNE, 3));
+    CHECK(cpu->mcause == CAUSE_ILLEGAL_INSTRUCTION);
+    CHECK(cpu->pc == 0x2000);
+    machine_end(&machine);
+}
+
+static void test_double_fused_compare_and_classify(void)
+{
+    Machine machine = machine_new();
+    RISCVCPUState *cpu = machine.cpu;
+
+    cpu->fs = 1;
+    cpu->fp_reg[1] = UINT64_C(0x3ff8000000000000); /* 1.5 */
+    cpu->fp_reg[2] = UINT64_C(0x4000000000000000); /* 2.0 */
+    cpu->fp_reg[3] = UINT64_C(0xbff0000000000000); /* -1.0 */
+    run_one(&machine, encode_fp(0x01, 2, 1, RM_RNE, 4)); /* fadd.d */
+    CHECK(cpu->fp_reg[4] == UINT64_C(0x400c000000000000));
+    run_one(&machine, encode_fma(1, 3, 2, 1, RM_RNE, 4)); /* fmadd.d */
+    CHECK(cpu->fp_reg[4] == UINT64_C(0x4000000000000000));
+
+    cpu->fs = 1;
+    cpu->fflags = 0;
+    run_one(&machine, encode_fp(0x51, 2, 1, 1, 5)); /* flt.d */
+    CHECK(cpu->reg[5] == 1);
+    CHECK(cpu->fflags == 0);
+    CHECK(cpu->fs == 3);
+
+    cpu->fs = 1;
+    cpu->fp_reg[1] = UINT64_C(0x7ff8000000000000);
+    cpu->fflags = 0;
+    run_one(&machine, encode_fp(0x51, 2, 1, 2, 5)); /* feq.d qNaN */
+    CHECK(cpu->reg[5] == 0);
+    CHECK(cpu->fflags == 0);
+    CHECK(cpu->fs == 3);
+    run_one(&machine, encode_fp(0x71, 0, 1, 1, 5)); /* fclass.d */
+    CHECK(cpu->reg[5] == FCLASS_QNAN);
+
+    cpu->fs = 1;
+    cpu->fp_reg[1] = UINT64_C(0x4008000000000000); /* 3.0 */
+    run_one(&machine, encode_fp(0x61, 2, 1, RM_RNE, 5)); /* fcvt.l.d */
+    CHECK(cpu->reg[5] == 3);
+    CHECK(cpu->fs == 3);
+    machine_end(&machine);
+}
+
 int main(void)
 {
     test_integer_memory_and_multiply_divide();
     test_trap_return_and_pmp();
     test_sv39_accessed_update();
     test_atomic_compressed_and_scalar_extensions();
+    test_float_arithmetic_rounding_and_flags();
+    test_float_nan_boxing_moves_and_conversions();
+    test_float_memory_and_fs_state();
+    test_double_fused_compare_and_classify();
     puts("cpu foundation C tests passed");
     return 0;
 }

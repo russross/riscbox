@@ -66,6 +66,10 @@ impl Cpu {
                 }
             }
             0x03 | 0x23 => self.execute_memory(bus, instruction, opcode)?,
+            0x07 | 0x27 => self.execute_fp_memory(bus, instruction, opcode)?,
+            0x43 | 0x47 | 0x4b | 0x4f | 0x53 => {
+                self.execute_floating(instruction, opcode)?;
+            }
             0x2f => self.execute_atomic(bus, instruction, rd, rs1, rs2, funct3)?,
             0x13 | 0x1b | 0x33 | 0x3b => {
                 self.execute_arithmetic(instruction, opcode, rd, rs1, rs2, funct3)?;

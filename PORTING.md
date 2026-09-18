@@ -62,8 +62,8 @@ Milestones
 | Complete | Physical memory map | Fixed arena, RAM/device regions, lookup, mapping changes, dirty-page snapshots and invalidation records |
 | Complete | CPU foundation | RV64I/M execution, traps, CSRs, privilege, counters, interrupts, PMP, and Sv39 |
 | Complete | Remaining integer ISA | Atomics, compressed instructions, and advertised scalar extensions |
-| Next | SoftFP | Exact F/D arithmetic, conversions, rounding, flags, NaN boxing, and floating-point CSRs |
-| Pending | Platform foundation | Reset path, FDT, CLINT, PLIC, UART, RTC, finisher, and framebuffer |
+| Complete | SoftFP | Exact F/D arithmetic, conversions, rounding, flags, NaN boxing, and floating-point CSRs |
+| Next | Platform foundation | Reset path, FDT, CLINT, PLIC, UART, RTC, finisher, and framebuffer |
 | Pending | VirtIO devices | MMIO transport plus block, console, 9p, network, and input |
 | Pending | Browser services | Configuration, HTTP storage, encrypted filesystem support, JS adapter, and browser entry points |
 | Pending | Complete-platform acceptance | Shared native/WASM suite, Chrome validation, xv6 user tests, and Alpine login/shutdown |
@@ -71,21 +71,21 @@ Milestones
 Current status
 --------------
 
-The remaining integer ISA milestone is complete. Rust now supports RV64 A,
-16-bit instruction fetch and the base compressed ISA, Zcb, Zba, Zbb, Zbs,
-Zicond, Zimop, Zcmop, Zawrs, Svinval, and the configured cache-block
-operations. Atomics preserve the one-hart reservation model, compressed fetch
-uses two-byte instruction alignment, and cache-block zeroing uses translated,
-permission-checked 64-byte ranges. The CPU foundation tests now also cover
-Sstc wakeup, Svade, Svpbmt, and Svnapot behavior. Matching sanitizer-backed C
-coverage exercises representative atomic, compressed, Zcb, and scalar
-extension behavior.
+The SoftFP milestone is complete. Rust now implements binary32 and binary64
+with integer arithmetic, all five RISC-V rounding modes, sticky exception
+flags, fused multiply-add, square root, comparisons, classification, and all
+RV64 integer and format conversions. CPU integration covers F/D state and
+CSRs, NaN boxing, scalar and compressed memory operations, and every F/D
+instruction family. Matching C and Rust tests cover arithmetic, rounding,
+flags, NaNs, conversions, moves, memory access, and disabled floating-point
+state. Random differential checks cover the arithmetic core, FMA, and format
+conversion. The tests also corrected C reference handling for single-precision
+moves, NaN-boxed operands, reserved dynamic rounding modes, and dirty FS state.
 
 Rust 1.92, the `wasm32-unknown-unknown` standard library, Clang 19, Emscripten
 3.1.69, Node 20, and Chrome 152 were present when the port was initialized. The
-next milestone is a direct, integer-based SoftFP implementation for exact F/D
-semantics. Host floating-point arithmetic is not suitable because RISC-V
-requires all five rounding modes and precise sticky exception flags.
+next milestone is the platform foundation: machine reset and device tree,
+interrupt controllers, UART, RTC, finisher, and framebuffer.
 
 Decision log
 ------------
@@ -106,3 +106,6 @@ Decision log
     their independent state and validation requirements. Implement SoftFP with
     integer algorithms so native and WASM builds have identical rounding,
     exceptions, and NaN behavior.
+*   2026-09-18: Represent floating-point values as raw bits throughout the CPU
+    and SoftFP boundary. Arithmetic returns sticky flags explicitly; the CPU
+    owns architectural state, NaN boxing, and FS dirty transitions.

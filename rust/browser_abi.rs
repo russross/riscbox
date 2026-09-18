@@ -199,6 +199,7 @@ pub extern "C" fn riscbox_next_action() -> u32 {
             Some(HostAction::Console(_)) => 3,
             Some(HostAction::Network(_)) => 4,
             Some(HostAction::Schedule(_)) => 5,
+            Some(HostAction::Framebuffer(_)) => 6,
             None => 0,
         }
     })
@@ -216,7 +217,7 @@ pub extern "C" fn riscbox_action_value() -> u32 {
 #[must_use]
 pub extern "C" fn riscbox_action_data_address() -> u32 {
     STATE.with_borrow(|state| {
-        action_bytes(state.action.as_ref())
+        action_bytes(state)
             .and_then(|bytes| u32::try_from(bytes.as_ptr() as usize).ok())
             .unwrap_or(0)
     })
@@ -225,10 +226,35 @@ pub extern "C" fn riscbox_action_data_address() -> u32 {
 #[must_use]
 pub extern "C" fn riscbox_action_data_length() -> u32 {
     STATE.with_borrow(|state| {
-        action_bytes(state.action.as_ref())
+        action_bytes(state)
             .and_then(|bytes| u32::try_from(bytes.len()).ok())
             .unwrap_or(0)
     })
+}
+
+#[must_use]
+pub extern "C" fn riscbox_action_x() -> u32 {
+    framebuffer_action(|update| update.x)
+}
+
+#[must_use]
+pub extern "C" fn riscbox_action_y() -> u32 {
+    framebuffer_action(|update| update.y)
+}
+
+#[must_use]
+pub extern "C" fn riscbox_action_width() -> u32 {
+    framebuffer_action(|update| update.width)
+}
+
+#[must_use]
+pub extern "C" fn riscbox_action_height() -> u32 {
+    framebuffer_action(|update| update.height)
+}
+
+#[must_use]
+pub extern "C" fn riscbox_action_stride() -> u32 {
+    framebuffer_action(|update| update.stride)
 }
 
 #[must_use]
@@ -271,10 +297,18 @@ fn allocated_string(state: &AbiState, address: u32, length: u32) -> Option<Strin
     String::from_utf8(allocated_bytes(state, address, length)?.to_vec()).ok()
 }
 
-fn action_bytes(action: Option<&HostAction>) -> Option<&[u8]> {
-    match action? {
+fn action_bytes(state: &AbiState) -> Option<&[u8]> {
+    match state.action.as_ref()? {
         HostAction::Request(request) => Some(request.url.as_bytes()),
         HostAction::Console(bytes) | HostAction::Network(bytes) => Some(bytes),
+        HostAction::Framebuffer(update) => state.runtime.framebuffer_bytes(*update),
         HostAction::Started | HostAction::Schedule(_) => None,
     }
+}
+
+fn framebuffer_action(value: impl FnOnce(&crate::machine::FramebufferUpdate) -> u32) -> u32 {
+    STATE.with_borrow(|state| match state.action.as_ref() {
+        Some(HostAction::Framebuffer(update)) => value(update),
+        _ => 0,
+    })
 }

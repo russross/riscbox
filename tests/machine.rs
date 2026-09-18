@@ -1,7 +1,7 @@
 use riscbox::browser_storage::HttpBlockStore;
 use riscbox::cpu::CpuBus;
 use riscbox::machine::{
-    BootImages, FRAMEBUFFER_BASE, FramebufferConfig, Machine, MachineConfig, RAM_BASE,
+    BootImages, FRAMEBUFFER_BASE, FramebufferConfig, Machine, MachineConfig, RAM_BASE, RedrawSpan,
 };
 use riscbox::memory::{AccessWidth, GuestAddress};
 use riscbox::platform::FinishStatus;
@@ -219,5 +219,77 @@ fn framebuffer_dirty_rows_are_merged_and_consumed() {
             .take_redraw_spans()
             .expect("consumed snapshot")
             .is_empty()
+    );
+
+    machine
+        .bus_mut()
+        .write(
+            GuestAddress(FRAMEBUFFER_BASE + 10 * 4096),
+            AccessWidth::Word,
+            2,
+        )
+        .expect("second framebuffer write");
+    let span = machine.take_redraw_spans().expect("second dirty snapshot")[0];
+    let update = machine
+        .framebuffer_update(span)
+        .expect("framebuffer range")
+        .expect("configured framebuffer");
+    assert_eq!(
+        (
+            update.x,
+            update.y,
+            update.width,
+            update.height,
+            update.stride
+        ),
+        (0, 16, 640, 2, 2560)
+    );
+    assert_eq!(
+        machine
+            .framebuffer_bytes(update)
+            .expect("framebuffer bytes")
+            .len(),
+        5120
+    );
+}
+
+#[test]
+fn framebuffer_snapshot_invalidates_cached_cpu_write_translation() {
+    let mut machine = machine(true);
+    let instructions = [
+        0x0410_00b7_u32, // lui x1, 0x4100
+        0x0010_0113,     // addi x2, x0, 1
+        0x0020_a023,     // sw x2, 0(x1)
+        0xfe00_0ee3,     // beq x0, x0, -4
+    ];
+    let firmware: Vec<u8> = instructions
+        .into_iter()
+        .flat_map(u32::to_le_bytes)
+        .collect();
+    machine
+        .load_boot(BootImages {
+            firmware: &firmware,
+            kernel: None,
+            initrd: None,
+            command_line: "",
+        })
+        .expect("boot image");
+
+    machine.run(1_000);
+    assert_eq!(
+        machine.take_redraw_spans().expect("first dirty snapshot"),
+        [RedrawSpan { y: 0, height: 2 }]
+    );
+    assert!(
+        machine
+            .take_redraw_spans()
+            .expect("consumed snapshot")
+            .is_empty()
+    );
+
+    machine.run(1_000);
+    assert_eq!(
+        machine.take_redraw_spans().expect("second dirty snapshot"),
+        [RedrawSpan { y: 0, height: 2 }]
     );
 }

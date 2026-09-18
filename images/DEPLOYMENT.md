@@ -128,6 +128,9 @@ small adapter:
 
 *   Pass `consoleWrite`, `onVmStarted`, `onError`, `networkWrite`, and optional
     scheduling callbacks to `Riscbox.instantiate()`.
+*   Pass `framebufferRefresh(bytes, geometry)` to receive a zero-copy view of
+    each dirty framebuffer rectangle. `geometry` supplies `x`, `y`, `width`,
+    `height`, and the full framebuffer byte stride.
 *   Send terminal bytes with `runtime.consoleInput(bytes)` and size changes with
     `runtime.consoleResize(columns, rows)`.
 *   Forward keyboard, pointer, wheel, network packet, and carrier events through

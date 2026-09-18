@@ -158,3 +158,32 @@ test("input events use stable scalar exports", () => {
         ["network_carrier", 1],
     ]);
 });
+
+test("framebuffer actions expose a zero-copy pixel view and geometry", () => {
+    const fake = fakeModule();
+    new Uint8Array(fake.exports.memory.buffer, 2048, 8)
+        .set(Uint8Array.of(1, 2, 3, 4, 5, 6, 7, 8));
+    const actions = [6, 0];
+    fake.exports.riscbox_next_action = () => actions.shift();
+    fake.exports.riscbox_action_value = () => 0;
+    fake.exports.riscbox_action_data_address = () => 2048;
+    fake.exports.riscbox_action_data_length = () => 8;
+    fake.exports.riscbox_action_x = () => 0;
+    fake.exports.riscbox_action_y = () => 3;
+    fake.exports.riscbox_action_width = () => 2;
+    fake.exports.riscbox_action_height = () => 1;
+    fake.exports.riscbox_action_stride = () => 8;
+    let pixels;
+    let geometry;
+    const runtime = new Riscbox(fake.exports, {
+        framebufferRefresh(data, update) {
+            pixels = data;
+            geometry = update;
+        },
+    });
+    runtime.drainActions();
+    assert.deepEqual(pixels, Uint8Array.of(1, 2, 3, 4, 5, 6, 7, 8));
+    assert.deepEqual(geometry, { x: 0, y: 3, width: 2, height: 1, stride: 8 });
+    new Uint8Array(fake.exports.memory.buffer)[2048] = 9;
+    assert.equal(pixels[0], 9);
+});

@@ -177,3 +177,50 @@ fn javascript_9p_callback_is_installed_while_file_backends_remain_unsupported() 
         Err(RuntimeError::Unsupported("file and socket 9p filesystems"))
     );
 }
+
+#[test]
+fn framebuffer_updates_coexist_with_the_virtio_console() {
+    let mut runtime = BrowserRuntime::default();
+    runtime.start(start()).expect("start");
+    let (config_id, _) = request(&mut runtime);
+    runtime
+        .complete_http(
+            config_id,
+            200,
+            br#"{version:1,machine:"riscv64",memory_size:32,bios:"fw.bin",console:"virtio",display0:{device:"simplefb",width:64,height:32}}"#.to_vec(),
+        )
+        .expect("configuration");
+    let (firmware_id, _) = request(&mut runtime);
+    let instructions = [0x0410_00b7_u32, 0x0010_0113, 0x0020_a023, 0x0000_006f];
+    let firmware = instructions
+        .into_iter()
+        .flat_map(u32::to_le_bytes)
+        .collect();
+    runtime
+        .complete_http(firmware_id, 200, firmware)
+        .expect("firmware");
+    assert_eq!(runtime.next_action(), Some(HostAction::Started));
+    assert_eq!(runtime.next_action(), Some(HostAction::Schedule(0)));
+
+    runtime
+        .run(&mut BrowserController::default(), 0, 0)
+        .expect("execution slice");
+    let Some(HostAction::Framebuffer(update)) = runtime.next_action() else {
+        panic!("expected framebuffer action");
+    };
+    assert_eq!(
+        (
+            update.x,
+            update.y,
+            update.width,
+            update.height,
+            update.stride
+        ),
+        (0, 0, 64, 16, 256)
+    );
+    assert_eq!(
+        runtime.framebuffer_bytes(update).expect("pixel rows")[..4],
+        [1, 0, 0, 0]
+    );
+    assert_eq!(runtime.next_action(), Some(HostAction::Schedule(10)));
+}

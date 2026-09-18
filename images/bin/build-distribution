@@ -50,7 +50,10 @@ install -m 644 "$IMAGES_DIR/web/index.html" "$stage_dir/index.html"
 if [ -d "$image_dir/web" ]; then
     cp -R "$image_dir/web/." "$stage_dir/"
 fi
-if grep -R -q 'p9\.js' "$stage_dir" --include='*.html'; then
+if [ -d "$image_dir/examples" ]; then
+    cp -R "$image_dir/examples" "$stage_dir/examples"
+fi
+if grep -R -q 'p9\.js' "$stage_dir" --include='*.html' --include='*.js'; then
     install -m 644 "$ROOT_DIR/js/p9.js" "$stage_dir/p9.js"
     install -m 644 "$ROOT_DIR/js/p9.d.ts" "$stage_dir/p9.d.ts"
 fi

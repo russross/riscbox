@@ -27,6 +27,13 @@ For native Risclet work, `risclet/run-native.sh` exports the tracked demo
 directory through a temporary `diod` socket and boots the unsplit image. It
 requires `/usr/sbin/diod` and a host user with uid 1000.
 
+The browser Risclet application loads its workspaces from the tracked
+`risclet/examples/` directory. `examples.json` names each example and lists
+the files copied into its in-memory 9p tree. The distribution builder copies
+the complete directory, including dotfiles and documentation, to
+`dist/examples/`. The application is entirely static and needs only an HTTP
+server; it does not use an RPC service.
+
 Shared artifacts are kept under `images/build/`; per-image work and output are
 kept under that image's `build/` and `dist/`. None is tracked. The Alpine
 release is selected once near the top of `bin/create-alpine-ext4`.

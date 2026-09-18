@@ -8,7 +8,9 @@ use std::rc::Rc;
 use crate::browser::{BrowserController, BrowserEvent, RunPolicy};
 use crate::browser_storage::HttpBlockStore;
 use crate::config::{Console, FilesystemBackend, VmConfig, resolve_asset_path};
-use crate::machine::{BootImages, FramebufferConfig, Machine, MachineConfig, MachineError};
+use crate::machine::{
+    BootImages, FramebufferConfig, FramebufferUpdate, Machine, MachineConfig, MachineError,
+};
 use crate::virtio_devices::{DeviceError, InputKind, NetworkBackend, NinePBackend};
 
 pub type NinePCallback = Rc<RefCell<dyn FnMut(&[u8]) -> Result<Vec<u8>, DeviceError>>>;
@@ -52,6 +54,7 @@ pub enum HostAction {
     Started,
     Console(Vec<u8>),
     Network(Vec<u8>),
+    Framebuffer(FramebufferUpdate),
     Schedule(u32),
 }
 
@@ -337,6 +340,11 @@ impl BrowserRuntime {
                 .drain(..)
                 .map(HostAction::Network),
         );
+        for span in running.machine.take_redraw_spans()? {
+            if let Some(update) = running.machine.framebuffer_update(span)? {
+                self.actions.push_back(HostAction::Framebuffer(update));
+            }
+        }
         self.actions.push_back(HostAction::Schedule(
             self.policy.scheduled_delay(self.policy.maximum_delay_ms),
         ));
@@ -345,6 +353,14 @@ impl BrowserRuntime {
 
     pub fn next_action(&mut self) -> Option<HostAction> {
         self.actions.pop_front()
+    }
+
+    #[must_use]
+    pub fn framebuffer_bytes(&self, update: FramebufferUpdate) -> Option<&[u8]> {
+        let State::Running(running) = &self.state else {
+            return None;
+        };
+        running.machine.framebuffer_bytes(update)
     }
 
     #[must_use]
@@ -434,7 +450,7 @@ impl BrowserRuntime {
                 filesystem.tag.as_bytes(),
             )?;
         }
-        let console_slot = if framebuffer.is_none() && config.console == Console::Virtio {
+        let console_slot = if config.console == Console::Virtio {
             Some(machine.add_console_device(80, 25)?)
         } else {
             None

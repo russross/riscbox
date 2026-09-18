@@ -64,6 +64,16 @@ pub struct RedrawSpan {
     pub height: u32,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FramebufferUpdate {
+    pub arena_offset: ArenaOffset,
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+    pub stride: u32,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum MachineError {
     Memory(MemoryError),
@@ -881,6 +891,10 @@ impl Machine {
             return Ok(Vec::new());
         };
         let snapshot = self.bus.memory.take_dirty_pages(framebuffer.region)?;
+        if let Some(invalidation) = snapshot.invalidation {
+            self.cpu
+                .invalidate_write_range(invalidation.arena_offset, invalidation.len);
+        }
         let mut result: Vec<RedrawSpan> = Vec::new();
         for (word_index, word) in snapshot.words.iter().copied().enumerate() {
             for bit in 0..32 {
@@ -914,6 +928,48 @@ impl Machine {
             }
         }
         Ok(result)
+    }
+
+    /// Describes the framebuffer bytes covered by a dirty row span.
+    ///
+    /// # Errors
+    ///
+    /// Returns a memory-map error if the framebuffer range is inconsistent.
+    pub fn framebuffer_update(
+        &mut self,
+        span: RedrawSpan,
+    ) -> Result<Option<FramebufferUpdate>, MachineError> {
+        let Some(framebuffer) = self.bus.framebuffer.as_ref() else {
+            return Ok(None);
+        };
+        let byte_offset = span
+            .y
+            .checked_mul(framebuffer.stride)
+            .ok_or(MachineError::InvalidFramebuffer)?;
+        let len = span
+            .height
+            .checked_mul(framebuffer.stride)
+            .ok_or(MachineError::InvalidFramebuffer)?;
+        let arena_offset = self.bus.memory.ram_range(
+            GuestAddress(FRAMEBUFFER_BASE + u64::from(byte_offset)),
+            len as usize,
+            false,
+        )?;
+        Ok(Some(FramebufferUpdate {
+            arena_offset,
+            x: 0,
+            y: span.y,
+            width: framebuffer.width,
+            height: span.height,
+            stride: framebuffer.stride,
+        }))
+    }
+
+    #[must_use]
+    pub fn framebuffer_bytes(&self, update: FramebufferUpdate) -> Option<&[u8]> {
+        let len = update.height.checked_mul(update.stride)? as usize;
+        let start = update.arena_offset.0 as usize;
+        self.bus.memory.arena().get(start..start.checked_add(len)?)
     }
 }
 

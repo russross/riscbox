@@ -67,6 +67,7 @@ Milestones
 | Complete | VirtIO devices | MMIO transport plus block, console, 9p, network, and input |
 | Complete | Browser services | Configuration, HTTP storage, encrypted filesystem support, JS adapter, and browser entry points |
 | Complete | Complete-platform acceptance | Shared native/WASM suite, Chrome validation, xv6 user tests, and Alpine login/shutdown |
+| Complete | Framebuffer delivery and Risclet demo | Dirty-region WASM callbacks plus a static, editable multi-example 9p application |
 
 Current status
 --------------
@@ -75,15 +76,19 @@ The planned Rust port is complete through the browser integration boundary.
 The runtime loads configuration, boot images, and split HTTP disks through
 explicit request/completion queues; pending VirtIO block descriptors resume
 after their blocks arrive. The raw WASM ABI and dependency-free JavaScript
-adapter provide scheduling, console and device events, and synchronous browser
-9p service calls. Both supplied pages now load the Rust artifact, and the image
-distribution script packages it as `riscbox.wasm`.
+adapter provide scheduling, console and device events, framebuffer dirty
+regions, and synchronous browser 9p service calls. Framebuffer updates refer
+directly to the fixed WASM arena and include their position, dimensions, and
+stride. Both supplied pages load the Rust artifact, and the image distribution
+script packages it as `riscbox.wasm`.
 
 Focused native tests cover the complete machine and browser runtime. The
 release acceptance suite boots Alpine 3.24.1, logs in, and shuts down through
 the finisher, and runs current xv6 user tests over its UART and VirtIO block
 device. Chrome 152 boots the deployed Rust WASM Alpine image to its login
-prompt; the Risclet page starts with its in-memory JavaScript 9p service. Clean
+prompt. The standalone Risclet page boots its in-memory JavaScript 9p service,
+loads either tracked example without RPC, mirrors guest-created and deleted
+files, and updates optional instructions from `doc/doc.md`. Clean
 C release, sanitizer, and reference WASM builds remain compatibility checks;
 the Rust workspace, strict Clippy checks, WASM build, Node adapter tests, and
 the ignored full-guest acceptance tests are the port's validation surfaces.
@@ -140,3 +145,17 @@ Decision log
 *   2026-09-18: Keep browser 9p synchronous at the existing JavaScript service
     boundary. The WASM wrapper supplies a fixed reply buffer and rejects absent
     servers, oversized replies, and backend errors without adding an executor.
+*   2026-09-18: Deliver framebuffer changes as dirty rectangles whose bytes
+    remain in the fixed WASM arena. The JavaScript adapter passes a zero-copy
+    view with explicit geometry and stride to the host callback.
+*   2026-09-18: Package Risclet examples as tracked static files and load them
+    into a browser-owned 9p tree. The guest and editor share that live tree;
+    `doc/doc.md` alone controls whether the instructions view exists.
+
+Next milestone
+--------------
+
+Add framebuffer demonstration programs to the image, configure the guest
+display and input devices, and connect the framebuffer callback to a canvas in
+the Risclet page. The current demo intentionally remains terminal-only until
+that guest-to-page path can be validated together.

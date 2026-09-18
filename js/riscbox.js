@@ -161,6 +161,20 @@
                         this.options.schedule(milliseconds);
                     else
                         setTimeout(() => this.run(), milliseconds);
+                } else if (kind === 6) {
+                    const x = this.exports.riscbox_action_x();
+                    const y = this.exports.riscbox_action_y();
+                    const width = this.exports.riscbox_action_width();
+                    const height = this.exports.riscbox_action_height();
+                    const stride = this.exports.riscbox_action_stride();
+                    const end = ptr + len;
+                    const memory = new Uint8Array(this.exports.memory.buffer);
+                    if (!Number.isSafeInteger(end) || ptr < 0 || len < 0 || end > memory.length)
+                        throw new RangeError("framebuffer range is outside WASM memory");
+                    this.options.framebufferRefresh?.(
+                        memory.subarray(ptr, end),
+                        { x, y, width, height, stride },
+                    );
                 } else {
                     throw new Error(`unknown Riscbox host action ${kind}`);
                 }

@@ -116,7 +116,7 @@ Paths for boot files, disks, and network filesystems are relative to the configu
 *   `fsN: { socket: "...", tag: "..." }` connects the VirtIO device directly
     to a 9P server over a native Unix-domain socket.
 *   `fsN: { js9p: true, tag: "..." }` connects the VirtIO device to the
-    synchronous `Module.p9Server` endpoint in a browser build.
+    synchronous `p9Server` supplied to the browser adapter.
 *   `ethN: { driver: "user" }` adds user-mode networking. Native builds also support `driver: "tap"` with an `ifname`; see `netinit.sh`.
 *   `display0: { device: "simplefb", width: 1024, height: 768 }` adds the simple framebuffer. `input_device: "virtio"` adds keyboard and tablet input.
 
@@ -129,7 +129,8 @@ Command-line options:
       -ctrlc            let Ctrl-C stop riscbox instead of reaching the guest
       -append TEXT       append to the kernel command line
 
-The default native disk mode is a private in-memory snapshot. The browser HTTP block device also keeps writes in memory. Browser builds currently accept at most one block device and one 9p filesystem.
+The default native disk mode is a private in-memory snapshot. The browser HTTP
+block device also keeps writes in memory.
 
 
 Technical status
@@ -154,7 +155,8 @@ Available devices are:
 *   VirtIO MMIO block, network, 9p, keyboard, and tablet devices.
 *   PLIC and legacy CLINT interrupt/timer controllers.
 *   SiFive-compatible poweroff/test device.
-*   A simple framebuffer backed by SDL natively or an HTML canvas in a browser.
+*   A simple framebuffer backed by SDL natively and exposed as dirty-region
+    callbacks to browser integrations.
 *   Native raw disks and 9p directories, plus chunked HTTP disks and remote 9p.
 
 Compared with QEMU `virt`, riscbox omits multiple harts, RV32, configurable CPU models, PCIe, flash, fw_cfg, ACPI, UEFI, AIA/IMSIC/APLIC, IOMMU, NUMA, and the broad device catalogue. Those omissions are intentional unless a small, standard implementation becomes necessary for the target guests.

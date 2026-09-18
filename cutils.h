@@ -124,7 +124,8 @@ static inline void put_le64(uint8_t *ptr, uint64_t v)
 
 static inline uint32_t get_be32(const uint8_t *d)
 {
-    return (d[0] << 24) | (d[1] << 16) | (d[2] << 8) | d[3];
+    return ((uint32_t)d[0] << 24) | ((uint32_t)d[1] << 16) |
+           ((uint32_t)d[2] << 8) | d[3];
 }
 
 static inline void put_be32(uint8_t *d, uint32_t v)

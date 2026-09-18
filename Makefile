@@ -129,15 +129,32 @@ build/tests/virtio_c: tests/virtio_c.c virtio.c virtio.h iomem.c cutils.c
 	$(CC) $(CPPFLAGS) $(PORT_TEST_CFLAGS) -ffunction-sections -I. \
 		-Wl,--gc-sections -o $@ tests/virtio_c.c iomem.c cutils.c
 
+build/tests/config_c: tests/config_c.c machine.c machine.h json.c json.h \
+    cutils.c cutils.h
+	mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(PORT_TEST_CFLAGS) -ffunction-sections -I. \
+		-Wl,--gc-sections -o $@ tests/config_c.c json.c cutils.c
+
+build/tests/crypto_c: tests/crypto_c.c fs_wget.c fs_wget.h aes.c sha256.c cutils.c fs_utils.c
+	mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(PORT_TEST_CFLAGS) -ffunction-sections -I. \
+		-Wl,--gc-sections -o $@ tests/crypto_c.c aes.c sha256.c cutils.c fs_utils.c -lcurl
+
 test-port: build/tests/physical_memory_c build/tests/cpu_foundation_c \
-    build/tests/platform_foundation_c build/tests/virtio_c
+    build/tests/platform_foundation_c build/tests/virtio_c build/tests/config_c \
+    build/tests/crypto_c
 	./build/tests/physical_memory_c
 	./build/tests/cpu_foundation_c
 	./build/tests/platform_foundation_c
 	./build/tests/virtio_c
+	./build/tests/config_c
+	./build/tests/crypto_c
 	cargo test
 	cargo clippy --all-targets -- -D warnings
 	cargo build --target wasm32-unknown-unknown
+
+rust-wasm:
+	cargo build --release -p riscbox-wasm --target wasm32-unknown-unknown
 
 build_filelist: build_filelist.o fs_utils.o cutils.o
 	$(CC) $(LDFLAGS) -o $@ $^ -lm
@@ -163,4 +180,4 @@ clean:
 -include $(wildcard build/debug/*.d)
 -include $(wildcard build/debug/slirp/*.d)
 
-.PHONY: all release debug wasm clean install test-port
+.PHONY: all release debug wasm rust-wasm clean install test-port

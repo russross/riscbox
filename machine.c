@@ -331,6 +331,8 @@ static int virt_machine_parse_config(VirtMachineParams *p,
     }
 
     for(;;) {
+        const char *driver, *ifname;
+
         snprintf(buf1, sizeof(buf1), "eth%d", p->eth_count);
         obj = json_object_get(cfg, buf1);
         if (json_is_undefined(obj))
@@ -339,14 +341,15 @@ static int virt_machine_parse_config(VirtMachineParams *p,
             vm_error("Too many ethernet interfaces\n");
             goto tag_fail;
         }
-        if (vm_get_str(obj, "driver", &str) < 0)
+        if (vm_get_str(obj, "driver", &driver) < 0)
             goto tag_fail;
-        p->tab_eth[p->eth_count].driver = strdup(str);
-        if (!strcmp(str, "tap")) {
-            if (vm_get_str(obj, "ifname", &str) < 0)
+        ifname = NULL;
+        if (!strcmp(driver, "tap")) {
+            if (vm_get_str(obj, "ifname", &ifname) < 0)
                 goto tag_fail;
-            p->tab_eth[p->eth_count].ifname = strdup(str);
         }
+        p->tab_eth[p->eth_count].driver = strdup(driver);
+        p->tab_eth[p->eth_count].ifname = strdup_null(ifname);
         p->eth_count++;
     }
 

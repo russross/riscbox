@@ -65,29 +65,30 @@ Milestones
 | Complete | SoftFP | Exact F/D arithmetic, conversions, rounding, flags, NaN boxing, and floating-point CSRs |
 | Complete | Platform foundation | Reset path, FDT, CLINT, PLIC, UART, RTC, finisher, and framebuffer |
 | Complete | VirtIO devices | MMIO transport plus block, console, 9p, network, and input |
-| Next | Browser services | Configuration, HTTP storage, encrypted filesystem support, JS adapter, and browser entry points |
-| Pending | Complete-platform acceptance | Shared native/WASM suite, Chrome validation, xv6 user tests, and Alpine login/shutdown |
+| Complete | Browser services | Configuration, HTTP storage, encrypted filesystem support, JS adapter, and browser entry points |
+| Next | Complete-platform acceptance | Shared native/WASM suite, Chrome validation, xv6 user tests, and Alpine login/shutdown |
 
 Current status
 --------------
 
-The VirtIO milestone is complete. Rust now implements the modern MMIO
-transport, strict split-ring validation, feature negotiation, reset and
-interrupt state, and block, console, raw 9p, network, keyboard, mouse, and
-tablet protocols. The machine owns ordered MMIO slots, routes their PLIC
-sources while reserving the UART and RTC interrupts, emits corresponding FDT
-nodes, and exposes explicit host ingress methods. Matching sanitizer-backed C
-and Rust tests cover transport registers, malformed chains, ring publication,
-device requests, configuration, and manual receive queues. The tests corrected
-C notification gating, descriptor bounds and cycle handling, used-ring
-publication order, the non-merged network header size, and console input
-clipping.
+The browser-services milestone is complete. Rust now parses the deployed
+relaxed configuration syntax into strong types, resolves relative assets,
+models browser events and scheduling, caches split HTTP block images with
+copy-on-write overlays, and supports the legacy AES-128-CBC encrypted-file and
+PBKDF2-HMAC-SHA256 formats. A small companion crate provides stable raw WASM
+exports without weakening the main crate's safe-Rust policy, and the
+dependency-free JavaScript adapter owns memory copies and compatibility entry
+points. Sanitizer-backed C and matching Rust tests cover configuration, path
+resolution, crypto vectors, malformed encrypted files, block manifests, cache
+misses, cross-block reads, and overlays. Node tests cover the adapter and the
+JavaScript 9p service. The tests also corrected a C configuration failure leak
+and undefined signed shifts in big-endian reads.
 
 Rust 1.92, the `wasm32-unknown-unknown` standard library, Clang 19, Emscripten
 3.1.69, Node 20, and Chrome 152 were present when the port was initialized. The
-next milestone is browser services: configuration, HTTP-backed storage,
-encrypted filesystem support, the JavaScript adapter, and browser entry
-points.
+next milestone is complete-platform acceptance. It will connect asynchronous
+HTTP completions to pending VirtIO requests, replace the example page's
+Emscripten module with the Rust artifact, and validate xv6 and Alpine in Chrome.
 
 Decision log
 ------------
@@ -120,3 +121,13 @@ Decision log
     the browser platform boundary. Validate every descriptor chain before
     device dispatch, keep host receive queues pending until explicit ingress,
     and use backend traits for block, network, and raw 9p services.
+*   2026-09-18: Keep browser I/O as explicit request/completion and event queues.
+    Put stable unmangled exports in the small `riscbox-wasm` companion crate so
+    the emulator crate continues to forbid unsafe code. The handwritten adapter
+    copies all host-owned buffers across the boundary.
+*   2026-09-18: Use narrowly configured RustCrypto `aes`, `cbc`, `pbkdf2`, and
+    `sha2` crates for legacy filesystem compatibility. Default features are
+    disabled. The four direct crates resolve to 13 transitive crates for shared
+    cipher/digest traits and buffers, HMAC, constant-time helpers, and fixed
+    arrays; allocator, password-format, randomness, and zeroization features
+    remain disabled.

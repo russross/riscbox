@@ -135,6 +135,8 @@ static const uint32_t *default_get_dirty_bits(PhysMemoryMap *map,
     size_t n, i;
     
     dirty_bits = pr->dirty_bits;
+    if (!dirty_bits)
+        return NULL;
 
     has_dirty_bits = FALSE;
     n = pr->dirty_bits_size / sizeof(uint32_t);
@@ -178,8 +180,12 @@ void phys_mem_reset_dirty_bit(PhysMemoryRange *pr, size_t offset)
 
 static void default_free_ram(PhysMemoryMap *s, PhysMemoryRange *pr)
 {
+    int i;
+
     (void)s;
     free(pr->phys_mem);
+    for(i = 0; i < 2; i++)
+        free(pr->dirty_bits_tab[i]);
 }
 
 PhysMemoryRange *cpu_register_device(PhysMemoryMap *s, uint64_t addr,

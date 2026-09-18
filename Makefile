@@ -82,6 +82,10 @@ endif
 EMU_OBJS+=riscv_machine.o softfp.o riscv_cpu64.o
 DEBUG_OBJS:=$(addprefix build/debug/,$(EMU_OBJS))
 
+PORT_TEST_CFLAGS=-O1 -g3 -Wall -Wextra -Werror -Wformat=2 -Wshadow \
+    -fno-omit-frame-pointer -fsanitize=address,undefined \
+    -fno-sanitize-recover=all
+
 riscbox: $(EMU_OBJS)
 	$(CC) $(LDFLAGS) -o $@ $^ $(EMU_LIBS)
 
@@ -99,6 +103,18 @@ build/debug/%.o: %.c
 	mkdir -p $(@D)
 	$(CC) $(CPPFLAGS) $(DEBUG_CFLAGS) -c -o $@ $<
 
+build/tests/physical_memory_c: tests/physical_memory_c.c iomem.c cutils.c \
+    iomem.h cutils.h
+	mkdir -p $(@D)
+	$(CC) $(CPPFLAGS) $(PORT_TEST_CFLAGS) -I. -o $@ \
+		tests/physical_memory_c.c iomem.c cutils.c
+
+test-port: build/tests/physical_memory_c
+	./build/tests/physical_memory_c
+	cargo test
+	cargo clippy --all-targets -- -D warnings
+	cargo build --target wasm32-unknown-unknown
+
 build_filelist: build_filelist.o fs_utils.o cutils.o
 	$(CC) $(LDFLAGS) -o $@ $^ -lm
 
@@ -114,6 +130,7 @@ install: $(PROGS)
 
 clean:
 	rm -rf build
+	rm -rf target
 	rm -f *.o *.d *~ $(PROGS) riscbox-debug slirp/*.o slirp/*.d slirp/*~
 	rm -f js/riscbox-wasm.js js/riscbox-wasm.wasm
 
@@ -122,4 +139,4 @@ clean:
 -include $(wildcard build/debug/*.d)
 -include $(wildcard build/debug/slirp/*.d)
 
-.PHONY: all release debug wasm clean install
+.PHONY: all release debug wasm clean install test-port

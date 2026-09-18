@@ -1,6 +1,5 @@
 *.o
 *.d
-AGENTS.md
 .agents/
 build_filelist
 splitimg
@@ -9,3 +8,4 @@ riscbox-debug
 build/
 js/riscbox-wasm.js
 js/riscbox-wasm.wasm
+target/

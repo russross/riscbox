@@ -61,7 +61,8 @@ Milestones
 | ----- | --------- | ------------------- |
 | Complete | Physical memory map | Fixed arena, RAM/device regions, lookup, mapping changes, dirty-page snapshots and invalidation records |
 | Complete | CPU foundation | RV64I/M execution, traps, CSRs, privilege, counters, interrupts, PMP, and Sv39 |
-| Next | SoftFP and remaining ISA | F/D semantics, atomics, compressed and advertised scalar extensions |
+| Complete | Remaining integer ISA | Atomics, compressed instructions, and advertised scalar extensions |
+| Next | SoftFP | Exact F/D arithmetic, conversions, rounding, flags, NaN boxing, and floating-point CSRs |
 | Pending | Platform foundation | Reset path, FDT, CLINT, PLIC, UART, RTC, finisher, and framebuffer |
 | Pending | VirtIO devices | MMIO transport plus block, console, 9p, network, and input |
 | Pending | Browser services | Configuration, HTTP storage, encrypted filesystem support, JS adapter, and browser entry points |
@@ -70,20 +71,21 @@ Milestones
 Current status
 --------------
 
-The CPU foundation milestone is complete. Rust now executes RV64I and M from
-the fixed memory arena, maintains precise trap and interrupt state, implements
-machine and supervisor CSRs and returns, exposes architectural counters and
-Sstc state, enforces 16 PMP entries, and translates Sv39 with Svadu, Svpbmt,
-and 64 KiB Svnapot leaf handling. Its TLB stores arena offsets and keeps page
-walk, permission, and PMP work off cached accesses. Matching sanitizer-backed
-C and Rust tests cover integer and M execution, memory access, privilege
-return, precise illegal-instruction traps, PMP denial, and Sv39 hardware
-accessed-bit updates. The C test seam adds exact single-instruction execution,
-and testing corrected CPU-state teardown in the C reference.
+The remaining integer ISA milestone is complete. Rust now supports RV64 A,
+16-bit instruction fetch and the base compressed ISA, Zcb, Zba, Zbb, Zbs,
+Zicond, Zimop, Zcmop, Zawrs, Svinval, and the configured cache-block
+operations. Atomics preserve the one-hart reservation model, compressed fetch
+uses two-byte instruction alignment, and cache-block zeroing uses translated,
+permission-checked 64-byte ranges. The CPU foundation tests now also cover
+Sstc wakeup, Svade, Svpbmt, and Svnapot behavior. Matching sanitizer-backed C
+coverage exercises representative atomic, compressed, Zcb, and scalar
+extension behavior.
 
 Rust 1.92, the `wasm32-unknown-unknown` standard library, Clang 19, Emscripten
 3.1.69, Node 20, and Chrome 152 were present when the port was initialized. The
-next milestone is SoftFP and the remaining ISA groups.
+next milestone is a direct, integer-based SoftFP implementation for exact F/D
+semantics. Host floating-point arithmetic is not suitable because RISC-V
+requires all five rounding modes and precise sticky exception flags.
 
 Decision log
 ------------
@@ -100,3 +102,7 @@ Decision log
 *   2026-09-18: Keep the CPU interpreter direct and cache guest virtual-page to
     32-bit arena-offset translations. Port atomics, compressed instructions,
     floating point, and optional scalar groups after the base CPU boundary.
+*   2026-09-18: Split SoftFP from the remaining integer ISA after inventorying
+    their independent state and validation requirements. Implement SoftFP with
+    integer algorithms so native and WASM builds have identical rounding,
+    exceptions, and NaN behavior.

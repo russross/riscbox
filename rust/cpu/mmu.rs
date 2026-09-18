@@ -119,7 +119,58 @@ impl Cpu {
         Ok(())
     }
 
+    pub(super) fn check_store<B: CpuBus>(
+        &mut self,
+        bus: &mut B,
+        address: u64,
+        width: AccessWidth,
+    ) -> Result<(), Trap> {
+        let physical = self
+            .translate(bus, address, width.bytes(), Access::Write)
+            .map_err(|fault| Self::translation_trap(Access::Write, address, fault))?;
+        bus.ram_range(GuestAddress(physical), width.bytes(), true)
+            .map_err(|_| Self::access_trap(Access::Write, address))?;
+        Ok(())
+    }
+
+    pub(super) fn load_for_store<B: CpuBus>(
+        &mut self,
+        bus: &mut B,
+        address: u64,
+        width: AccessWidth,
+    ) -> Result<u64, Trap> {
+        let physical = self
+            .translate(bus, address, width.bytes(), Access::Write)
+            .map_err(|fault| Self::translation_trap(Access::Write, address, fault))?;
+        bus.read(GuestAddress(physical), width)
+            .map_err(|_| Self::access_trap(Access::Write, address))
+    }
+
+    pub(super) fn cache_block<B: CpuBus>(
+        &mut self,
+        bus: &mut B,
+        address: u64,
+        zero: bool,
+    ) -> Result<(), Trap> {
+        const CACHE_BLOCK_SIZE: usize = 64;
+
+        let block_address = address & !(CACHE_BLOCK_SIZE as u64 - 1);
+        let access = if zero { Access::Write } else { Access::Read };
+        let physical = self
+            .translate(bus, block_address, CACHE_BLOCK_SIZE, access)
+            .map_err(|fault| Self::translation_trap(Access::Write, address, fault))?;
+        let offset = bus
+            .ram_range(GuestAddress(physical), CACHE_BLOCK_SIZE, zero)
+            .map_err(|_| Self::access_trap(Access::Write, address))?;
+        if zero {
+            let start = offset.0 as usize;
+            bus.arena_mut()[start..start + CACHE_BLOCK_SIZE].fill(0);
+        }
+        Ok(())
+    }
+
     pub fn invalidate_write_range(&mut self, start: ArenaOffset, len: u32) {
+        self.reservation = None;
         let start = u64::from(start.0);
         let end = start + u64::from(len);
         for entry in &mut self.tlb_write {

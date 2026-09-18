@@ -3,6 +3,7 @@
 #include <stdlib.h>
 
 #define FLEN 64
+#define CONFIG_EXT_C
 #define CONFIG_CPU_TEST_SINGLE_STEP
 #include "../riscv_cpu.c"
 
@@ -80,6 +81,20 @@ static void run_one(Machine *machine, uint32_t instruction)
 {
     write_le32(machine->ram->phys_mem + machine->cpu->pc, instruction);
     riscv_cpu_interp(machine->cpu, 1);
+}
+
+static void run_one16(Machine *machine, uint16_t instruction)
+{
+    machine->ram->phys_mem[machine->cpu->pc] = instruction;
+    machine->ram->phys_mem[machine->cpu->pc + 1] = instruction >> 8;
+    riscv_cpu_interp(machine->cpu, 1);
+}
+
+static uint32_t encode_amo(uint32_t operation, uint32_t rs2, uint32_t rs1,
+                           uint32_t width, uint32_t rd)
+{
+    return operation << 27 | rs2 << 20 | rs1 << 15 | width << 12 |
+        rd << 7 | 0x2f;
 }
 
 static void test_integer_memory_and_multiply_divide(void)
@@ -164,11 +179,43 @@ static void test_sv39_accessed_update(void)
     machine_end(&machine);
 }
 
+static void test_atomic_compressed_and_scalar_extensions(void)
+{
+    Machine machine = machine_new();
+    RISCVCPUState *cpu = machine.cpu;
+
+    cpu->reg[1] = 0x8000;
+    cpu->reg[2] = 5;
+    write_le32(machine.ram->phys_mem + 0x8000, 0xfffffffe);
+    run_one(&machine, encode_amo(0, 2, 1, 2, 3));
+    CHECK(cpu->reg[3] == UINT64_MAX - 1);
+    CHECK(read_le64(machine.ram->phys_mem + 0x8000) == 3);
+
+    cpu->reg[1] = UINT64_C(0x80000000000000f1);
+    cpu->reg[2] = 3;
+    run_one(&machine, encode_r(0x10, 2, 1, 2, 3, 0x33));
+    CHECK(cpu->reg[3] == 0x1e5);
+    run_one(&machine, encode_i(0x600, 1, 1, 4, 0x13));
+    CHECK(cpu->reg[4] == 0);
+
+    cpu->reg[1] = 0;
+    run_one16(&machine, 0x50fd); /* c.li x1,-1 */
+    run_one16(&machine, 0x0085); /* c.addi x1,1 */
+    CHECK(cpu->reg[1] == 0);
+    CHECK(cpu->pc == 0x1010);
+
+    cpu->reg[8] = UINT64_C(0xffffffffffffff80);
+    run_one16(&machine, 0x9c61); /* c.zext.b x8 */
+    CHECK(cpu->reg[8] == 0x80);
+    machine_end(&machine);
+}
+
 int main(void)
 {
     test_integer_memory_and_multiply_divide();
     test_trap_return_and_pmp();
     test_sv39_accessed_update();
+    test_atomic_compressed_and_scalar_extensions();
     puts("cpu foundation C tests passed");
     return 0;
 }

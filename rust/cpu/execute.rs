@@ -1,7 +1,7 @@
 use super::{
-    AccessWidth, CSR_MINSTRET, Cpu, CpuBus, CsrError, Exception, MSTATUS_MIE, MSTATUS_MPIE,
-    MSTATUS_MPP, MSTATUS_MPRV, MSTATUS_SIE, MSTATUS_SPIE, MSTATUS_SPP, MSTATUS_TSR, MSTATUS_TVM,
-    MSTATUS_TW, Privilege, Trap, low_u32, mmu::Access,
+    AccessWidth, CSR_MINSTRET, Cpu, CpuBus, CsrError, ENVCFG_CBCFE, ENVCFG_CBIE, ENVCFG_CBZE,
+    Exception, MSTATUS_MIE, MSTATUS_MPIE, MSTATUS_MPP, MSTATUS_MPRV, MSTATUS_SIE, MSTATUS_SPIE,
+    MSTATUS_SPP, MSTATUS_TSR, MSTATUS_TVM, MSTATUS_TW, Privilege, Trap, low_u32, mmu::Access,
 };
 
 impl Cpu {
@@ -9,7 +9,14 @@ impl Cpu {
         &mut self,
         bus: &mut B,
         instruction: u32,
+        length: u64,
     ) -> Result<bool, Trap> {
+        if length == 2 {
+            return self.execute_compressed(
+                bus,
+                u16::try_from(instruction).expect("a compressed instruction fits u16"),
+            );
+        }
         let pc = self.pc;
         let opcode = instruction & 0x7f;
         let rd = register_index(instruction, 7);
@@ -27,15 +34,17 @@ impl Cpu {
             ),
             0x6f => {
                 let immediate = decode_j_immediate(instruction);
+                let target = checked_target(pc.wrapping_add(immediate), instruction)?;
                 self.write_register(rd, next_pc);
-                next_pc = checked_target(pc.wrapping_add(immediate), instruction)?;
+                next_pc = target;
             }
             0x67 if funct3 == 0 => {
                 let target = self.registers[rs1]
                     .wrapping_add(sign_extend(u64::from(instruction >> 20), 12))
                     & !1;
+                let target = checked_target(target, instruction)?;
                 self.write_register(rd, next_pc);
-                next_pc = checked_target(target, instruction)?;
+                next_pc = target;
             }
             0x63 => {
                 let left = self.registers[rs1];
@@ -57,12 +66,14 @@ impl Cpu {
                 }
             }
             0x03 | 0x23 => self.execute_memory(bus, instruction, opcode)?,
+            0x2f => self.execute_atomic(bus, instruction, rd, rs1, rs2, funct3)?,
             0x13 | 0x1b | 0x33 | 0x3b => {
                 self.execute_arithmetic(instruction, opcode, rd, rs1, rs2, funct3)?;
             }
             0x0f => match funct3 {
                 0 if instruction & 0xf00f_ff80 == 0 => {}
                 1 if instruction == 0x0000_100f => {}
+                2 => self.execute_cache_block(bus, instruction, rd, rs1)?,
                 _ => return Err(illegal(instruction)),
             },
             0x73 => {
@@ -73,6 +84,74 @@ impl Cpu {
         }
         self.pc = next_pc;
         Ok(retired)
+    }
+
+    fn execute_atomic<B: CpuBus>(
+        &mut self,
+        bus: &mut B,
+        instruction: u32,
+        rd: usize,
+        rs1: usize,
+        rs2: usize,
+        width_code: u32,
+    ) -> Result<(), Trap> {
+        let width = match width_code {
+            2 => AccessWidth::Word,
+            3 => AccessWidth::DoubleWord,
+            _ => return Err(illegal(instruction)),
+        };
+        let address = self.registers[rs1];
+        if address & (width.bytes() as u64 - 1) != 0 {
+            return Err(Trap {
+                exception: if instruction >> 27 == 2 {
+                    Exception::LoadAddressMisaligned
+                } else {
+                    Exception::StoreAddressMisaligned
+                },
+                value: address,
+            });
+        }
+        let operation = instruction >> 27;
+        if operation == 2 {
+            if rs2 != 0 {
+                return Err(illegal(instruction));
+            }
+            let old = self.load(bus, address, width, Access::Read)?;
+            self.reservation = Some((address, width));
+            self.write_register(rd, atomic_result(old, width));
+            return Ok(());
+        }
+        if operation == 3 {
+            let succeeds = self.reservation == Some((address, width));
+            self.reservation = None;
+            if succeeds {
+                self.store(bus, address, width, self.registers[rs2])?;
+                self.write_register(rd, 0);
+            } else {
+                self.check_store(bus, address, width)?;
+                self.write_register(rd, 1);
+            }
+            return Ok(());
+        }
+        let old = self.load_for_store(bus, address, width)?;
+        let source = truncate_atomic(self.registers[rs2], width);
+        let old_truncated = truncate_atomic(old, width);
+        let value = match operation {
+            0 => old_truncated.wrapping_add(source),
+            1 => source,
+            4 => old_truncated ^ source,
+            8 => old_truncated | source,
+            12 => old_truncated & source,
+            16 => signed_atomic_min(old_truncated, source, width),
+            20 => signed_atomic_max(old_truncated, source, width),
+            24 => old_truncated.min(source),
+            28 => old_truncated.max(source),
+            _ => return Err(illegal(instruction)),
+        };
+        self.reservation = None;
+        self.store(bus, address, width, value)?;
+        self.write_register(rd, atomic_result(old, width));
+        Ok(())
     }
 
     fn execute_memory<B: CpuBus>(
@@ -115,6 +194,7 @@ impl Cpu {
                 _ => return Err(illegal(instruction)),
             };
             self.store(bus, address, width, self.registers[rs2])?;
+            self.reservation = None;
         }
         Ok(())
     }
@@ -132,11 +212,21 @@ impl Cpu {
         let right = self.registers[rs2];
         let value = match opcode {
             0x13 => execute_immediate(instruction, funct3, left)?,
+            0x1b if funct3 == 1 && instruction >> 26 == 2 => {
+                u64::from(low_u32(left)) << (instruction >> 20 & 0x3f)
+            }
             0x1b => sign_extend(
                 u64::from(execute_word_immediate(instruction, funct3, low_u32(left))?),
                 32,
             ),
             0x33 => execute_register(instruction, funct3, left, right)?,
+            0x3b if instruction >> 25 == 0x04 && funct3 == 0 => {
+                u64::from(low_u32(left)).wrapping_add(right)
+            }
+            0x3b if instruction >> 25 == 0x04 && funct3 == 4 && rs2 == 0 => left & 0xffff,
+            0x3b if instruction >> 25 == 0x10 && matches!(funct3, 2 | 4 | 6) => {
+                right.wrapping_add(u64::from(low_u32(left)) << (funct3 >> 1))
+            }
             0x3b => sign_extend(
                 u64::from(execute_word_register(
                     instruction,
@@ -152,6 +242,33 @@ impl Cpu {
         Ok(())
     }
 
+    fn execute_cache_block<B: CpuBus>(
+        &mut self,
+        bus: &mut B,
+        instruction: u32,
+        rd: usize,
+        rs1: usize,
+    ) -> Result<(), Trap> {
+        let operation = instruction >> 20;
+        if rd != 0 || !matches!(operation, 0 | 1 | 2 | 4) {
+            return Err(illegal(instruction));
+        }
+        if self.privilege != Privilege::Machine {
+            let required = match operation {
+                0 => ENVCFG_CBIE,
+                1 | 2 => ENVCFG_CBCFE,
+                4 => ENVCFG_CBZE,
+                _ => unreachable!(),
+            };
+            if self.menvcfg & required == 0
+                || self.privilege == Privilege::User && self.senvcfg & required == 0
+            {
+                return Err(illegal(instruction));
+            }
+        }
+        self.cache_block(bus, self.registers[rs1], operation == 4)
+    }
+
     fn execute_system(
         &mut self,
         instruction: u32,
@@ -159,6 +276,15 @@ impl Cpu {
         rs1: usize,
         funct3: u32,
     ) -> Result<bool, Trap> {
+        if funct3 == 4 {
+            let mop_encoding = instruction & 0xb200_707f;
+            if matches!(mop_encoding, 0x8000_4073 | 0x8200_4073) {
+                self.write_register(rd, 0);
+                self.pc = self.pc.wrapping_add(4);
+                return Ok(true);
+            }
+            return Err(illegal(instruction));
+        }
         if funct3 == 0 {
             match instruction {
                 0x0000_0073 => {
@@ -188,7 +314,16 @@ impl Cpu {
                         self.power_down = true;
                     }
                 }
-                _ if instruction & 0xfe00_7fff == 0x1200_0073 => {
+                0x00d0_0073 | 0x01d0_0073 => self.pc = self.pc.wrapping_add(4),
+                0x1800_0073 | 0x1810_0073 => {
+                    if self.privilege == Privilege::User {
+                        return Err(illegal(instruction));
+                    }
+                    self.pc = self.pc.wrapping_add(4);
+                }
+                _ if instruction & 0xfe00_7fff == 0x1200_0073
+                    || instruction & 0xfe00_7fff == 0x1600_0073 =>
+                {
                     if self.privilege == Privilege::User
                         || self.privilege == Privilege::Supervisor
                             && self.mstatus & MSTATUS_TVM != 0
@@ -293,7 +428,7 @@ fn illegal(instruction: u32) -> Trap {
 }
 
 fn checked_target(target: u64, _instruction: u32) -> Result<u64, Trap> {
-    if target.trailing_zeros() >= 2 {
+    if target.trailing_zeros() >= 1 {
         Ok(target)
     } else {
         Err(Trap {
@@ -346,6 +481,8 @@ fn unsigned32(value: i32) -> u32 {
 
 fn execute_immediate(instruction: u32, funct3: u32, left: u64) -> Result<u64, Trap> {
     let immediate = sign_extend(u64::from(instruction >> 20), 12);
+    let encoded = instruction >> 20;
+    let shift = encoded & 0x3f;
     let value = match funct3 {
         0 => left.wrapping_add(immediate),
         2 => u64::from(signed(left) < signed(immediate)),
@@ -353,20 +490,44 @@ fn execute_immediate(instruction: u32, funct3: u32, left: u64) -> Result<u64, Tr
         4 => left ^ immediate,
         6 => left | immediate,
         7 => left & immediate,
-        1 if instruction >> 26 == 0 => left << (instruction >> 20 & 0x3f),
-        5 if instruction >> 26 == 0 => left >> (instruction >> 20 & 0x3f),
-        5 if instruction >> 26 == 0x10 => unsigned(signed(left) >> (instruction >> 20 & 0x3f)),
+        1 if instruction >> 26 == 0 => left << shift,
+        1 if encoded & !0x3f == 0x280 => left | (1_u64 << shift),
+        1 if encoded & !0x3f == 0x480 => left & !(1_u64 << shift),
+        1 if encoded & !0x3f == 0x680 => left ^ (1_u64 << shift),
+        1 if encoded == 0x600 => u64::from(left.leading_zeros()),
+        1 if encoded == 0x601 => u64::from(left.trailing_zeros()),
+        1 if encoded == 0x602 => u64::from(left.count_ones()),
+        1 if encoded == 0x604 => sign_extend(left, 8),
+        1 if encoded == 0x605 => sign_extend(left, 16),
+        5 if instruction >> 26 == 0 => left >> shift,
+        5 if instruction >> 26 == 0x10 => unsigned(signed(left) >> shift),
+        5 if encoded & !0x3f == 0x600 => left.rotate_right(shift),
+        5 if encoded & !0x3f == 0x480 => (left >> shift) & 1,
+        5 if encoded == 0x287 => left
+            .to_le_bytes()
+            .map(|byte| if byte == 0 { 0_u8 } else { 0xff_u8 })
+            .into_iter()
+            .enumerate()
+            .fold(0, |result, (index, byte)| {
+                result | u64::from(byte) << (index * 8)
+            }),
+        5 if encoded == 0x6b8 => left.swap_bytes(),
         _ => return Err(illegal(instruction)),
     };
     Ok(value)
 }
 
 fn execute_word_immediate(instruction: u32, funct3: u32, left: u32) -> Result<u32, Trap> {
+    let encoded = instruction >> 20;
     let value = match funct3 {
         0 => left.wrapping_add(low_u32(sign_extend(u64::from(instruction >> 20), 12))),
         1 if instruction >> 25 == 0 => left << (instruction >> 20 & 0x1f),
+        1 if encoded == 0x600 => left.leading_zeros(),
+        1 if encoded == 0x601 => left.trailing_zeros(),
+        1 if encoded == 0x602 => left.count_ones(),
         5 if instruction >> 25 == 0 => left >> (instruction >> 20 & 0x1f),
         5 if instruction >> 25 == 0x20 => unsigned32(signed32(left) >> (instruction >> 20 & 0x1f)),
+        5 if encoded & !0x1f == 0x600 => left.rotate_right(encoded & 0x1f),
         _ => return Err(illegal(instruction)),
     };
     Ok(value)
@@ -388,6 +549,46 @@ fn execute_register(instruction: u32, funct3: u32, left: u64, right: u64) -> Res
         (0x20, 5) => unsigned(signed(left) >> (right & 0x3f)),
         (0, 6) => left | right,
         (0, 7) => left & right,
+        (0x20, 4) => !(left ^ right),
+        (0x20, 6) => left | !right,
+        (0x20, 7) => left & !right,
+        (0x05, 4) => {
+            if signed(left) < signed(right) {
+                left
+            } else {
+                right
+            }
+        }
+        (0x05, 5) => left.min(right),
+        (0x05, 6) => {
+            if signed(left) > signed(right) {
+                left
+            } else {
+                right
+            }
+        }
+        (0x05, 7) => left.max(right),
+        (0x14, 1) => left | (1_u64 << (right & 0x3f)),
+        (0x24, 1) => left & !(1_u64 << (right & 0x3f)),
+        (0x24, 5) => (left >> (right & 0x3f)) & 1,
+        (0x34, 1) => left ^ (1_u64 << (right & 0x3f)),
+        (0x10, 2 | 4 | 6) => right.wrapping_add(left << (funct3 >> 1)),
+        (0x30, 1) => left.rotate_left((right & 0x3f) as u32),
+        (0x30, 5) => left.rotate_right((right & 0x3f) as u32),
+        (0x07, 5) => {
+            if right == 0 {
+                0
+            } else {
+                left
+            }
+        }
+        (0x07, 7) => {
+            if right != 0 {
+                0
+            } else {
+                left
+            }
+        }
         _ => return Err(illegal(instruction)),
     };
     Ok(value)
@@ -409,6 +610,8 @@ fn execute_word_register(
         (0, 1) => left << (right & 0x1f),
         (0, 5) => left >> (right & 0x1f),
         (0x20, 5) => unsigned32(signed32(left) >> (right & 0x1f)),
+        (0x30, 1) => left.rotate_left(right & 0x1f),
+        (0x30, 5) => left.rotate_right(right & 0x1f),
         _ => return Err(illegal(instruction)),
     };
     Ok(value)
@@ -517,4 +720,44 @@ fn high_u128(value: u128) -> u64 {
     u64::from_le_bytes([
         bytes[8], bytes[9], bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
     ])
+}
+
+fn truncate_atomic(value: u64, width: AccessWidth) -> u64 {
+    match width {
+        AccessWidth::Word => value & u64::from(u32::MAX),
+        AccessWidth::DoubleWord => value,
+        _ => unreachable!(),
+    }
+}
+
+fn atomic_result(value: u64, width: AccessWidth) -> u64 {
+    match width {
+        AccessWidth::Word => sign_extend(value & u64::from(u32::MAX), 32),
+        AccessWidth::DoubleWord => value,
+        _ => unreachable!(),
+    }
+}
+
+fn signed_atomic_min(left: u64, right: u64, width: AccessWidth) -> u64 {
+    if signed_atomic(left, width) < signed_atomic(right, width) {
+        left
+    } else {
+        right
+    }
+}
+
+fn signed_atomic_max(left: u64, right: u64, width: AccessWidth) -> u64 {
+    if signed_atomic(left, width) > signed_atomic(right, width) {
+        left
+    } else {
+        right
+    }
+}
+
+fn signed_atomic(value: u64, width: AccessWidth) -> i64 {
+    match width {
+        AccessWidth::Word => i64::from(low_u32(value).cast_signed()),
+        AccessWidth::DoubleWord => signed(value),
+        _ => unreachable!(),
+    }
 }

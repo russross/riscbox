@@ -1,5 +1,6 @@
 //! RV64 CPU state, traps, interrupts, counters, and control registers.
 
+mod compressed;
 mod execute;
 mod mmu;
 
@@ -41,6 +42,10 @@ const SSTATUS_MASK: u64 = MSTATUS_SIE | MSTATUS_SPIE | MSTATUS_SPP | MSTATUS_SUM
 const MENVCFG_ADUE: u64 = 1 << 61;
 const MENVCFG_PBMTE: u64 = 1 << 62;
 const MENVCFG_STCE: u64 = 1 << 63;
+const ENVCFG_CBIE: u64 = 3 << 4;
+const ENVCFG_CBCFE: u64 = 1 << 6;
+const ENVCFG_CBZE: u64 = 1 << 7;
+const ENVCFG_CBO_MASK: u64 = ENVCFG_CBIE | ENVCFG_CBCFE | ENVCFG_CBZE;
 const COUNTEREN_MASK: u32 = 0b111;
 
 const PMP_ENTRY_COUNT: usize = 16;
@@ -53,6 +58,8 @@ const PMP_CFG_L: u8 = 1 << 7;
 const PMP_ADDR_MASK: u64 = (1 << 54) - 1;
 
 const MISA_I: u64 = 1 << (b'I' - b'A');
+const MISA_A: u64 = 1;
+const MISA_C: u64 = 1 << (b'C' - b'A');
 const MISA_M: u64 = 1 << (b'M' - b'A');
 const MISA_S: u64 = 1 << (b'S' - b'A');
 const MISA_U: u64 = 1 << (b'U' - b'A');
@@ -61,6 +68,7 @@ const CSR_SSTATUS: u16 = 0x100;
 const CSR_SIE: u16 = 0x104;
 const CSR_STVEC: u16 = 0x105;
 const CSR_SCOUNTEREN: u16 = 0x106;
+const CSR_SENVCFG: u16 = 0x10a;
 const CSR_SSCRATCH: u16 = 0x140;
 const CSR_SEPC: u16 = 0x141;
 const CSR_SCAUSE: u16 = 0x142;
@@ -201,7 +209,9 @@ enum Exception {
     InstructionAccessFault = 1,
     IllegalInstruction = 2,
     Breakpoint = 3,
+    LoadAddressMisaligned = 4,
     LoadAccessFault = 5,
+    StoreAddressMisaligned = 6,
     StoreAccessFault = 7,
     UserEnvironmentCall = 8,
     SupervisorEnvironmentCall = 9,
@@ -256,6 +266,7 @@ pub struct Cpu {
     mideleg: u32,
     mcounteren: u32,
     menvcfg: u64,
+    senvcfg: u64,
     stimecmp: u64,
     pmpcfg: [u8; PMP_ENTRY_COUNT],
     pmpaddr: [u64; PMP_ENTRY_COUNT],
@@ -269,6 +280,7 @@ pub struct Cpu {
     tlb_read: [TlbEntry; TLB_SIZE],
     tlb_write: [TlbEntry; TLB_SIZE],
     tlb_execute: [TlbEntry; TLB_SIZE],
+    reservation: Option<(u64, AccessWidth)>,
 }
 
 impl Default for Cpu {
@@ -296,13 +308,14 @@ impl Cpu {
             mcause: 0,
             mtval: 0,
             mhartid: hart_id,
-            misa: MISA_I | MISA_M | MISA_S | MISA_U,
+            misa: MISA_A | MISA_C | MISA_I | MISA_M | MISA_S | MISA_U,
             mie: 0,
             mip: 0,
             medeleg: 0,
             mideleg: 0,
             mcounteren: 0,
             menvcfg: 0,
+            senvcfg: 0,
             stimecmp: u64::MAX,
             pmpcfg: [0; PMP_ENTRY_COUNT],
             pmpaddr: [0; PMP_ENTRY_COUNT],
@@ -316,6 +329,7 @@ impl Cpu {
             tlb_read: [TlbEntry::default(); TLB_SIZE],
             tlb_write: [TlbEntry::default(); TLB_SIZE],
             tlb_execute: [TlbEntry::default(); TLB_SIZE],
+            reservation: None,
         }
     }
 
@@ -329,7 +343,7 @@ impl Cpu {
                 self.cycle = self.cycle.wrapping_add(1);
                 continue;
             }
-            let instruction = match self.fetch(bus) {
+            let (instruction, length) = match self.fetch(bus) {
                 Ok(instruction) => instruction,
                 Err(trap) => {
                     self.take_exception(trap);
@@ -340,7 +354,7 @@ impl Cpu {
                 }
             };
             let instruction_pc = self.pc;
-            match self.execute(bus, instruction) {
+            match self.execute(bus, instruction, length) {
                 Ok(retired) => {
                     if retired {
                         self.instret = self.instret.wrapping_add(1);
@@ -415,6 +429,9 @@ impl Cpu {
                 self.mip &= !MIP_STIP;
             }
         }
+        if self.mip & self.mie != 0 {
+            self.power_down = false;
+        }
     }
 
     pub fn set_interrupts(&mut self, mask: u32) {
@@ -450,22 +467,27 @@ impl Cpu {
         Ok(())
     }
 
-    fn fetch<B: CpuBus>(&mut self, bus: &mut B) -> Result<u32, Trap> {
-        if self.pc & 3 != 0 {
+    fn fetch<B: CpuBus>(&mut self, bus: &mut B) -> Result<(u32, u64), Trap> {
+        if self.pc & 1 != 0 {
             return Err(Trap {
                 exception: Exception::InstructionAddressMisaligned,
                 value: self.pc,
             });
         }
-        let value = self.load(bus, self.pc, AccessWidth::Word, mmu::Access::Execute)?;
-        let instruction = u32::try_from(value).expect("a word load fits u32");
-        if instruction & 3 != 3 {
-            return Err(Trap {
-                exception: Exception::IllegalInstruction,
-                value: u64::from(instruction & 0xffff),
-            });
+        let low =
+            u32::try_from(self.load(bus, self.pc, AccessWidth::HalfWord, mmu::Access::Execute)?)
+                .expect("a halfword load fits u32");
+        if low & 3 != 3 {
+            return Ok((low, 2));
         }
-        Ok(instruction)
+        let high = u32::try_from(self.load(
+            bus,
+            self.pc.wrapping_add(2),
+            AccessWidth::HalfWord,
+            mmu::Access::Execute,
+        )?)
+        .expect("a halfword load fits u32");
+        Ok((low | high << 16, 4))
     }
 
     fn take_exception(&mut self, trap: Trap) {
@@ -596,6 +618,7 @@ impl Cpu {
             CSR_SIE => u64::from(self.mie & self.mideleg),
             CSR_STVEC => self.stvec,
             CSR_SCOUNTEREN => u64::from(self.scounteren),
+            CSR_SENVCFG => self.senvcfg,
             CSR_SSCRATCH => self.sscratch,
             CSR_SEPC => self.sepc,
             CSR_SCAUSE => self.scause,
@@ -639,6 +662,7 @@ impl Cpu {
             }
             CSR_STVEC => self.stvec = value & !3,
             CSR_SCOUNTEREN => self.scounteren = low_u32(value) & COUNTEREN_MASK,
+            CSR_SENVCFG => self.senvcfg = valid_envcfg(value),
             CSR_SSCRATCH => self.sscratch = value,
             CSR_SEPC => self.sepc = value & !1,
             CSR_SCAUSE => self.scause = value,
@@ -679,7 +703,8 @@ impl Cpu {
             CSR_MCOUNTEREN => self.mcounteren = low_u32(value) & COUNTEREN_MASK,
             CSR_MENVCFG => {
                 let old = self.menvcfg;
-                self.menvcfg = value & (MENVCFG_ADUE | MENVCFG_PBMTE | MENVCFG_STCE);
+                self.menvcfg =
+                    valid_envcfg(value) | value & (MENVCFG_ADUE | MENVCFG_PBMTE | MENVCFG_STCE);
                 if (old ^ self.menvcfg) & (MENVCFG_ADUE | MENVCFG_PBMTE) != 0 {
                     self.flush_tlb();
                 }
@@ -760,4 +785,12 @@ impl From<MemoryError> for BusError {
     fn from(_: MemoryError) -> Self {
         Self::AccessFault
     }
+}
+
+fn valid_envcfg(value: u64) -> u64 {
+    let mut value = value & ENVCFG_CBO_MASK;
+    if value & ENVCFG_CBIE == 2 << 4 {
+        value &= !ENVCFG_CBIE;
+    }
+    value
 }

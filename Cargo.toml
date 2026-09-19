@@ -22,5 +22,5 @@ all = "deny"
 pedantic = "deny"
 
 [workspace]
-members = [".", "browser-wasm"]
+members = [".", "riscbox-wasm"]
 resolver = "3"

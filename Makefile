@@ -1,4 +1,4 @@
-RUST_WASM=target/wasm32-unknown-unknown/release/riscbox_wasm.wasm
+RUSTBOX_WASM=target/wasm32-unknown-unknown/release/riscbox_wasm.wasm
 
 all: release
 
@@ -14,9 +14,9 @@ check: test
 	cargo clippy --all-targets --workspace -- -D warnings
 	uvx --quiet ty check tools/splitimg.py
 
-wasm: $(RUST_WASM)
+wasm: $(RUSTBOX_WASM)
 
-$(RUST_WASM): Cargo.toml Cargo.lock browser-wasm/Cargo.toml $(shell find src browser-wasm -type f)
+$(RUSTBOX_WASM): Cargo.toml Cargo.lock riscbox-wasm/Cargo.toml $(shell find src riscbox-wasm -type f)
 	cargo build --release -p riscbox-wasm --target wasm32-unknown-unknown
 
 kernel:

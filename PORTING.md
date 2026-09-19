@@ -83,7 +83,7 @@ stride. Both supplied pages load the Rust artifact, and the image distribution
 script packages it as `riscbox.wasm`.
 
 Focused native tests cover the complete machine and browser runtime. The
-release acceptance suite boots Alpine 3.24.1, logs in, and shuts down through
+release acceptance suite boots Alpine 3.24.2, logs in, and shuts down through
 the finisher, and runs current xv6 user tests over its UART and VirtIO block
 device. Chrome 152 boots the deployed Rust WASM Alpine image to its login
 prompt. The standalone Risclet page boots its in-memory JavaScript 9p service,

@@ -6,10 +6,10 @@ IMAGES_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 
 # Change the Alpine release and its published checksum here. The URL, branch,
 # archive name, repositories, and release validation derive from the version.
-ALPINE_VERSION=3.24.1
+ALPINE_VERSION=3.24.2
 ALPINE_ARCH=riscv64
 ALPINE_BRANCH=${ALPINE_VERSION%.*}
-ALPINE_SHA256=7201513262d851f39105102cf95519410100259bd7996fca13bade517838d7b7
+ALPINE_SHA256=57132e6e4f3a4ba9ffdf24e485513ce507e45471e7fd565aeed91c055cd63f7b
 DOWNLOAD_DIR=${DOWNLOAD_DIR:-"$IMAGES_DIR/build/downloads"}
 MKFS_EXT4=${MKFS_EXT4:-/usr/sbin/mkfs.ext4}
 

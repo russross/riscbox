@@ -153,7 +153,7 @@ Current platform contract
     user test suite.
 *   VirtIO block implements the standard 20-byte device identification request
     and completes unsupported requests with `VIRTIO_BLK_S_UNSUPP`. A prepared
-    Alpine 3.24.1 system boots through OpenSBI, mounts its installation ISO,
+    Alpine 3.24.2 system boots through OpenSBI, mounts its installation ISO,
     reaches a UART login prompt, and shuts down cleanly.
 *   Native, debug, and browser release surfaces use the Riscbox name. Web assets
     resolve firmware, kernel, initrd, disk, and 9p paths relative to the VM

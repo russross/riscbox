@@ -105,6 +105,7 @@ struct Loading {
 struct Running {
     machine: Machine,
     console_slot: Option<usize>,
+    uart_output: bool,
     network_slot: Option<usize>,
     keyboard_slot: Option<usize>,
     pointer_slot: Option<usize>,
@@ -326,7 +327,12 @@ impl BrowserRuntime {
                 break;
             }
         }
-        let mut console = running.machine.take_console_output();
+        let uart = running.machine.take_console_output();
+        let mut console = if running.uart_output {
+            uart
+        } else {
+            Vec::new()
+        };
         if let Some(slot) = running.console_slot {
             console.extend(running.machine.take_virtio_console_output(slot)?);
         }
@@ -481,6 +487,7 @@ impl BrowserRuntime {
         self.state = State::Running(Box::new(Running {
             machine,
             console_slot,
+            uart_output: config.console == Console::Uart || config.uart_output,
             network_slot,
             keyboard_slot,
             pointer_slot,

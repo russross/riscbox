@@ -25,6 +25,27 @@ fn request(runtime: &mut BrowserRuntime) -> (u32, String) {
     (request.id, request.url)
 }
 
+fn start_uart_writer(config: &[u8]) -> BrowserRuntime {
+    let mut runtime = BrowserRuntime::default();
+    runtime.start(start()).expect("start");
+    let (config_id, _) = request(&mut runtime);
+    runtime
+        .complete_http(config_id, 200, config.to_vec())
+        .expect("configuration");
+    let (firmware_id, _) = request(&mut runtime);
+    let instructions = [0x1000_00b7_u32, 0x0410_0113, 0x0020_8023, 0x0000_006f];
+    let firmware = instructions
+        .into_iter()
+        .flat_map(u32::to_le_bytes)
+        .collect();
+    runtime
+        .complete_http(firmware_id, 200, firmware)
+        .expect("firmware");
+    assert_eq!(runtime.next_action(), Some(HostAction::Started));
+    assert_eq!(runtime.next_action(), Some(HostAction::Schedule(0)));
+    runtime
+}
+
 #[test]
 fn configuration_and_boot_assets_load_in_dependency_order() {
     let mut runtime = BrowserRuntime::default();
@@ -99,6 +120,38 @@ fn run_delivers_queued_input_and_always_reschedules() {
     assert_eq!(controller.queue_console(b"x"), 1);
     runtime.run(&mut controller, 0, 0).expect("execution slice");
     assert_eq!(runtime.next_action(), Some(HostAction::Schedule(10)));
+}
+
+#[test]
+fn uart_output_follows_the_console_configuration() {
+    let cases: [(&[u8], bool); 3] = [
+        (
+            br#"{version:1,machine:"riscv64",memory_size:32,bios:"fw.bin",console:"virtio"}"#,
+            false,
+        ),
+        (
+            br#"{version:1,machine:"riscv64",memory_size:32,bios:"fw.bin",console:"virtio",uart_output:true}"#,
+            true,
+        ),
+        (
+            br#"{version:1,machine:"riscv64",memory_size:32,bios:"fw.bin",console:"uart"}"#,
+            true,
+        ),
+    ];
+
+    for (config, expects_output) in cases {
+        let mut runtime = start_uart_writer(config);
+        runtime
+            .run(&mut BrowserController::default(), 0, 0)
+            .expect("execution slice");
+        if expects_output {
+            assert_eq!(
+                runtime.next_action(),
+                Some(HostAction::Console(b"A".to_vec()))
+            );
+        }
+        assert_eq!(runtime.next_action(), Some(HostAction::Schedule(10)));
+    }
 }
 
 #[test]

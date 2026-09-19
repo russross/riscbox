@@ -121,6 +121,7 @@ struct Running {
     network_slot: Option<usize>,
     keyboard_slot: Option<usize>,
     pointer_slot: Option<usize>,
+    pointer_dimensions: Option<(u32, u32)>,
     network_output: Rc<RefCell<VecDeque<Vec<u8>>>>,
     block_slots: Vec<usize>,
     pending_http: BTreeMap<u32, (usize, u32)>,
@@ -325,7 +326,12 @@ impl BrowserRuntime {
                 .resize_virtio_console(slot, size.columns, size.rows)?;
         }
         let mut input = [0; 128];
-        let count = controller.read_console(&mut input);
+        let input_limit = if running.console_slot.is_some() {
+            input.len()
+        } else {
+            input.len().min(running.machine.receive_space())
+        };
+        let count = controller.read_console(&mut input[..input_limit]);
         if count != 0 {
             if let Some(slot) = running.console_slot {
                 running
@@ -346,11 +352,20 @@ impl BrowserRuntime {
                 }
                 BrowserEvent::Pointer(event) => {
                     if let Some(slot) = running.pointer_slot {
+                        let position = running.pointer_dimensions.map_or(
+                            (event.x, event.y),
+                            |(width, height)| {
+                                (
+                                    scale_pointer_coordinate(event.x, width),
+                                    scale_pointer_coordinate(event.y, height),
+                                )
+                            },
+                        );
                         running.machine.virtio_pointer_event(
                             slot,
                             (
-                                i32::try_from(event.x).unwrap_or(i32::MAX),
-                                i32::try_from(event.y).unwrap_or(i32::MAX),
+                                i32::try_from(position.0).unwrap_or(i32::MAX),
+                                i32::try_from(position.1).unwrap_or(i32::MAX),
                             ),
                             event.wheel,
                             event.buttons,
@@ -534,6 +549,7 @@ impl BrowserRuntime {
             network_slot,
             keyboard_slot,
             pointer_slot,
+            pointer_dimensions: dimensions,
             network_output,
             block_slots,
             pending_http: BTreeMap::new(),
@@ -558,6 +574,14 @@ impl BrowserRuntime {
     }
 }
 
+fn scale_pointer_coordinate(value: u32, extent: u32) -> u32 {
+    if extent == 0 {
+        return 0;
+    }
+    let value = value.min(extent - 1);
+    u32::try_from(u64::from(value) * 32_768 / u64::from(extent)).unwrap_or(32_767)
+}
+
 fn config_asset_url(loading: &Loading, index: usize) -> Result<String, RuntimeError> {
     let config = loading
         .config
@@ -579,5 +603,18 @@ impl NetworkBackend for OutputNetwork {
     fn transmit(&mut self, packet: &[u8]) -> Result<(), DeviceError> {
         self.0.borrow_mut().push_back(packet.to_vec());
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::scale_pointer_coordinate;
+
+    #[test]
+    fn pointer_coordinates_are_clamped_and_scaled_to_the_tablet_range() {
+        assert_eq!(scale_pointer_coordinate(0, 1280), 0);
+        assert_eq!(scale_pointer_coordinate(640, 1280), 16_384);
+        assert_eq!(scale_pointer_coordinate(2000, 1280), 32_742);
+        assert_eq!(scale_pointer_coordinate(1, 0), 0);
     }
 }

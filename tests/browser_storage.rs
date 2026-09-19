@@ -60,3 +60,47 @@ fn manifest_and_plain_http_file_validation_are_explicit() {
     let mut data = b"plain".to_vec();
     assert_eq!(file.decode(&mut data).expect("plain file"), b"plain");
 }
+
+#[test]
+fn high_sectors_keep_their_full_address() {
+    let mut store = HttpBlockStore::from_manifest(
+        "https://host/disk/blk.txt",
+        "{block_size:64,n_block:65537}",
+        65_536,
+    )
+    .expect("large disk");
+    assert_eq!(
+        store.read_sectors(1 << 23, &mut [0; 512]),
+        Err(StorageError::MissingBlock(65_536))
+    );
+    assert_eq!(
+        store.next_request().expect("high block request").url,
+        "https://host/disk/blk000065536.bin"
+    );
+}
+
+#[test]
+fn one_request_can_span_more_blocks_than_the_initial_cache_limit() {
+    let mut store = HttpBlockStore::from_manifest(
+        "https://host/disk/blk.txt",
+        "{block_size:4,n_block:2}",
+        4096,
+    )
+    .expect("two-block disk");
+    let mut output = [0; 8192];
+    for (block, fill) in [(0, 0x11), (1, 0x22)] {
+        assert_eq!(
+            store.read_sectors(0, &mut output),
+            Err(StorageError::MissingBlock(block))
+        );
+        let request = store.next_request().expect("missing block request");
+        store
+            .complete(request.id, vec![fill; 4096])
+            .expect("block response");
+    }
+    store
+        .read_sectors(0, &mut output)
+        .expect("complete spanning read");
+    assert_eq!(&output[..4096], &[0x11; 4096]);
+    assert_eq!(&output[4096..], &[0x22; 4096]);
+}

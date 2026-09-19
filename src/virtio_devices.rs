@@ -406,10 +406,10 @@ impl ConsoleDevice {
         memory: &mut PhysicalMemory,
         bytes: &[u8],
     ) -> Result<(), DeviceError> {
-        if transport.status() & 4 == 0 {
-            return Err(DeviceError::InvalidRequest);
-        }
         self.push_input(bytes);
+        if transport.status() & 4 == 0 {
+            return Ok(());
+        }
         self.drain_input(transport, memory)
     }
     pub fn resize(&mut self, transport: &mut VirtioTransport, width: u16, height: u16) {
@@ -518,10 +518,10 @@ impl<B> NetworkDevice<B> {
     where
         B: NetworkBackend,
     {
-        if transport.status() & 4 == 0 {
-            return Err(DeviceError::InvalidRequest);
-        }
         self.push_packet(packet);
+        if transport.status() & 4 == 0 {
+            return Ok(());
+        }
         self.drain_receive(transport, memory)
     }
     pub fn backend(&self) -> &B {
@@ -690,7 +690,7 @@ impl InputDevice {
         code: u16,
         down: bool,
     ) -> Result<(), DeviceError> {
-        if self.kind != InputKind::Keyboard || transport.status() & 4 == 0 {
+        if self.kind != InputKind::Keyboard {
             return Err(DeviceError::InvalidRequest);
         }
         self.events.extend([
@@ -705,7 +705,11 @@ impl InputDevice {
                 value: 0,
             },
         ]);
-        self.drain_events(transport, memory)
+        if transport.status() & 4 == 0 {
+            Ok(())
+        } else {
+            self.drain_events(transport, memory)
+        }
     }
 
     /// Sends relative mouse or absolute tablet movement, button changes, and synchronization.
@@ -721,9 +725,6 @@ impl InputDevice {
         wheel: i32,
         buttons: u32,
     ) -> Result<(), DeviceError> {
-        if transport.status() & 4 == 0 {
-            return Err(DeviceError::InvalidRequest);
-        }
         let event_kind = match self.kind {
             InputKind::Mouse => 2,
             InputKind::Tablet => 3,
@@ -762,7 +763,11 @@ impl InputDevice {
             code: 0,
             value: 0,
         });
-        self.drain_events(transport, memory)
+        if transport.status() & 4 == 0 {
+            Ok(())
+        } else {
+            self.drain_events(transport, memory)
+        }
     }
 
     fn drain_events(

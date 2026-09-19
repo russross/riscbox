@@ -76,6 +76,11 @@ impl BrowserController {
         count
     }
 
+    #[must_use]
+    pub fn console_len(&self) -> usize {
+        self.console.len()
+    }
+
     /// Records the latest terminal dimensions.
     pub fn resize(&mut self, columns: u16, rows: u16) {
         self.resize = Some(TerminalSize { columns, rows });

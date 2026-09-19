@@ -197,18 +197,25 @@ impl HttpBlockStore {
     /// Returns `MissingBlock` after queuing a fetch, or an error for an invalid range.
     pub fn read_sectors(&mut self, sector: u64, data: &mut [u8]) -> Result<(), StorageError> {
         self.validate_range(sector, data.len())?;
-        let start = usize::try_from(sector).map_err(|_| StorageError::OutOfRange)? * SECTOR_SIZE;
+        let start = sector
+            .checked_mul(SECTOR_SIZE as u64)
+            .ok_or(StorageError::OutOfRange)?;
+        self.retain_working_set(start, data.len())?;
         for (index, chunk) in data.chunks_mut(SECTOR_SIZE).enumerate() {
-            let byte = start + index * SECTOR_SIZE;
-            let cluster =
-                u64::try_from(byte / CLUSTER_SIZE).map_err(|_| StorageError::OutOfRange)?;
+            let byte = start
+                .checked_add(
+                    u64::try_from(index * SECTOR_SIZE).map_err(|_| StorageError::OutOfRange)?,
+                )
+                .ok_or(StorageError::OutOfRange)?;
+            let cluster = byte / CLUSTER_SIZE as u64;
             if let Some(overlay) = self.overlays.get(&cluster) {
-                let offset = byte % CLUSTER_SIZE;
+                let offset = usize::try_from(byte % CLUSTER_SIZE as u64)
+                    .map_err(|_| StorageError::OutOfRange)?;
                 chunk.copy_from_slice(&overlay[offset..offset + SECTOR_SIZE]);
                 continue;
             }
-            let block =
-                u32::try_from(byte / self.block_size).map_err(|_| StorageError::OutOfRange)?;
+            let block = u32::try_from(byte / self.block_size as u64)
+                .map_err(|_| StorageError::OutOfRange)?;
             if !self.cache.contains_key(&block) {
                 self.request_block(block)?;
                 return Err(StorageError::MissingBlock(block));
@@ -218,7 +225,8 @@ impl HttpBlockStore {
                 return Err(StorageError::MissingBlock(block));
             };
             entry.0 = self.clock;
-            let offset = byte % self.block_size;
+            let offset = usize::try_from(byte % self.block_size as u64)
+                .map_err(|_| StorageError::OutOfRange)?;
             chunk.copy_from_slice(&entry.1[offset..offset + SECTOR_SIZE]);
         }
         Ok(())
@@ -231,18 +239,25 @@ impl HttpBlockStore {
     /// Returns `MissingBlock` when the original cluster must first be fetched.
     pub fn write_sectors(&mut self, sector: u64, data: &[u8]) -> Result<(), StorageError> {
         self.validate_range(sector, data.len())?;
-        let start = usize::try_from(sector).map_err(|_| StorageError::OutOfRange)? * SECTOR_SIZE;
+        let start = sector
+            .checked_mul(SECTOR_SIZE as u64)
+            .ok_or(StorageError::OutOfRange)?;
+        self.retain_working_set(start, data.len())?;
         for (index, chunk) in data.chunks(SECTOR_SIZE).enumerate() {
-            let byte = start + index * SECTOR_SIZE;
-            let cluster_index =
-                u64::try_from(byte / CLUSTER_SIZE).map_err(|_| StorageError::OutOfRange)?;
+            let byte = start
+                .checked_add(
+                    u64::try_from(index * SECTOR_SIZE).map_err(|_| StorageError::OutOfRange)?,
+                )
+                .ok_or(StorageError::OutOfRange)?;
+            let cluster_index = byte / CLUSTER_SIZE as u64;
             if !self.overlays.contains_key(&cluster_index) {
                 let cluster_start_sector = cluster_index * 8;
                 let mut original = Box::new([0; CLUSTER_SIZE]);
                 self.read_sectors(cluster_start_sector, original.as_mut_slice())?;
                 self.overlays.insert(cluster_index, original);
             }
-            let offset = byte % CLUSTER_SIZE;
+            let offset = usize::try_from(byte % CLUSTER_SIZE as u64)
+                .map_err(|_| StorageError::OutOfRange)?;
             let Some(overlay) = self.overlays.get_mut(&cluster_index) else {
                 return Err(StorageError::OutOfRange);
             };
@@ -264,6 +279,21 @@ impl HttpBlockStore {
         } else {
             Ok(())
         }
+    }
+
+    fn retain_working_set(&mut self, start: u64, len: usize) -> Result<(), StorageError> {
+        let last = start
+            .checked_add(u64::try_from(len).map_err(|_| StorageError::OutOfRange)? - 1)
+            .ok_or(StorageError::OutOfRange)?;
+        let first_block = start / self.block_size as u64;
+        let last_block = last / self.block_size as u64;
+        let block_count = last_block - first_block + 1;
+        let bytes = usize::try_from(block_count)
+            .ok()
+            .and_then(|count| count.checked_mul(self.block_size))
+            .ok_or(StorageError::OutOfRange)?;
+        self.cache_limit = self.cache_limit.max(bytes);
+        Ok(())
     }
 
     fn request_block(&mut self, block: u32) -> Result<(), StorageError> {

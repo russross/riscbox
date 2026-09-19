@@ -123,6 +123,60 @@ fn run_delivers_queued_input_and_always_reschedules() {
 }
 
 #[test]
+fn uart_backpressure_retains_unaccepted_browser_input() {
+    let mut runtime = BrowserRuntime::default();
+    runtime.start(start()).expect("start");
+    let (config_id, _) = request(&mut runtime);
+    runtime
+        .complete_http(
+            config_id,
+            200,
+            br#"{version:1,machine:"riscv64",memory_size:32,bios:"fw.bin",console:"uart"}"#
+                .to_vec(),
+        )
+        .expect("configuration");
+    let (firmware_id, _) = request(&mut runtime);
+    runtime
+        .complete_http(firmware_id, 200, vec![0; 64])
+        .expect("firmware");
+    runtime.next_action();
+    runtime.next_action();
+
+    let mut controller = BrowserController::default();
+    controller.queue_console(b"ABC");
+    runtime.run(&mut controller, 0, 0).expect("execution slice");
+    assert_eq!(controller.console_len(), 2);
+}
+
+#[test]
+fn virtio_input_before_driver_initialization_is_buffered() {
+    let mut runtime = BrowserRuntime::default();
+    runtime.start(start()).expect("start");
+    let (config_id, _) = request(&mut runtime);
+    runtime
+        .complete_http(
+            config_id,
+            200,
+            br#"{version:1,machine:"riscv64",memory_size:32,bios:"fw.bin",console:"virtio",input_device:"virtio",net0:{driver:"virtio",ifname:"eth0"}}"#.to_vec(),
+        )
+        .expect("configuration");
+    let (firmware_id, _) = request(&mut runtime);
+    runtime
+        .complete_http(firmware_id, 200, vec![0; 64])
+        .expect("firmware");
+    runtime.next_action();
+    runtime.next_action();
+
+    let mut controller = BrowserController::default();
+    controller.queue_console(b"x");
+    controller.key_event(true, 30);
+    controller.pointer_event(50, 60, 0);
+    controller.network_packet(b"frame");
+    runtime.run(&mut controller, 0, 0).expect("execution slice");
+    assert_eq!(runtime.next_action(), Some(HostAction::Schedule(10)));
+}
+
+#[test]
 fn uart_output_follows_the_console_configuration() {
     let cases: [(&[u8], bool); 3] = [
         (

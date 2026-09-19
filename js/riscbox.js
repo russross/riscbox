@@ -119,6 +119,7 @@
 
         start(configUrl, ramMiB, commandLine = "", password = "", width = 0,
               height = 0, hasNetwork = false) {
+            this.configUrl = configUrl;
             const result = this.withBytes(configUrl, (urlPtr, urlLen) =>
                 this.withBytes(commandLine, (commandPtr, commandLen) =>
                     this.withBytes(password ?? "", (passwordPtr, passwordLen) =>
@@ -155,7 +156,8 @@
                     const fetchRequest = this.options.fetch ?? globalThis.fetch;
                     if (typeof fetchRequest !== "function")
                         throw new Error("Riscbox HTTP fetch is not available");
-                    Promise.resolve(fetchRequest(url)).then(async (response) => {
+                    const cache = url === this.configUrl ? "no-store" : "default";
+                    Promise.resolve(fetchRequest(url, { cache })).then(async (response) => {
                         const data = new Uint8Array(await response.arrayBuffer());
                         const status = response.status ?? 200;
                         this.withBytes(data, (dataPtr, dataLen) => {

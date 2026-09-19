@@ -42,14 +42,13 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
-mkdir -p "$stage_dir/drive"
-install -m 644 "$rootfs_image" "$stage_dir/rootfs.ext4"
-install -m 644 "$KERNEL_IMAGE" "$stage_dir/linux"
-install -m 644 "$OPENSBI" "$stage_dir/fw_jump.bin"
+kernel_name=linux-$(sha256sum "$KERNEL_IMAGE" | cut -c 1-8)
+bios_name=fw_jump.bin-$(sha256sum "$OPENSBI" | cut -c 1-8)
+install -m 644 "$KERNEL_IMAGE" "$stage_dir/$kernel_name"
+install -m 644 "$OPENSBI" "$stage_dir/$bios_name"
 install -m 644 "$ROOT_DIR/js/riscbox.js" "$stage_dir/riscbox.js"
 install -m 644 "$ROOT_DIR/target/wasm32-unknown-unknown/release/riscbox_wasm.wasm" \
     "$stage_dir/riscbox.wasm"
-install -m 644 "$image_dir/riscbox.cfg" "$stage_dir/riscbox.cfg"
 install -m 644 "$IMAGES_DIR/DEPLOYMENT.md" "$stage_dir/README.md"
 install -m 644 "$IMAGES_DIR/web/index.html" "$stage_dir/index.html"
 if [ -d "$image_dir/web" ]; then
@@ -68,9 +67,45 @@ if grep -R -q 'p9\.js' "$stage_dir" --include='*.html' --include='*.js' \
     install -m 644 "$ROOT_DIR/js/p9.js" "$stage_dir/p9.js"
     install -m 644 "$ROOT_DIR/js/p9.d.ts" "$stage_dir/p9.d.ts"
 fi
-"$ROOT_DIR/tools/splitimg.py" "$rootfs_image" "$stage_dir/drive"
+split_result=$("$ROOT_DIR/tools/splitimg.py" "$rootfs_image" "$stage_dir")
+drive_name=${split_result%% *}
+"$ROOT_DIR/tools/image_deployment.py" rewrite \
+    "$image_dir/riscbox.cfg" "$stage_dir/riscbox.cfg" \
+    "$bios_name" "$kernel_name" "$drive_name"
 
-rm -rf "$output_dir"
-mv "$stage_dir" "$output_dir"
+mkdir -p "$output_dir"
+for staged_asset in "$stage_dir"/*; do
+    asset_name=$(basename "$staged_asset")
+    if [ "$asset_name" = riscbox.cfg ]; then
+        continue
+    fi
+    if [ -d "$staged_asset" ]; then
+        case "$asset_name" in
+            drive-*)
+                if [ ! -d "$output_dir/$asset_name" ]; then
+                    mv "$staged_asset" "$output_dir/$asset_name"
+                fi
+                ;;
+            *)
+                rm -rf "$output_dir/$asset_name"
+                mv "$staged_asset" "$output_dir/$asset_name"
+                ;;
+        esac
+    else
+        case "$asset_name" in
+            linux-*|fw_jump.bin-*)
+                if [ ! -f "$output_dir/$asset_name" ]; then
+                    mv "$staged_asset" "$output_dir/$asset_name"
+                fi
+                ;;
+            *)
+                install -m 644 "$staged_asset" "$output_dir/$asset_name"
+                ;;
+        esac
+    fi
+done
+install -m 644 "$stage_dir/riscbox.cfg" "$output_dir/.riscbox.cfg.new"
+mv "$output_dir/.riscbox.cfg.new" "$output_dir/riscbox.cfg"
 trap - EXIT HUP INT TERM
+rm -rf "$stage_dir"
 echo "deployment: $output_dir"

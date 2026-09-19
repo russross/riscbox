@@ -56,16 +56,39 @@ test("HTTP actions complete requests and continue draining startup", async () =>
     };
     let started = 0;
     const runtime = new Riscbox(fake.exports, {
-        fetch: async (requestUrl) => {
+        fetch: async (requestUrl, options) => {
             assert.equal(requestUrl, "https://host/vm.cfg");
+            assert.deepEqual(options, { cache: "no-store" });
             return { status: 200, arrayBuffer: async () => Uint8Array.of(1, 2).buffer };
         },
         onVmStarted: () => started++,
     });
+    runtime.configUrl = "https://host/vm.cfg";
     runtime.drainActions();
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(fake.calls.find((call) => call[0] === "http_complete")[1], 17);
     assert.equal(started, 1);
+});
+
+test("non-configuration HTTP actions retain normal content caching", async () => {
+    const fake = fakeModule();
+    const url = Buffer.from("https://host/drive-abcd1234/blk.txt");
+    new Uint8Array(fake.exports.memory.buffer, 64, url.length).set(url);
+    const actions = [1, 0];
+    fake.exports.riscbox_next_action = () => actions.shift();
+    fake.exports.riscbox_action_value = () => 18;
+    fake.exports.riscbox_action_data_address = () => 64;
+    fake.exports.riscbox_action_data_length = () => url.length;
+    fake.exports.riscbox_http_complete = () => 0;
+    const runtime = new Riscbox(fake.exports, {
+        fetch: async (_requestUrl, options) => {
+            assert.deepEqual(options, { cache: "default" });
+            return { status: 200, arrayBuffer: async () => new ArrayBuffer(0) };
+        },
+    });
+    runtime.configUrl = "https://host/riscbox.cfg";
+    runtime.drainActions();
+    await new Promise((resolve) => setImmediate(resolve));
 });
 
 test("host imports copy output and validate memory ranges", () => {

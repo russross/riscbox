@@ -186,6 +186,10 @@ Decision log
     browser input backpressure, VirtIO receive wakeups and block completion,
     large HTTP disks and requests, HTTP 9p loading, scalar decode/discovery,
     and tablet coordinate scaling.
+*   2026-09-19: Deploy boot payloads and split disks under abbreviated SHA-256
+    names, retain old generations until explicit cleanup, and use the config
+    replacement as the atomic image rollover. Fetch the config with `no-store`
+    and revalidate the programmatically loaded WASM runtime at each VM start.
 
 Next milestone
 --------------

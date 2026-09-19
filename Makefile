@@ -8,11 +8,12 @@ release:
 test:
 	cargo test --workspace
 	uv run -q --script tests/test_splitimg.py
+	uv run -q --script tests/test_image_deployment.py
 	node --test js/p9.test.mjs js/riscbox.test.cjs
 
 check: test
 	cargo clippy --all-targets --workspace -- -D warnings
-	uvx --quiet ty check tools/splitimg.py
+	uvx --quiet ty check tools/splitimg.py tools/image_deployment.py
 
 wasm: $(RUSTBOX_WASM)
 

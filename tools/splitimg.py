@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 from pathlib import Path
 import sys
 
@@ -27,12 +28,24 @@ def positive_integer(value: str) -> int:
     return parsed
 
 
-def split_image(source: Path, output: Path, block_kib: int) -> int:
-    """Split source into output and return the number of blocks written."""
+def image_hash(source: Path) -> str:
+    """Return the abbreviated SHA-256 content identifier for source."""
+    digest = hashlib.sha256()
+    with source.open("rb") as image:
+        while block := image.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()[:8]
+
+
+def split_image(source: Path, output_parent: Path, block_kib: int) -> tuple[Path, int]:
+    """Split source into a content-named directory and return it and its size."""
     if not source.is_file():
         raise ValueError(f"input is not a file: {source}")
-    if not output.is_dir():
-        raise ValueError(f"output is not a directory: {output}")
+    if not output_parent.is_dir():
+        raise ValueError(f"output is not a directory: {output_parent}")
+
+    output = output_parent / f"drive-{image_hash(source)}"
+    output.mkdir(exist_ok=True)
 
     block_size = block_kib * 1024
     block_count = 0
@@ -50,7 +63,7 @@ def split_image(source: Path, output: Path, block_kib: int) -> int:
         "}\n"
     )
     (output / "blk.txt").write_text(manifest, encoding="ascii")
-    return block_count
+    return output, block_count
 
 
 def parse_args(arguments: list[str]) -> argparse.Namespace:
@@ -59,7 +72,9 @@ def parse_args(arguments: list[str]) -> argparse.Namespace:
         description="Create a multi-file disk image for the Riscbox HTTP block device"
     )
     parser.add_argument("input", type=Path)
-    parser.add_argument("output", type=Path, help="existing output directory")
+    parser.add_argument(
+        "output", type=Path, help="existing directory that will contain drive-HASH"
+    )
     parser.add_argument(
         "block_size_kib",
         nargs="?",
@@ -73,13 +88,13 @@ def main(arguments: list[str]) -> int:
     """Run the command-line interface."""
     options = parse_args(arguments)
     try:
-        block_count = split_image(
+        output, block_count = split_image(
             options.input, options.output, options.block_size_kib
         )
     except (OSError, ValueError) as error:
         print(f"splitimg: {error}", file=sys.stderr)
         return 1
-    print(f"{block_count} blocks")
+    print(f"{output.name} {block_count} blocks")
     return 0
 
 

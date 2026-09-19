@@ -1,8 +1,7 @@
 Riscbox image deployment
 ========================
 
-This directory is a complete browser-deployable Riscbox VM. It also contains
-the unsplit `rootfs.ext4` for future image maintenance.
+This directory is a complete browser-deployable Riscbox VM.
 
 Files
 -----
@@ -11,19 +10,21 @@ Files
 *   `riscbox.js` and `riscbox.wasm` are the emulator runtime.
 *   `riscbox.cfg` describes the virtual machine. Boot paths are relative to
     this file.
-*   `fw_jump.bin` is OpenSBI firmware and `linux` is the guest kernel.
-*   `rootfs.ext4` is the complete writable source disk image.
-*   `drive/blk.txt` describes the HTTP disk; `drive/blkNNNNNNNNN.bin` files are
-    its 256 KiB blocks.
+*   `fw_jump.bin-HASH` is OpenSBI firmware and `linux-HASH` is the guest kernel.
+*   `drive-HASH/blk.txt` describes the HTTP disk; its
+    `blkNNNNNNNNN.bin` files are 256 KiB blocks. The hashes identify source
+    content, so assets shared by image generations retain stable URLs.
 *   `p9.js` and its `p9.d.ts` declarations are included when the integration
     uses the browser-backed 9p server.
 
 Publishing
 ----------
 
-Copy the directory without changing its internal layout. For example:
+Copy assets without deleting older hashed generations, then copy the config as
+the atomic rollover step. For example:
 
-    rsync -av --delete ./dist/ server:/srv/www/image/
+    rsync -av --exclude=riscbox.cfg ./dist/ server:/srv/www/image/
+    rsync -av ./dist/riscbox.cfg server:/srv/www/image/riscbox.cfg
 
 The web server must provide ordinary `GET` access to every file, serve
 `.wasm` as `application/wasm`, and leave the block filenames unchanged. Static
@@ -48,10 +49,10 @@ typical disk-backed VM is:
     version: 1,
     machine: "riscv64",
     memory_size: 256,
-    bios: "fw_jump.bin",
-    kernel: "linux",
+    bios: "fw_jump.bin-81ceef21",
+    kernel: "linux-a837bc72",
     cmdline: "root=/dev/vda rw rootfstype=ext4 console=hvc0",
-    drive0: { file: "drive/blk.txt" },
+    drive0: { file: "drive-827a7b2f/blk.txt" },
     console: "virtio",
 }
 ```
@@ -133,7 +134,15 @@ Updates
 -------
 
 The browser block backend starts from the published blocks each time; writes
-are session-local. To make persistent changes, update the image inputs, rebuild,
-and publish the complete `dist/` directory. Updating only some block files can
-mix image generations in intermediary caches, so deployments should replace
-the config, boot files, runtime, `blk.txt`, and all blocks together.
+are session-local. A build adds content-addressed boot and disk assets, retains
+older generations, and replaces `riscbox.cfg` last. New VM starts fetch that
+config without using browser storage and select one complete generation;
+running VMs continue using their original URLs.
+
+After the chosen wind-down period, remove generations not referenced by the
+current config with:
+
+    ../../tools/image_deployment.py clean ./dist
+
+The cleaner only considers `drive-HASH`, `linux-HASH`, and `fw_jump.bin-HASH`
+assets. It leaves the active generation and unrelated deployment files intact.

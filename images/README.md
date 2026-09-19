@@ -6,8 +6,8 @@ Each subdirectory is a complete image definition. Its tracked `build.sh`,
 `build.sh` creates two ignored outputs:
 
 *   `build/rootfs.ext4` is the writable image used for native testing.
-*   `dist/` is the self-contained browser deployment, including another copy
-    of `rootfs.ext4` and the chunked HTTP block image.
+*   `dist/` is the self-contained browser deployment. It retains hashed boot
+    and chunked-disk generations until the operator cleans them.
 
 Build either current image from its directory:
 
@@ -53,3 +53,7 @@ Create a directory with these inputs:
 
 Keep downloads and generated files under `build/`. A normal build should leave
 only intentional image inputs visible to Git.
+
+The distribution builder writes content-addressed boot and disk assets and
+replaces `dist/riscbox.cfg` last. Remove superseded generations when appropriate
+with `../../tools/image_deployment.py clean ./dist` from an image directory.

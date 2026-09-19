@@ -496,7 +496,7 @@ class VmController {
         this.updateControls();
         requiredElement("status").textContent = `Loading VM · ${target.description.title}`;
         try {
-            const response = await fetch("riscbox.wasm");
+            const response = await fetch("riscbox.wasm", { cache: "no-cache" });
             if (!response.ok) {
                 throw new Error(`WASM request failed with status ${response.status}`);
             }

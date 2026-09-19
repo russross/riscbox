@@ -9,6 +9,7 @@ pub mod cpu;
 pub mod crypto;
 pub mod entropy;
 pub mod fdt;
+pub mod http_9p;
 pub mod machine;
 pub mod memory;
 pub mod platform;

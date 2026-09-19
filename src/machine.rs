@@ -801,6 +801,53 @@ impl Machine {
         Ok(())
     }
 
+    /// Returns the next browser request queued by an HTTP-backed 9p device.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `slot` does not identify a 9p device.
+    pub fn next_ninep_request(
+        &mut self,
+        slot: usize,
+    ) -> Result<Option<crate::virtio_devices::NinePHostRequest>, MachineError> {
+        let VirtioSlot::NineP(device) = self
+            .bus
+            .virtio
+            .get_mut(slot)
+            .ok_or(MachineError::WrongVirtioDevice)?
+        else {
+            return Err(MachineError::WrongVirtioDevice);
+        };
+        Ok(device.device.backend_mut().next_request())
+    }
+
+    /// Completes one browser request and resumes its retained 9p descriptor.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid slot, response, or guest descriptor.
+    pub fn complete_ninep_request(
+        &mut self,
+        slot: usize,
+        request: u32,
+        bytes: Vec<u8>,
+    ) -> Result<(), MachineError> {
+        let PlatformBus { memory, virtio, .. } = &mut self.bus;
+        let VirtioSlot::NineP(device) = virtio
+            .get_mut(slot)
+            .ok_or(MachineError::WrongVirtioDevice)?
+        else {
+            return Err(MachineError::WrongVirtioDevice);
+        };
+        device
+            .device
+            .backend_mut()
+            .complete_request(request, bytes)?;
+        device.device.resume(&mut device.transport, memory)?;
+        self.bus.update_device_irqs();
+        Ok(())
+    }
+
     /// Updates a `VirtIO` console's reported dimensions.
     ///
     /// # Errors

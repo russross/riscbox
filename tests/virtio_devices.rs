@@ -4,7 +4,8 @@ use riscbox::memory::{AccessWidth, GuestAddress, PhysicalMemory, RamFlags};
 use riscbox::virtio::VirtioTransport;
 use riscbox::virtio_devices::{
     BlockBackend, BlockDevice, ConsoleDevice, DeviceError, EntropyDevice, InputDevice, InputEvent,
-    InputKind, NetworkBackend, NetworkDevice, NinePBackend, NinePDevice, VirtioMmioDevice,
+    InputKind, NetworkBackend, NetworkDevice, NinePBackend, NinePDevice, NinePRequestStatus,
+    VirtioMmioDevice,
 };
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -386,10 +387,10 @@ fn network_strips_and_adds_the_ten_byte_header() {
 
 struct Echo9p;
 impl NinePBackend for Echo9p {
-    fn transact(&mut self, request: &[u8]) -> Result<Vec<u8>, DeviceError> {
+    fn transact(&mut self, request: &[u8]) -> Result<NinePRequestStatus, DeviceError> {
         let mut r = request.to_vec();
         r[4] = r[4].wrapping_add(1);
-        Ok(r)
+        Ok(NinePRequestStatus::Complete(r))
     }
 }
 

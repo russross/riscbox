@@ -5,13 +5,14 @@ use riscbox::browser::BrowserController;
 use riscbox::browser_runtime::{
     BrowserRuntime, CallbackNineP, HostAction, RuntimeError, RuntimeStart,
 };
-use riscbox::virtio_devices::{DeviceError, NinePBackend};
+use riscbox::virtio_devices::{DeviceError, NinePBackend, NinePRequestStatus};
 
 fn start() -> RuntimeStart {
     RuntimeStart {
         config_url: "https://host/vm/riscbox.cfg".into(),
         ram_mib: 32,
         command_line: "quiet".into(),
+        password: String::new(),
         width: 0,
         height: 0,
         has_network: false,
@@ -240,7 +241,7 @@ fn drive_manifest_precedes_machine_start_and_prefetch_requests_follow_it() {
 }
 
 #[test]
-fn javascript_9p_callback_is_installed_while_file_backends_remain_unsupported() {
+fn javascript_and_http_9p_backends_are_connected() {
     let callback = Rc::new(RefCell::new(|request: &[u8]| {
         let mut reply = request.to_vec();
         reply[4] = reply[4].wrapping_add(1);
@@ -248,7 +249,11 @@ fn javascript_9p_callback_is_installed_while_file_backends_remain_unsupported() 
     }));
     let mut backend = CallbackNineP::new(callback.clone());
     let message = [7, 0, 0, 0, 100, 1, 0];
-    assert_eq!(backend.transact(&message).expect("callback reply")[4], 101);
+    let NinePRequestStatus::Complete(reply) = backend.transact(&message).expect("callback reply")
+    else {
+        panic!("callback reply remained pending");
+    };
+    assert_eq!(reply[4], 101);
 
     let mut runtime = BrowserRuntime::default();
     runtime.set_ninep_callback(callback);
@@ -267,22 +272,25 @@ fn javascript_9p_callback_is_installed_while_file_backends_remain_unsupported() 
         .expect("firmware");
     assert!(runtime.is_running());
 
-    let mut unsupported = BrowserRuntime::default();
-    unsupported.start(start()).expect("start");
-    let (config_id, _) = request(&mut unsupported);
-    unsupported
-        .complete_http(
-            config_id,
-            200,
-            br#"{version:1,machine:"riscv64",memory_size:32,bios:"fw.bin",fs0:{file:"root"}}"#
-                .to_vec(),
-        )
-        .expect("configuration");
-    let (firmware_id, _) = request(&mut unsupported);
-    assert_eq!(
-        unsupported.complete_http(firmware_id, 200, vec![0; 64]),
-        Err(RuntimeError::Unsupported("file and socket 9p filesystems"))
-    );
+    let mut http = BrowserRuntime::default();
+    let mut http_start = start();
+    http_start.password = "secret".into();
+    http.start(http_start).expect("start");
+    let (config_id, _) = request(&mut http);
+    http.complete_http(
+        config_id,
+        200,
+        br#"{version:1,machine:"riscv64",memory_size:32,bios:"fw.bin",fs0:{file:"root"}}"#.to_vec(),
+    )
+    .expect("configuration");
+    let (firmware_id, _) = request(&mut http);
+    http.complete_http(firmware_id, 200, vec![0; 64])
+        .expect("firmware");
+    assert!(http.is_running());
+    assert_eq!(http.next_action(), Some(HostAction::Started));
+    assert_eq!(http.next_action(), Some(HostAction::Schedule(0)));
+    let (_, url) = request(&mut http);
+    assert_eq!(url, "https://host/vm/root/head");
 }
 
 #[test]

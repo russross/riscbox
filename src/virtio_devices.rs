@@ -593,24 +593,63 @@ pub trait NinePBackend {
     /// # Errors
     ///
     /// Returns `DeviceError::Backend` when the host server fails.
-    fn transact(&mut self, request: &[u8]) -> Result<Vec<u8>, DeviceError>;
+    fn transact(&mut self, request: &[u8]) -> Result<NinePRequestStatus, DeviceError>;
+
+    fn next_request(&mut self) -> Option<NinePHostRequest> {
+        None
+    }
+
+    /// Completes a host request previously returned by `next_request`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an unknown request or invalid host response.
+    fn complete_request(&mut self, _: u32, _: Vec<u8>) -> Result<(), DeviceError> {
+        Err(DeviceError::Backend)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NinePHostRequest {
+    pub id: u32,
+    pub url: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum NinePRequestStatus {
+    Complete(Vec<u8>),
+    Pending,
 }
 
 impl<T: NinePBackend + ?Sized> NinePBackend for Box<T> {
-    fn transact(&mut self, request: &[u8]) -> Result<Vec<u8>, DeviceError> {
+    fn transact(&mut self, request: &[u8]) -> Result<NinePRequestStatus, DeviceError> {
         (**self).transact(request)
+    }
+
+    fn next_request(&mut self) -> Option<NinePHostRequest> {
+        (**self).next_request()
+    }
+
+    fn complete_request(&mut self, id: u32, data: Vec<u8>) -> Result<(), DeviceError> {
+        (**self).complete_request(id, data)
     }
 }
 pub struct NinePDevice<B> {
     backend: B,
     tag: Vec<u8>,
+    pending: Option<(QueueIndex, DescriptorChain, Vec<u8>)>,
 }
 impl<B> NinePDevice<B> {
     pub fn new(backend: B, tag: &[u8]) -> Self {
         Self {
             backend,
             tag: tag.to_vec(),
+            pending: None,
         }
+    }
+
+    pub fn backend_mut(&mut self) -> &mut B {
+        &mut self.backend
     }
 }
 impl<B: NinePBackend> VirtioDevice for NinePDevice<B> {
@@ -627,21 +666,70 @@ impl<B: NinePBackend> VirtioDevice for NinePDevice<B> {
         memory: &mut PhysicalMemory,
         queue: QueueIndex,
     ) -> Result<(), DeviceError> {
+        if self.pending.is_some() {
+            return Ok(());
+        }
         while let Some(chain) = transport.next_chain(memory, queue)? {
             let mut req = vec![0; chain.readable as usize];
             transport.read_chain(memory, &chain, 0, &mut req)?;
             validate_9p(&req)?;
-            let reply = self.backend.transact(&req)?;
-            validate_9p(&reply)?;
-            if req[5..7] != reply[5..7] || reply.len() > chain.writable as usize {
-                return Err(DeviceError::InvalidRequest);
+            match self.backend.transact(&req)? {
+                NinePRequestStatus::Complete(reply) => {
+                    complete_9p(transport, memory, queue, &chain, &req, &reply)?;
+                }
+                NinePRequestStatus::Pending => {
+                    self.pending = Some((queue, chain, req));
+                    break;
+                }
             }
-            transport.write_chain(memory, &chain, 0, &reply)?;
-            let written = u32::try_from(reply.len()).map_err(|_| DeviceError::InvalidRequest)?;
-            transport.complete_chain(memory, queue, &chain, written)?;
         }
         Ok(())
     }
+}
+
+impl<B: NinePBackend> NinePDevice<B> {
+    /// Retries the retained descriptor after a host request completes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a malformed request, response, or descriptor chain.
+    pub fn resume(
+        &mut self,
+        transport: &mut VirtioTransport,
+        memory: &mut PhysicalMemory,
+    ) -> Result<(), DeviceError> {
+        let Some((queue, chain, request)) = self.pending.take() else {
+            return Ok(());
+        };
+        match self.backend.transact(&request)? {
+            NinePRequestStatus::Complete(reply) => {
+                complete_9p(transport, memory, queue, &chain, &request, &reply)?;
+                self.notify(transport, memory, queue)
+            }
+            NinePRequestStatus::Pending => {
+                self.pending = Some((queue, chain, request));
+                Ok(())
+            }
+        }
+    }
+}
+
+fn complete_9p(
+    transport: &mut VirtioTransport,
+    memory: &mut PhysicalMemory,
+    queue: QueueIndex,
+    chain: &DescriptorChain,
+    request: &[u8],
+    reply: &[u8],
+) -> Result<(), DeviceError> {
+    validate_9p(reply)?;
+    if request[5..7] != reply[5..7] || reply.len() > chain.writable as usize {
+        return Err(DeviceError::InvalidRequest);
+    }
+    transport.write_chain(memory, chain, 0, reply)?;
+    let written = u32::try_from(reply.len()).map_err(|_| DeviceError::InvalidRequest)?;
+    transport.complete_chain(memory, queue, chain, written)?;
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

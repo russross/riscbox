@@ -176,6 +176,16 @@ Decision log
     kernel a distribution artifact consumed by image definitions.
 *   2026-09-19: Use the conventional `src/` directory for the root emulator
     crate and name the raw browser WebAssembly export crate `riscbox-wasm/`.
+*   2026-09-19: Keep legacy HTTP 9p reads asynchronous like HTTP block reads.
+    Retain the guest descriptor while metadata or a file body is fetched, then
+    retry it after the matching browser completion. Store guest mutations in
+    the Rust inode arena and expose the supplied password through
+    `.fscmd_pwd`; retain the synchronous JavaScript backend for `js9p` trees.
+*   2026-09-19: A fresh C-to-Rust path audit added focused regressions for
+    SoftFP cancellation and subnormal division, in-slice interrupt changes,
+    browser input backpressure, VirtIO receive wakeups and block completion,
+    large HTTP disks and requests, HTTP 9p loading, scalar decode/discovery,
+    and tablet coordinate scaling.
 
 Next milestone
 --------------

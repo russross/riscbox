@@ -9,10 +9,13 @@ use crate::browser::{BrowserController, BrowserEvent, RunPolicy};
 use crate::browser_storage::HttpBlockStore;
 use crate::config::{Console, FilesystemBackend, VmConfig, resolve_asset_path};
 use crate::entropy::{EntropyError, EntropySource, SharedEntropy};
+use crate::http_9p::HttpNineP;
 use crate::machine::{
     BootImages, FramebufferConfig, FramebufferUpdate, Machine, MachineConfig, MachineError,
 };
-use crate::virtio_devices::{DeviceError, InputKind, NetworkBackend, NinePBackend};
+use crate::virtio_devices::{
+    DeviceError, InputKind, NetworkBackend, NinePBackend, NinePRequestStatus,
+};
 
 pub type NinePCallback = Rc<RefCell<dyn FnMut(&[u8]) -> Result<Vec<u8>, DeviceError>>>;
 pub type EntropyCallback = Rc<RefCell<dyn FnMut(&mut [u8]) -> Result<(), EntropyError>>>;
@@ -39,8 +42,8 @@ impl CallbackNineP {
 }
 
 impl NinePBackend for CallbackNineP {
-    fn transact(&mut self, request: &[u8]) -> Result<Vec<u8>, DeviceError> {
-        (self.callback.borrow_mut())(request)
+    fn transact(&mut self, request: &[u8]) -> Result<NinePRequestStatus, DeviceError> {
+        (self.callback.borrow_mut())(request).map(NinePRequestStatus::Complete)
     }
 }
 
@@ -49,6 +52,7 @@ pub struct RuntimeStart {
     pub config_url: String,
     pub ram_mib: u32,
     pub command_line: String,
+    pub password: String,
     pub width: u32,
     pub height: u32,
     pub has_network: bool,
@@ -124,7 +128,13 @@ struct Running {
     pointer_dimensions: Option<(u32, u32)>,
     network_output: Rc<RefCell<VecDeque<Vec<u8>>>>,
     block_slots: Vec<usize>,
-    pending_http: BTreeMap<u32, (usize, u32)>,
+    ninep_slots: Vec<usize>,
+    pending_http: BTreeMap<u32, PendingHttp>,
+}
+
+enum PendingHttp {
+    Block { slot: usize, request: u32 },
+    NineP { slot: usize, request: u32 },
 }
 
 enum State {
@@ -287,13 +297,20 @@ impl BrowserRuntime {
                 self.request_next_asset()
             }
             State::Running(mut running) => {
-                let Some((slot, request)) = running.pending_http.remove(&id) else {
+                let Some(pending) = running.pending_http.remove(&id) else {
                     self.state = State::Running(running);
                     return Err(RuntimeError::UnexpectedResponse(id));
                 };
-                running
-                    .machine
-                    .complete_http_block_request(slot, request, bytes)?;
+                match pending {
+                    PendingHttp::Block { slot, request } => running
+                        .machine
+                        .complete_http_block_request(slot, request, bytes)?,
+                    PendingHttp::NineP { slot, request } => {
+                        running
+                            .machine
+                            .complete_ninep_request(slot, request, bytes)?;
+                    }
+                }
                 self.state = State::Running(running);
                 self.pump_http_requests()
             }
@@ -462,11 +479,16 @@ impl BrowserRuntime {
         if config
             .filesystems
             .iter()
-            .any(|filesystem| filesystem.backend != FilesystemBackend::JavaScript9p)
+            .any(|filesystem| matches!(filesystem.backend, FilesystemBackend::Socket(_)))
         {
-            return Err(RuntimeError::Unsupported("file and socket 9p filesystems"));
+            return Err(RuntimeError::Unsupported("socket 9p filesystems"));
         }
-        if !config.filesystems.is_empty() && self.ninep.is_none() {
+        if config
+            .filesystems
+            .iter()
+            .any(|filesystem| filesystem.backend == FilesystemBackend::JavaScript9p)
+            && self.ninep.is_none()
+        {
             return Err(RuntimeError::Unsupported("JavaScript 9p server"));
         }
         let firmware = loading
@@ -502,17 +524,7 @@ impl BrowserRuntime {
             id[..name.len()].copy_from_slice(name.as_bytes());
             block_slots.push(machine.add_http_block_device(store, id)?);
         }
-        for filesystem in &config.filesystems {
-            let callback = self
-                .ninep
-                .as_ref()
-                .expect("JavaScript 9p callback was validated")
-                .clone();
-            machine.add_ninep_device(
-                Box::new(CallbackNineP::new(callback)),
-                filesystem.tag.as_bytes(),
-            )?;
-        }
+        let ninep_slots = self.add_filesystems(&mut machine, &config, &loading.start)?;
         let console_slot = if config.console == Console::Virtio {
             Some(machine.add_console_device(80, 25)?)
         } else {
@@ -552,11 +564,40 @@ impl BrowserRuntime {
             pointer_dimensions: dimensions,
             network_output,
             block_slots,
+            ninep_slots,
             pending_http: BTreeMap::new(),
         }));
         self.actions.push_back(HostAction::Started);
         self.actions.push_back(HostAction::Schedule(0));
         self.pump_http_requests()
+    }
+
+    fn add_filesystems(
+        &self,
+        machine: &mut Machine,
+        config: &VmConfig,
+        start: &RuntimeStart,
+    ) -> Result<Vec<usize>, RuntimeError> {
+        let mut slots = Vec::new();
+        for filesystem in &config.filesystems {
+            let backend: Box<dyn NinePBackend> = match &filesystem.backend {
+                FilesystemBackend::File(path) => {
+                    let url = resolve_asset_path(Some(&start.config_url), path);
+                    Box::new(HttpNineP::new(&url, start.password.clone()))
+                }
+                FilesystemBackend::JavaScript9p => {
+                    let callback = self
+                        .ninep
+                        .as_ref()
+                        .expect("JavaScript 9p callback was validated")
+                        .clone();
+                    Box::new(CallbackNineP::new(callback))
+                }
+                FilesystemBackend::Socket(_) => unreachable!("validated above"),
+            };
+            slots.push(machine.add_ninep_device(backend, filesystem.tag.as_bytes())?);
+        }
+        Ok(slots)
     }
 
     fn pump_http_requests(&mut self) -> Result<(), RuntimeError> {
@@ -566,7 +607,25 @@ impl BrowserRuntime {
         for slot in running.block_slots.clone() {
             while let Some(request) = running.machine.next_http_block_request(slot)? {
                 let id = self.allocate_request(&request.url);
-                running.pending_http.insert(id, (slot, request.id));
+                running.pending_http.insert(
+                    id,
+                    PendingHttp::Block {
+                        slot,
+                        request: request.id,
+                    },
+                );
+            }
+        }
+        for slot in running.ninep_slots.clone() {
+            while let Some(request) = running.machine.next_ninep_request(slot)? {
+                let id = self.allocate_request(&request.url);
+                running.pending_http.insert(
+                    id,
+                    PendingHttp::NineP {
+                        slot,
+                        request: request.id,
+                    },
+                );
             }
         }
         self.state = State::Running(running);

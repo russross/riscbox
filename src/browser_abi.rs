@@ -98,6 +98,7 @@ pub extern "C" fn riscbox_start(
             config_url: config_url.clone(),
             ram_mib,
             command_line: command_line.clone(),
+            password: password.clone(),
             width,
             height,
             has_network: has_network != 0,

@@ -68,6 +68,26 @@ declare global {
 
 const DOC_PATH = "doc/doc.md";
 const SHOW_CURSOR = "\x1b[?25h";
+const TERMINAL_THEME = {
+    background: "#000000",
+    foreground: "#c0c0c0",
+    black: "#000000",
+    red: "#ff0000",
+    green: "#00ff00",
+    yellow: "#ffff00",
+    blue: "#0000ff",
+    magenta: "#ff00ff",
+    cyan: "#00ffff",
+    white: "#ffffff",
+    brightBlack: "#808080",
+    brightRed: "#ff8080",
+    brightGreen: "#80ff80",
+    brightYellow: "#ffff80",
+    brightBlue: "#8080ff",
+    brightMagenta: "#ff80ff",
+    brightCyan: "#80ffff",
+    brightWhite: "#ffffff",
+} as const;
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
 const markdownParser = new commonmark.Parser();
@@ -397,8 +417,10 @@ class VmController {
         this.terminal = new Terminal({
             convertEol: false,
             cursorBlink: true,
+            fontFamily: '"Latin Modern Mono", monospace',
+            fontSize: 18,
             scrollback: 1000,
-            theme: { background: "#1e1e1e", foreground: "#d4d4d4" },
+            theme: TERMINAL_THEME,
         });
         this.terminal.loadAddon(this.fitAddon);
         this.terminal.open(host);

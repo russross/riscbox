@@ -238,6 +238,9 @@ body {
     min-height: 0;
     flex-grow: 1;
     overflow: hidden;
+    box-sizing: border-box;
+    padding: 4px;
+    background: #000;
 }
 
 pre {

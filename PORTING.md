@@ -86,7 +86,10 @@ Focused native tests cover the complete machine and browser runtime. The
 release acceptance suite boots Alpine 3.24.2, logs in, and shuts down through
 the finisher, and runs current xv6 user tests over its UART and VirtIO block
 device. Chrome 152 boots the deployed Rust WASM Alpine image to its login
-prompt. The standalone Risclet page boots its in-memory JavaScript 9p service,
+prompt. Browser VMs seed the guest through `/chosen/rng-seed` and expose a
+VirtIO entropy device; both receive cryptographic bytes synchronously from Web
+Crypto through one narrow host import. The standalone Risclet page boots its
+in-memory JavaScript 9p service,
 loads either tracked example without RPC, mirrors guest-created and deleted
 files, and updates optional instructions from `doc/doc.md`. Its interface
 retains the deployed CodeGrinder editor, terminal, draggable panes, and sizing
@@ -162,6 +165,11 @@ Decision log
     explicit low and high 32-bit words. JavaScript numbers represent the full
     millisecond value exactly, while the split avoids an i64/BigInt boundary
     and preserves the host wall clock used by the Goldfish RTC.
+*   2026-09-19: Use one explicit entropy source for the FDT `/chosen/rng-seed`
+    property and VirtIO RNG. Native runs read the operating-system entropy
+    source; the raw browser WASM adapter fills bounded buffers synchronously
+    with Web Crypto rather than adding asynchronous device state or a
+    guest-visible PRNG.
 
 Next milestone
 --------------

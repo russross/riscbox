@@ -84,6 +84,15 @@ test("host imports copy output and validate memory ranges", () => {
     assert.throws(() => runtime.bytes(65535, 2), RangeError);
 });
 
+test("random host import fills WASM memory from Web Crypto", () => {
+    const host = Riscbox.hostImports();
+    const fake = fakeModule();
+    const runtime = host.attach(fake.exports);
+    assert.equal(host.imports.random_fill(32, 32), 0);
+    assert.notDeepEqual(runtime.bytes(32, 32), new Uint8Array(32));
+    assert.equal(host.imports.random_fill(65535, 2), -1);
+});
+
 test("9p host import invokes the configured server and copies its reply", () => {
     let request;
     let capacity;

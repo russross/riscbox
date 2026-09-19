@@ -4,6 +4,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use riscbox::browser_abi;
+use riscbox::entropy::EntropyError;
 use riscbox::virtio_devices::DeviceError;
 
 const P9_REPLY_CAPACITY: usize = 64 * 1024;
@@ -12,6 +13,25 @@ const P9_REPLY_CAPACITY: usize = 64 * 1024;
 #[link(wasm_import_module = "riscbox_host")]
 unsafe extern "C" {
     fn p9_request(request: u32, request_length: u32, reply: u32, reply_capacity: u32) -> i32;
+    fn random_fill(destination: u32, length: u32) -> i32;
+}
+
+fn install_entropy_callback() {
+    browser_abi::set_entropy_callback(Rc::new(RefCell::new(|destination: &mut [u8]| {
+        #[cfg(target_arch = "wasm32")]
+        let status =
+            unsafe { random_fill(destination.as_mut_ptr() as u32, destination.len() as u32) };
+        #[cfg(not(target_arch = "wasm32"))]
+        let status = {
+            let _ = destination;
+            -1
+        };
+        if status == 0 {
+            Ok(())
+        } else {
+            Err(EntropyError)
+        }
+    })));
 }
 
 fn install_ninep_callback() {
@@ -64,6 +84,7 @@ pub extern "C" fn riscbox_start(
     has_network: u32,
 ) -> i32 {
     install_ninep_callback();
+    install_entropy_callback();
     browser_abi::riscbox_start(
         url_address,
         url_length,

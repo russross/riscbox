@@ -2,11 +2,13 @@
 
 use core::fmt;
 
+use crate::entropy::SharedEntropy;
 use crate::memory::{AccessWidth, PhysicalMemory};
 use crate::virtio::{DescriptorChain, QueueError, QueueIndex, VirtioTransport};
 
 const CONFIG_BASE: u32 = 0x100;
 const NET_HEADER_LEN: usize = 10;
+const ENTROPY_CHUNK_SIZE: usize = 65_536;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DeviceError {
@@ -177,6 +179,56 @@ impl<T: BlockBackend + ?Sized> BlockBackend for Box<T> {
         data: &[u8],
     ) -> Result<BlockRequestStatus, DeviceError> {
         (**self).write_request(sector, data)
+    }
+}
+
+pub struct EntropyDevice {
+    source: SharedEntropy,
+}
+
+impl EntropyDevice {
+    #[must_use]
+    pub const fn new(source: SharedEntropy) -> Self {
+        Self { source }
+    }
+}
+
+impl VirtioDevice for EntropyDevice {
+    fn read_config(&self, _: u32, _: AccessWidth) -> u32 {
+        0
+    }
+
+    fn write_config(&mut self, _: u32, _: u32, _: AccessWidth) {}
+
+    fn notify(
+        &mut self,
+        transport: &mut VirtioTransport,
+        memory: &mut PhysicalMemory,
+        queue: QueueIndex,
+    ) -> Result<(), DeviceError> {
+        if queue != QueueIndex(0) {
+            return Err(DeviceError::InvalidRequest);
+        }
+        while let Some(chain) = transport.next_chain(memory, queue)? {
+            if chain.readable != 0 {
+                return Err(DeviceError::InvalidRequest);
+            }
+            let mut offset = 0;
+            let mut bytes = vec![0; ENTROPY_CHUNK_SIZE.min(chain.writable as usize)];
+            while offset < chain.writable {
+                let remaining = usize::try_from(chain.writable - offset)
+                    .map_err(|_| DeviceError::InvalidRequest)?;
+                let length = remaining.min(ENTROPY_CHUNK_SIZE);
+                self.source
+                    .borrow_mut()
+                    .fill(&mut bytes[..length])
+                    .map_err(|_| DeviceError::Backend)?;
+                transport.write_chain(memory, &chain, offset, &bytes[..length])?;
+                offset += u32::try_from(length).expect("entropy chunk length fits in u32");
+            }
+            transport.complete_chain(memory, queue, &chain, chain.writable)?;
+        }
+        Ok(())
     }
 }
 

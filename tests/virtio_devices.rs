@@ -1,10 +1,13 @@
 use riscbox::browser_storage::HttpBlockStore;
+use riscbox::entropy::{EntropyError, EntropySource};
 use riscbox::memory::{AccessWidth, GuestAddress, PhysicalMemory, RamFlags};
 use riscbox::virtio::VirtioTransport;
 use riscbox::virtio_devices::{
-    BlockBackend, BlockDevice, ConsoleDevice, DeviceError, InputDevice, InputEvent, InputKind,
-    NetworkBackend, NetworkDevice, NinePBackend, NinePDevice, VirtioMmioDevice,
+    BlockBackend, BlockDevice, ConsoleDevice, DeviceError, EntropyDevice, InputDevice, InputEvent,
+    InputKind, NetworkBackend, NetworkDevice, NinePBackend, NinePDevice, VirtioMmioDevice,
 };
+use std::cell::RefCell;
+use std::rc::Rc;
 
 const RAM: u64 = 0x8000_0000;
 const DESC: u64 = RAM + 0x1000;
@@ -102,6 +105,51 @@ impl BlockBackend for Disk {
         self.data[start..start + data.len()].copy_from_slice(data);
         Ok(())
     }
+}
+
+struct CountingEntropy(u8);
+
+impl EntropySource for CountingEntropy {
+    fn fill(&mut self, destination: &mut [u8]) -> Result<(), EntropyError> {
+        for byte in destination {
+            *byte = self.0;
+            self.0 = self.0.wrapping_add(1);
+        }
+        Ok(())
+    }
+}
+
+#[test]
+fn entropy_fills_writable_chains_and_rejects_readable_buffers() {
+    let source = Rc::new(RefCell::new(CountingEntropy(0x40)));
+    let mut device =
+        VirtioMmioDevice::new(VirtioTransport::new(4, 0, &[8]), EntropyDevice::new(source));
+    let mut memory = test_memory();
+    configure(&mut device, &mut memory, 0);
+    descriptor(&mut memory, 0, DATA, 5, 2, 0);
+    available(&mut memory, 0);
+    device
+        .write(&mut memory, 0x50, 0, AccessWidth::Word)
+        .expect("entropy request");
+    assert_eq!(
+        &memory.arena()[0x4000..0x4005],
+        &[0x40, 0x41, 0x42, 0x43, 0x44]
+    );
+    assert_eq!(
+        memory
+            .read(GuestAddress(USED + 2), AccessWidth::HalfWord)
+            .expect("used index"),
+        1
+    );
+
+    device.transport.reset();
+    configure(&mut device, &mut memory, 0);
+    descriptor(&mut memory, 0, DATA, 1, 0, 0);
+    available(&mut memory, 0);
+    assert_eq!(
+        device.write(&mut memory, 0x50, 0, AccessWidth::Word),
+        Err(DeviceError::InvalidRequest)
+    );
 }
 
 #[test]

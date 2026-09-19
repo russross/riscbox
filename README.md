@@ -152,7 +152,7 @@ Available devices are:
 
 *   NS16550A-compatible UART and VirtIO console.
 *   Goldfish real-time clock initialized from the host wall clock.
-*   VirtIO MMIO block, network, 9p, keyboard, and tablet devices.
+*   VirtIO MMIO block, network, entropy, 9p, keyboard, and tablet devices.
 *   PLIC and legacy CLINT interrupt/timer controllers.
 *   SiFive-compatible poweroff/test device.
 *   A simple framebuffer backed by SDL natively and exposed as dirty-region

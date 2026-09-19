@@ -3,7 +3,9 @@
 use std::cell::RefCell;
 
 use crate::browser::BrowserController;
-use crate::browser_runtime::{BrowserRuntime, HostAction, NinePCallback, RuntimeStart};
+use crate::browser_runtime::{
+    BrowserRuntime, EntropyCallback, HostAction, NinePCallback, RuntimeStart,
+};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StartRequest {
@@ -31,6 +33,10 @@ thread_local! {
 
 pub fn set_ninep_callback(callback: NinePCallback) {
     STATE.with_borrow_mut(|state| state.runtime.set_ninep_callback(callback));
+}
+
+pub fn set_entropy_callback(callback: EntropyCallback) {
+    STATE.with_borrow_mut(|state| state.runtime.set_entropy_callback(callback));
 }
 
 #[must_use]

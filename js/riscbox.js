@@ -26,6 +26,21 @@
                     else
                         setTimeout(() => runtime.run(), milliseconds);
                 },
+                random_fill(ptr, len) {
+                    try {
+                        const crypto = globalThis.crypto;
+                        if (!crypto || typeof crypto.getRandomValues !== "function")
+                            return -1;
+                        const destination = new Uint8Array(
+                            runtime.exports.memory.buffer, ptr, len,
+                        );
+                        crypto.getRandomValues(destination);
+                        return 0;
+                    } catch (error) {
+                        options.onError?.(error);
+                        return -1;
+                    }
+                },
                 console_write(ptr, len) {
                     const data = bytes(ptr, len);
                     options.consoleWrite?.(decoder.decode(data));

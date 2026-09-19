@@ -8,12 +8,24 @@ use std::rc::Rc;
 use crate::browser::{BrowserController, BrowserEvent, RunPolicy};
 use crate::browser_storage::HttpBlockStore;
 use crate::config::{Console, FilesystemBackend, VmConfig, resolve_asset_path};
+use crate::entropy::{EntropyError, EntropySource, SharedEntropy};
 use crate::machine::{
     BootImages, FramebufferConfig, FramebufferUpdate, Machine, MachineConfig, MachineError,
 };
 use crate::virtio_devices::{DeviceError, InputKind, NetworkBackend, NinePBackend};
 
 pub type NinePCallback = Rc<RefCell<dyn FnMut(&[u8]) -> Result<Vec<u8>, DeviceError>>>;
+pub type EntropyCallback = Rc<RefCell<dyn FnMut(&mut [u8]) -> Result<(), EntropyError>>>;
+
+struct CallbackEntropy {
+    callback: EntropyCallback,
+}
+
+impl EntropySource for CallbackEntropy {
+    fn fill(&mut self, destination: &mut [u8]) -> Result<(), EntropyError> {
+        (self.callback.borrow_mut())(destination)
+    }
+}
 
 pub struct CallbackNineP {
     callback: NinePCallback,
@@ -130,6 +142,7 @@ pub struct BrowserRuntime {
     actions: VecDeque<HostAction>,
     policy: RunPolicy,
     ninep: Option<NinePCallback>,
+    entropy: Option<EntropyCallback>,
 }
 
 impl Default for BrowserRuntime {
@@ -140,6 +153,7 @@ impl Default for BrowserRuntime {
             actions: VecDeque::new(),
             policy: RunPolicy::default(),
             ninep: None,
+            entropy: None,
         }
     }
 }
@@ -147,6 +161,37 @@ impl Default for BrowserRuntime {
 impl BrowserRuntime {
     pub fn set_ninep_callback(&mut self, callback: NinePCallback) {
         self.ninep = Some(callback);
+    }
+
+    pub fn set_entropy_callback(&mut self, callback: EntropyCallback) {
+        self.entropy = Some(callback);
+    }
+
+    fn entropy_source(&self) -> Result<SharedEntropy, RuntimeError> {
+        if let Some(callback) = &self.entropy {
+            Ok(Rc::new(RefCell::new(CallbackEntropy {
+                callback: callback.clone(),
+            })))
+        } else {
+            Ok(Rc::new(RefCell::new(
+                crate::entropy::SystemEntropy::open()
+                    .map_err(|error| RuntimeError::Machine(error.to_string()))?,
+            )))
+        }
+    }
+
+    fn create_machine(
+        &self,
+        ram_size: u64,
+        framebuffer: Option<FramebufferConfig>,
+    ) -> Result<Machine, RuntimeError> {
+        Ok(Machine::new_with_entropy(
+            MachineConfig {
+                ram_size,
+                framebuffer,
+            },
+            self.entropy_source()?,
+        )?)
     }
     /// Begins loading a VM configuration.
     ///
@@ -429,10 +474,7 @@ impl BrowserRuntime {
         let framebuffer = dimensions
             .filter(|(width, height)| *width != 0 && *height != 0)
             .map(|(width, height)| FramebufferConfig { width, height });
-        let mut machine = Machine::new(MachineConfig {
-            ram_size,
-            framebuffer,
-        })?;
+        let mut machine = self.create_machine(ram_size, framebuffer)?;
         let mut block_slots = Vec::new();
         for (index, manifest) in loading.drive_manifests.into_iter().enumerate() {
             let (url, bytes) = manifest.expect("each drive manifest is loaded in order");
@@ -478,6 +520,7 @@ impl BrowserRuntime {
         } else {
             (None, None)
         };
+        machine.add_entropy_device()?;
         machine.load_boot(BootImages {
             firmware,
             kernel: loading.kernel.as_deref(),

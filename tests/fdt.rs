@@ -11,6 +11,7 @@ fn platform_tree_has_standard_layout_and_required_nodes() {
         command_line: "console=ttyS0",
         initrd: Some((0x8800_0000, 0x20_0000)),
         virtio_count: 2,
+        rng_seed: Some(&[0xa5; 32]),
         framebuffer: Some(FramebufferDescription {
             size: 0x20_0000,
             width: 800,
@@ -34,6 +35,7 @@ fn platform_tree_has_standard_layout_and_required_nodes() {
         "virtio@10002000",
         "framebuffer@4100000",
         "console=ttyS0",
+        "rng-seed",
     ] {
         assert!(
             tree.windows(text.len())
@@ -41,4 +43,5 @@ fn platform_tree_has_standard_layout_and_required_nodes() {
             "missing {text}"
         );
     }
+    assert!(tree.windows(32).any(|window| window == [0xa5; 32]));
 }

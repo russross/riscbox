@@ -4,6 +4,7 @@ use core::fmt;
 
 use crate::browser_storage::{HttpBlockStore, HttpRequest, StorageError};
 use crate::cpu::{BusError, Cpu, CpuBus, MIP_MEIP, MIP_MSIP, MIP_MTIP, MIP_SEIP, RunOutcome};
+use crate::entropy::{EntropyError, SharedEntropy, SystemEntropy};
 use crate::fdt::{FdtConfig, FramebufferDescription, build as build_fdt};
 use crate::memory::{
     AccessWidth, ArenaOffset, GuestAddress, MemoryError, PhysicalMemory, RamFlags, RegionId,
@@ -11,8 +12,8 @@ use crate::memory::{
 use crate::platform::{Clint, FinishStatus, Finisher, GoldfishRtc, Plic, Uart16550};
 use crate::virtio::{MMIO_SIZE, VirtioTransport};
 use crate::virtio_devices::{
-    BlockBackend, BlockDevice, ConsoleDevice, DeviceError, InputDevice, InputKind, NetworkBackend,
-    NetworkDevice, NinePBackend, NinePDevice, VirtioMmioDevice,
+    BlockBackend, BlockDevice, ConsoleDevice, DeviceError, EntropyDevice, InputDevice, InputKind,
+    NetworkBackend, NetworkDevice, NinePBackend, NinePDevice, VirtioMmioDevice,
 };
 
 pub const RAM_BASE: u64 = 0x8000_0000;
@@ -89,6 +90,7 @@ pub enum MachineError {
     VirtioSlotLimit,
     WrongVirtioDevice,
     Storage(StorageError),
+    Entropy(EntropyError),
 }
 
 impl fmt::Display for MachineError {
@@ -111,6 +113,7 @@ impl fmt::Display for MachineError {
                 formatter.write_str("`VirtIO` slot has the wrong device type")
             }
             Self::Storage(error) => error.fmt(formatter),
+            Self::Entropy(error) => error.fmt(formatter),
         }
     }
 }
@@ -135,6 +138,12 @@ impl From<StorageError> for MachineError {
     }
 }
 
+impl From<EntropyError> for MachineError {
+    fn from(value: EntropyError) -> Self {
+        Self::Entropy(value)
+    }
+}
+
 #[derive(Clone, Debug)]
 struct Framebuffer {
     region: RegionId,
@@ -156,6 +165,7 @@ enum VirtioSlot {
     Network(DynNetwork),
     NineP(DynNineP),
     Input(VirtioMmioDevice<InputDevice>),
+    Entropy(VirtioMmioDevice<EntropyDevice>),
 }
 
 impl VirtioSlot {
@@ -167,6 +177,7 @@ impl VirtioSlot {
             Self::Network(device) => device.read(offset, width),
             Self::NineP(device) => device.read(offset, width),
             Self::Input(device) => device.read(offset, width),
+            Self::Entropy(device) => device.read(offset, width),
         }
     }
 
@@ -184,6 +195,7 @@ impl VirtioSlot {
             Self::Network(device) => device.write(memory, offset, value, width),
             Self::NineP(device) => device.write(memory, offset, value, width),
             Self::Input(device) => device.write(memory, offset, value, width),
+            Self::Entropy(device) => device.write(memory, offset, value, width),
         }
     }
 
@@ -195,6 +207,7 @@ impl VirtioSlot {
             Self::Network(device) => device.transport.irq(),
             Self::NineP(device) => device.transport.irq(),
             Self::Input(device) => device.transport.irq(),
+            Self::Entropy(device) => device.transport.irq(),
         }
     }
 }
@@ -391,6 +404,7 @@ pub struct Machine {
     cpu: Cpu,
     bus: PlatformBus,
     config: MachineConfig,
+    entropy: SharedEntropy,
 }
 
 impl Machine {
@@ -400,10 +414,24 @@ impl Machine {
     ///
     /// Returns an error for invalid RAM or framebuffer sizes or an exhausted memory map.
     pub fn new(config: MachineConfig) -> Result<Self, MachineError> {
+        let entropy = std::rc::Rc::new(std::cell::RefCell::new(SystemEntropy::open()?));
+        Self::new_with_entropy(config, entropy)
+    }
+
+    /// Creates an unbooted virtual platform with an explicit entropy source.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid RAM or framebuffer sizes or an exhausted memory map.
+    pub fn new_with_entropy(
+        config: MachineConfig,
+        entropy: SharedEntropy,
+    ) -> Result<Self, MachineError> {
         Ok(Self {
             cpu: Cpu::new(0),
             bus: PlatformBus::new(config)?,
             config,
+            entropy,
         })
     }
 
@@ -495,6 +523,18 @@ impl Machine {
         )))
     }
 
+    /// Adds a `VirtIO` entropy device and returns its MMIO slot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error after the 32 available PLIC sources are exhausted.
+    pub fn add_entropy_device(&mut self) -> Result<usize, MachineError> {
+        self.add_virtio(VirtioSlot::Entropy(VirtioMmioDevice::new(
+            VirtioTransport::new(4, 0, &[16]),
+            EntropyDevice::new(self.entropy.clone()),
+        )))
+    }
+
     fn add_virtio(&mut self, device: VirtioSlot) -> Result<usize, MachineError> {
         let index = self.bus.virtio.len();
         if virtio_irq_checked(index).is_none() {
@@ -553,12 +593,15 @@ impl Machine {
         let initrd = images
             .initrd
             .map(|_| (RAM_BASE + initrd_offset, initrd_size));
+        let mut rng_seed = [0; 32];
+        self.entropy.borrow_mut().fill(&mut rng_seed)?;
         let tree = build_fdt(FdtConfig {
             ram_size: self.config.ram_size,
             command_line: images.command_line,
             initrd,
             virtio_count: u8::try_from(self.bus.virtio.len())
                 .map_err(|_| MachineError::VirtioSlotLimit)?,
+            rng_seed: Some(&rng_seed),
             framebuffer,
         });
         let limit = self.config.ram_size.min(FDT_MAX_OFFSET);

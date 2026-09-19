@@ -1,11 +1,24 @@
 use riscbox::browser_storage::HttpBlockStore;
 use riscbox::cpu::CpuBus;
+use riscbox::entropy::{EntropyError, EntropySource};
 use riscbox::machine::{
     BootImages, FRAMEBUFFER_BASE, FramebufferConfig, Machine, MachineConfig, RAM_BASE, RTC_BASE,
-    RedrawSpan,
+    RedrawSpan, VIRTIO_BASE,
 };
 use riscbox::memory::{AccessWidth, GuestAddress};
 use riscbox::platform::FinishStatus;
+use std::cell::RefCell;
+use std::rc::Rc;
+
+struct FixedEntropy(u8);
+
+impl EntropySource for FixedEntropy {
+    fn fill(&mut self, destination: &mut [u8]) -> Result<(), EntropyError> {
+        destination.fill(self.0);
+        self.0 = self.0.wrapping_add(1);
+        Ok(())
+    }
+}
 
 fn machine(framebuffer: bool) -> Machine {
     Machine::new(MachineConfig {
@@ -43,6 +56,40 @@ fn virtio_slots_route_mmio_and_appear_in_the_device_tree() {
         .expect("FDT RAM");
     let node = b"virtio@10001000";
     assert!(tree.windows(node.len()).any(|window| window == node));
+}
+
+#[test]
+fn boot_seed_and_virtio_rng_share_the_machine_entropy_source() {
+    let entropy = Rc::new(RefCell::new(FixedEntropy(0xa5)));
+    let mut machine = Machine::new_with_entropy(
+        MachineConfig {
+            ram_size: 64 << 20,
+            framebuffer: None,
+        },
+        entropy,
+    )
+    .expect("valid machine");
+    let slot = machine.add_entropy_device().expect("entropy slot");
+    assert_eq!(slot, 0);
+    assert_eq!(
+        machine
+            .bus_mut()
+            .read(GuestAddress(VIRTIO_BASE + 8), AccessWidth::Word)
+            .expect("VirtIO device ID"),
+        4
+    );
+    let layout = machine
+        .load_boot(BootImages {
+            firmware: &[0; 64],
+            kernel: None,
+            initrd: None,
+            command_line: "",
+        })
+        .expect("boot layout");
+    let tree = machine
+        .read_ram(layout.fdt_address, layout.fdt_size as usize)
+        .expect("FDT RAM");
+    assert!(tree.windows(32).any(|window| window == [0xa5; 32]));
 }
 
 #[test]

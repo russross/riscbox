@@ -20,6 +20,7 @@ pub struct FdtConfig<'a> {
     pub command_line: &'a str,
     pub initrd: Option<(u64, u64)>,
     pub virtio_count: u8,
+    pub rng_seed: Option<&'a [u8]>,
     pub framebuffer: Option<FramebufferDescription>,
 }
 
@@ -200,6 +201,9 @@ pub fn build(config: FdtConfig<'_>) -> Vec<u8> {
         fdt.property_cells("linux,initrd-start", &[high_u32(start), low_u32(start)]);
         let end = start.saturating_add(size);
         fdt.property_cells("linux,initrd-end", &[high_u32(end), low_u32(end)]);
+    }
+    if let Some(seed) = config.rng_seed {
+        fdt.property("rng-seed", seed);
     }
     fdt.end_node();
     fdt.end_node();

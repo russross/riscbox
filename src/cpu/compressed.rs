@@ -236,6 +236,9 @@ impl Cpu {
                 (bits(instruction, 12, 1) << 17) | (bits(instruction, 2, 5) << 12),
                 18,
             );
+            if rd == 0 && immediate != 0 || immediate == 0 && rd <= 15 && rd & 1 != 0 {
+                return Ok(());
+            }
             if rd == 0 || immediate == 0 {
                 return Err(illegal(instruction));
             }

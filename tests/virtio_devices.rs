@@ -180,12 +180,14 @@ fn block_reads_writes_identification_and_unsupported_status() {
     header[..4].copy_from_slice(&99_u32.to_le_bytes());
     bytes(&mut memory, DATA, &header);
     descriptor(&mut memory, 0, DATA, 16, 1, 1);
-    descriptor(&mut memory, 1, DATA + 0x100, 1, 2, 0);
+    bytes(&mut memory, DATA + 0x100, &[0xff; 21]);
+    descriptor(&mut memory, 1, DATA + 0x100, 21, 2, 0);
     available(&mut memory, 0);
     device
         .write(&mut memory, 0x50, 0, AccessWidth::Word)
         .unwrap();
-    assert_eq!(memory.arena()[0x4100], 2);
+    assert_eq!(memory.arena()[0x4100], 0xff);
+    assert_eq!(memory.arena()[0x4114], 2);
 
     device.transport.reset();
     configure(&mut device, &mut memory, 0);
@@ -392,6 +394,60 @@ impl NinePBackend for Echo9p {
 }
 
 #[test]
+fn receive_notifications_drain_buffered_console_network_and_input_data() {
+    let mut memory = test_memory();
+    let mut console = VirtioMmioDevice::new(
+        VirtioTransport::new(3, 0, &[8, 8]),
+        ConsoleDevice::new(80, 25),
+    );
+    configure(&mut console, &mut memory, 0);
+    console
+        .device
+        .receive(&mut console.transport, &mut memory, b"x")
+        .unwrap();
+    descriptor(&mut memory, 0, DATA, 1, 2, 0);
+    available(&mut memory, 0);
+    console
+        .write(&mut memory, 0x50, 0, AccessWidth::Word)
+        .unwrap();
+    assert_eq!(memory.arena()[0x4000], b'x');
+
+    let mut memory = test_memory();
+    let mut network = VirtioMmioDevice::new(
+        VirtioTransport::new(1, 0, &[8, 8]),
+        NetworkDevice::new(Net::default(), [0; 6]),
+    );
+    configure(&mut network, &mut memory, 0);
+    network
+        .device
+        .receive_packet(&mut network.transport, &mut memory, b"frame".to_vec())
+        .unwrap();
+    descriptor(&mut memory, 0, DATA, 15, 2, 0);
+    available(&mut memory, 0);
+    network
+        .write(&mut memory, 0x50, 0, AccessWidth::Word)
+        .unwrap();
+    assert_eq!(&memory.arena()[0x400a..0x400f], b"frame");
+
+    let mut memory = test_memory();
+    let mut input = VirtioMmioDevice::new(
+        VirtioTransport::new(18, 0, &[8, 8]),
+        InputDevice::new(InputKind::Keyboard),
+    );
+    configure(&mut input, &mut memory, 0);
+    input
+        .device
+        .send_key(&mut input.transport, &mut memory, 30, true)
+        .unwrap();
+    descriptor(&mut memory, 0, DATA, 8, 2, 0);
+    available(&mut memory, 0);
+    input
+        .write(&mut memory, 0x50, 0, AccessWidth::Word)
+        .unwrap();
+    assert_eq!(memory.arena()[0x4002], 30);
+}
+
+#[test]
 fn ninep_validates_messages_and_input_emits_events() {
     let mut memory = test_memory();
     let mut p9 = VirtioMmioDevice::new(
@@ -430,12 +486,12 @@ fn ninep_validates_messages_and_input_emits_events() {
     input
         .write(&mut memory, 0x50, 0, AccessWidth::Word)
         .unwrap();
-    assert_eq!(&memory.arena()[0x4000..0x4008], &[0; 8]);
+    assert_eq!(&memory.arena()[0x4000..0x4008], &[1, 0, 30, 0, 1, 0, 0, 0]);
     assert_eq!(
         memory
             .read(GuestAddress(USED + 2), AccessWidth::HalfWord)
             .unwrap(),
-        0
+        1
     );
     input
         .write(&mut memory, 0x100, 1, AccessWidth::Byte)

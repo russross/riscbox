@@ -354,7 +354,7 @@ impl<B: BlockBackend> BlockDevice<B> {
                 1
             }
         };
-        transport.write_chain(memory, chain, written - 1, &[status])?;
+        transport.write_chain(memory, chain, chain.writable - 1, &[status])?;
         transport.complete_chain(memory, queue, chain, written)?;
         Ok(BlockRequestStatus::Complete)
     }
@@ -457,7 +457,7 @@ impl VirtioDevice for ConsoleDevice {
         queue: QueueIndex,
     ) -> Result<(), DeviceError> {
         if queue.0 == 0 {
-            return Ok(());
+            return self.drain_input(transport, memory);
         }
         while let Some(chain) = transport.next_chain(memory, queue)? {
             let written = if queue.0 == 1 {
@@ -567,7 +567,7 @@ impl<B: NetworkBackend> VirtioDevice for NetworkDevice<B> {
         queue: QueueIndex,
     ) -> Result<(), DeviceError> {
         if queue.0 == 0 {
-            return Ok(());
+            return self.drain_receive(transport, memory);
         }
         while let Some(chain) = transport.next_chain(memory, queue)? {
             let written = if queue.0 == 1 {
@@ -828,7 +828,7 @@ impl VirtioDevice for InputDevice {
         queue: QueueIndex,
     ) -> Result<(), DeviceError> {
         if queue.0 == 0 {
-            return Ok(());
+            return self.drain_events(transport, memory);
         }
         while let Some(chain) = transport.next_chain(memory, queue)? {
             if queue.0 == 1 {

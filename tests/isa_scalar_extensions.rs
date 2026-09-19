@@ -8,6 +8,7 @@ const CSR_PMPCFG0: u16 = 0x3a0;
 const CSR_PMPADDR0: u16 = 0x3b0;
 const CSR_MEPC: u16 = 0x341;
 const CSR_MCAUSE: u16 = 0x342;
+const CSR_MISA: u16 = 0x301;
 
 fn machine() -> (Cpu, PhysicalMemory) {
     let mut memory = PhysicalMemory::new();
@@ -68,6 +69,12 @@ fn executes_address_and_basic_bit_manipulation() {
 }
 
 #[test]
+fn reports_the_combined_bit_manipulation_extension() {
+    let (mut cpu, _) = machine();
+    assert_ne!(cpu.read_csr(CSR_MISA).unwrap() & (1 << (b'B' - b'A')), 0);
+}
+
+#[test]
 fn executes_word_address_bit_and_conditional_operations() {
     let (mut cpu, mut memory) = machine();
     cpu.set_register(1, 0xffff_ffff_8000_0001);
@@ -96,6 +103,10 @@ fn executes_mops_waits_and_supervisor_invalidation() {
     cpu.set_register(3, u64::MAX);
     run_one(&mut cpu, &mut memory, 0x81c2_41f3); // mop.r.0 x3,x4
     assert_eq!(cpu.register(3), 0);
+
+    let (mut invalid, mut invalid_memory) = machine();
+    run_one(&mut invalid, &mut invalid_memory, 0x8000_41f3);
+    assert_eq!(invalid.read_csr(CSR_MCAUSE), Ok(2));
     cpu.set_register(3, u64::MAX);
     run_one(&mut cpu, &mut memory, 0xce52_41f3); // mop.rr.7 x3,x4,x5
     assert_eq!(cpu.register(3), 0);
@@ -105,6 +116,14 @@ fn executes_mops_waits_and_supervisor_invalidation() {
     run_one(&mut cpu, &mut memory, 0x1800_0073); // sfence.w.inval
     run_one(&mut cpu, &mut memory, 0x1810_0073); // sfence.inval.ir
     run_one(&mut cpu, &mut memory, 0x1600_0073); // sinval.vma x0,x0
+}
+
+#[test]
+fn csr_register_forms_attempt_writes_for_nonzero_source_registers() {
+    let (mut cpu, mut memory) = machine();
+    cpu.set_register(4, 0);
+    run_one(&mut cpu, &mut memory, 0xf112_21f3); // csrrs x3,mvendorid,x4
+    assert_eq!(cpu.read_csr(CSR_MCAUSE), Ok(2));
 }
 
 #[test]

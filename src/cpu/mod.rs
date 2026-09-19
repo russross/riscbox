@@ -64,6 +64,7 @@ const PMP_ADDR_MASK: u64 = (1 << 54) - 1;
 
 const MISA_I: u64 = 1 << (b'I' - b'A');
 const MISA_A: u64 = 1;
+const MISA_B: u64 = 1 << (b'B' - b'A');
 const MISA_C: u64 = 1 << (b'C' - b'A');
 const MISA_D: u64 = 1 << (b'D' - b'A');
 const MISA_F: u64 = 1 << (b'F' - b'A');
@@ -324,7 +325,7 @@ impl Cpu {
             mcause: 0,
             mtval: 0,
             mhartid: hart_id,
-            misa: MISA_A | MISA_C | MISA_D | MISA_F | MISA_I | MISA_M | MISA_S | MISA_U,
+            misa: MISA_A | MISA_B | MISA_C | MISA_D | MISA_F | MISA_I | MISA_M | MISA_S | MISA_U,
             mie: 0,
             mip: 0,
             medeleg: 0,

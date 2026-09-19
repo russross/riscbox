@@ -281,8 +281,8 @@ impl Cpu {
         funct3: u32,
     ) -> Result<bool, Trap> {
         if funct3 == 4 {
-            let mop_encoding = instruction & 0xb200_707f;
-            if matches!(mop_encoding, 0x8000_4073 | 0x8200_4073) {
+            if instruction & 0xb3c0_707f == 0x81c0_4073 || instruction & 0xb200_707f == 0x8200_4073
+            {
                 self.write_register(rd, 0);
                 self.pc = self.pc.wrapping_add(4);
                 return Ok(true);
@@ -353,7 +353,7 @@ impl Cpu {
         if operation == 0 {
             return Err(illegal(instruction));
         }
-        let will_write = operation == 1 || source != 0;
+        let will_write = operation == 1 || rs1 != 0;
         let old = self
             .csr_read(csr, will_write)
             .map_err(|CsrError::IllegalAccess| illegal(instruction))?;

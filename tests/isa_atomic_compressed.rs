@@ -125,3 +125,18 @@ fn compressed_reserved_encoding_traps_with_halfword_value() {
     assert_eq!(cpu.read_csr(0x342), Ok(2));
     assert_eq!(cpu.read_csr(0x343), Ok(0));
 }
+
+#[test]
+fn compressed_mops_and_lui_hints_retire_as_noops() {
+    for instruction in (0x6081_u16..=0x6781).step_by(0x100) {
+        let (mut cpu, mut memory) = machine();
+        cpu.set_register(1, 0x1234);
+        run16(&mut cpu, &mut memory, instruction);
+        assert_eq!(cpu.pc(), 0x1002);
+        assert_eq!(cpu.register(1), 0x1234);
+    }
+
+    let (mut cpu, mut memory) = machine();
+    run16(&mut cpu, &mut memory, 0x6005); // c.lui x0,1 hint
+    assert_eq!(cpu.pc(), 0x1002);
+}

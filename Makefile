@@ -16,7 +16,7 @@ check: test
 
 wasm: $(RUST_WASM)
 
-$(RUST_WASM): Cargo.toml Cargo.lock rust-wasm/Cargo.toml $(shell find rust rust-wasm -type f)
+$(RUST_WASM): Cargo.toml Cargo.lock browser-wasm/Cargo.toml $(shell find src browser-wasm -type f)
 	cargo build --release -p riscbox-wasm --target wasm32-unknown-unknown
 
 kernel:

@@ -5,7 +5,7 @@ edition = "2024"
 publish = false
 
 [lib]
-path = "rust/lib.rs"
+path = "src/lib.rs"
 crate-type = ["rlib", "cdylib"]
 
 [dependencies]
@@ -22,5 +22,5 @@ all = "deny"
 pedantic = "deny"
 
 [workspace]
-members = [".", "rust-wasm"]
+members = [".", "browser-wasm"]
 resolver = "3"

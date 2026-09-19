@@ -17,7 +17,7 @@ image-building tools are outside the port.
 Architecture
 ------------
 
-The Rust package lives at the repository root with source under `rust/`.
+The Rust package lives at the repository root with source under `src/`.
 Production code is split into CPU, SoftFP, memory, devices, machine,
 configuration, storage backends, and host integration modules as they are
 ported. Native builds exist to run tests; the deployable library is built
@@ -135,7 +135,7 @@ Decision log
     device dispatch, keep host receive queues pending until explicit ingress,
     and use backend traits for block, network, and raw 9p services.
 *   2026-09-18: Keep browser I/O as explicit request/completion and event queues.
-    Put stable unmangled exports in the small `riscbox-wasm` companion crate so
+    Put stable unmangled exports in the small `browser-wasm/` companion crate so
     the emulator crate continues to forbid unsafe code. The handwritten adapter
     copies all host-owned buffers across the boundary.
 *   2026-09-18: Use narrowly configured RustCrypto `aes`, `cbc`, `pbkdf2`, and
@@ -174,6 +174,8 @@ Decision log
     Isolate the complete C reference under `c/`, replace its image splitter in
     production with a standalone Python tool, and make the root-owned custom
     kernel a distribution artifact consumed by image definitions.
+*   2026-09-19: Use the conventional `src/` directory for the root emulator
+    crate and name the raw browser WebAssembly export crate `browser-wasm/`.
 
 Next milestone
 --------------

@@ -43,6 +43,49 @@ fn arithmetic_is_bit_exact_for_representative_results() {
 }
 
 #[test]
+fn fused_operations_preserve_tiny_products_and_exact_cancellation() {
+    let mut flags = 0;
+    assert_eq!(
+        fma_f64(
+            0x26f0_0000_0000_0000,
+            0x26f0_0000_0000_0000,
+            0,
+            RoundingMode::NearEven,
+            &mut flags,
+        ),
+        0x0df0_0000_0000_0000
+    );
+    assert_eq!(flags, 0);
+
+    assert_eq!(
+        fma_f64(
+            0x3ff0_0000_0000_0001,
+            0x3fef_ffff_ffff_fffe,
+            0xbff0_0000_0000_0000,
+            RoundingMode::NearEven,
+            &mut flags,
+        ),
+        0xb970_0000_0000_0000
+    );
+    assert_eq!(flags, 0);
+}
+
+#[test]
+fn division_normalizes_subnormal_operands_before_rounding() {
+    let mut flags = 0;
+    assert_eq!(
+        riscbox::softfp::div_f64(
+            0x0000_0000_0000_0001,
+            0x0010_0000_0000_0001,
+            RoundingMode::NearEven,
+            &mut flags,
+        ),
+        0x3caf_ffff_ffff_fffe
+    );
+    assert_eq!(flags, FLAG_INEXACT);
+}
+
+#[test]
 fn rounding_modes_and_sticky_flags_are_observed() {
     let mut flags = 0;
     let one = 1.0_f32.to_bits();

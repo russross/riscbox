@@ -192,24 +192,39 @@ fn nan2(a: Value, b: Value, flags: &mut u32, f: Format) -> Option<u64> {
 }
 
 fn add_parts(
-    (sa, mut a, ea): (bool, u128, i32),
-    (sb, mut b, eb): (bool, u128, i32),
+    (sa, a, ea): (bool, u128, i32),
+    (sb, b, eb): (bool, u128, i32),
     rm: RoundingMode,
     flags: &mut u32,
     f: Format,
 ) -> u64 {
-    const GUARD_BITS: u32 = 16;
-    let e = ea.max(eb);
-    a = jam(a << GUARD_BITS, (e - ea).cast_unsigned());
-    b = jam(b << GUARD_BITS, (e - eb).cast_unsigned());
+    const ALIGN_BITS: i32 = 120;
+    if a == 0 {
+        return pack(sb, b, eb, rm, flags, false, f);
+    }
+    if b == 0 {
+        return pack(sa, a, ea, rm, flags, false, f);
+    }
+    let top = (ea + bit_len(a).cast_signed()).max(eb + bit_len(b).cast_signed());
+    let base = top - ALIGN_BITS;
+    let a = align_significand(a, ea - base);
+    let b = align_significand(b, eb - base);
     if sa == sb {
-        pack(sa, a + b, e - GUARD_BITS.cast_signed(), rm, flags, false, f)
+        pack(sa, a + b, base, rm, flags, false, f)
     } else if a > b {
-        pack(sa, a - b, e - GUARD_BITS.cast_signed(), rm, flags, false, f)
+        pack(sa, a - b, base, rm, flags, false, f)
     } else if b > a {
-        pack(sb, b - a, e - GUARD_BITS.cast_signed(), rm, flags, false, f)
+        pack(sb, b - a, base, rm, flags, false, f)
     } else {
         sign_bit(matches!(rm, RoundingMode::Down), f)
+    }
+}
+
+fn align_significand(value: u128, shift: i32) -> u128 {
+    if shift >= 0 {
+        value << shift.cast_unsigned()
+    } else {
+        jam(value, (-shift).cast_unsigned())
     }
 }
 fn add(a: u64, b: u64, rm: RoundingMode, flags: &mut u32, f: Format) -> u64 {
@@ -271,15 +286,19 @@ fn div(a: u64, b: u64, rm: RoundingMode, flags: &mut u32, f: Format) -> u64 {
             sign_bit(sign, f) | (((1_u64 << f.exp_bits) - 1) << f.frac)
         }
         (Value::Finite(_, ma, ea), Value::Finite(_, mb, eb)) => {
-            let n = f.frac + 10;
-            let num = ma << n;
+            const QUOTIENT_BITS: u32 = 63;
+            let a_bits = bit_len(ma);
+            let b_bits = bit_len(mb);
+            let normalized_a = ma << (64 - a_bits);
+            let normalized_b = mb << (64 - b_bits);
+            let num = normalized_a << QUOTIENT_BITS;
             pack(
                 sign,
-                num / mb,
-                ea - eb - n.cast_signed(),
+                num / normalized_b,
+                ea - eb + a_bits.cast_signed() - b_bits.cast_signed() - QUOTIENT_BITS.cast_signed(),
                 rm,
                 flags,
-                !num.is_multiple_of(mb),
+                !num.is_multiple_of(normalized_b),
                 f,
             )
         }
@@ -364,7 +383,8 @@ fn fma(a: u64, b: u64, c: u64, rm: RoundingMode, flags: &mut u32, f: Format) -> 
             add_parts((ps, ma * mb, ea + eb), (sc, mc, ec), rm, flags, f)
         }
         (Value::Finite(_, ma, ea), Value::Finite(_, mb, eb), Value::Zero(sc)) => {
-            add_parts((ps, ma * mb, ea + eb), (sc, 0, 0), rm, flags, f)
+            let _ = sc;
+            pack(ps, ma * mb, ea + eb, rm, flags, false, f)
         }
         _ => unreachable!(),
     }

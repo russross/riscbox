@@ -343,6 +343,37 @@ fn framebuffer_snapshot_invalidates_cached_cpu_write_translation() {
 }
 
 #[test]
+fn interrupt_changes_from_guest_mmio_end_the_current_cpu_block() {
+    let mut machine = machine(false);
+    let firmware: Vec<u8> = [
+        0x0200_00b7_u32, // lui x1,0x2000 (CLINT)
+        0x0010_0113,     // addi x2,x0,1
+        0x0020_a023,     // sw x2,0(x1)
+        0x3440_22f3,     // csrr x5,mip
+        0x0000_a023,     // sw x0,0(x1)
+        0x3440_2373,     // csrr x6,mip
+        0x0000_006f,     // j .
+    ]
+    .into_iter()
+    .flat_map(u32::to_le_bytes)
+    .collect();
+    machine
+        .load_boot(BootImages {
+            firmware: &firmware,
+            kernel: None,
+            initrd: None,
+            command_line: "",
+        })
+        .expect("boot image");
+
+    for _ in 0..3 {
+        machine.run(100);
+    }
+    assert_eq!(machine.cpu().register(5) & (1 << 3), 1 << 3);
+    assert_eq!(machine.cpu().register(6) & (1 << 3), 0);
+}
+
+#[test]
 fn machine_exposes_complete_host_time_through_the_rtc() {
     let mut machine = machine(false);
     let milliseconds = 1_730_000_000_123_u64;

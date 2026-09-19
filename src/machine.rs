@@ -223,6 +223,7 @@ pub struct PlatformBus {
     virtio: Vec<VirtioSlot>,
     timer_ticks: u64,
     host_nanoseconds: u64,
+    interrupt_state_changed: bool,
 }
 
 impl PlatformBus {
@@ -276,6 +277,7 @@ impl PlatformBus {
             virtio: Vec::new(),
             timer_ticks: 0,
             host_nanoseconds: 0,
+            interrupt_state_changed: false,
         })
     }
 
@@ -320,6 +322,7 @@ impl PlatformBus {
             return Err(BusError::AccessFault);
         };
         self.update_device_irqs();
+        self.interrupt_state_changed = true;
         Ok(value)
     }
 
@@ -356,6 +359,7 @@ impl PlatformBus {
             return Err(BusError::AccessFault);
         }
         self.update_device_irqs();
+        self.interrupt_state_changed = true;
         Ok(())
     }
 }
@@ -397,6 +401,10 @@ impl CpuBus for PlatformBus {
 
     fn arena_mut(&mut self) -> &mut [u8] {
         self.memory.arena_mut()
+    }
+
+    fn take_interrupt_state_changed(&mut self) -> bool {
+        core::mem::take(&mut self.interrupt_state_changed)
     }
 }
 
@@ -673,6 +681,7 @@ impl Machine {
 
     pub fn run(&mut self, cycles: u32) -> RunOutcome {
         self.sync_interrupts();
+        self.bus.take_interrupt_state_changed();
         let outcome = self.cpu.run(&mut self.bus, cycles);
         self.sync_interrupts();
         outcome

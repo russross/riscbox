@@ -175,6 +175,9 @@ pub trait CpuBus {
     ) -> Result<ArenaOffset, BusError>;
     fn arena(&self) -> &[u8];
     fn arena_mut(&mut self) -> &mut [u8];
+    fn take_interrupt_state_changed(&mut self) -> bool {
+        false
+    }
 }
 
 impl CpuBus for PhysicalMemory {
@@ -386,6 +389,9 @@ impl Cpu {
             cycles += 1;
             self.elapsed_cycles = self.elapsed_cycles.wrapping_add(1);
             self.cycle = self.cycle.wrapping_add(1);
+            if bus.take_interrupt_state_changed() {
+                break;
+            }
         }
         RunOutcome {
             cycles,

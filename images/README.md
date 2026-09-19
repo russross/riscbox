@@ -18,14 +18,10 @@ Build either current image from its directory:
     ./build.sh
 
 The shared helpers under `bin/` download and verify the pinned Alpine
-minirootfs, maintain the single ignored Linux source tree at `images/linux/`,
-incrementally compile the tracked `kernel.config`, boot setup scripts under
-QEMU with user networking, rebuild the WASM runtime when its sources change,
-and assemble the deployment.
-
-For native Risclet work, `risclet/run-native.sh` exports the tracked demo
-directory through a temporary `diod` socket and boots the unsplit image. It
-requires `/usr/sbin/diod` and a host user with uid 1000.
+minirootfs, consume the root-owned `kernel/linux` and Rust WASM build, boot
+setup scripts under QEMU with user networking, and assemble the deployment.
+Run `make kernel` or `make wasm` at the repository root to build those core
+artifacts independently.
 
 The browser Risclet application loads its workspaces from the tracked
 `risclet/examples/` directory. `examples.json` names each example and lists
@@ -37,9 +33,11 @@ dependencies live under `risclet/ui/`. The distribution build installs them
 when needed, runs the type checker, and bundles the CodeMirror, xterm.js,
 Split.js, and CommonMark frontend into `dist/bundle.js`.
 
-Shared artifacts are kept under `images/build/`; per-image work and output are
-kept under that image's `build/` and `dist/`. None is tracked. The Alpine
-release is selected once near the top of `bin/create-alpine-ext4`.
+Shared image-preparation artifacts are kept under `images/build/`; per-image
+work and output are kept under that image's `build/` and `dist/`. None is
+tracked. Kernel sources and build products live under `kernel/`, outside the
+image definitions. The Alpine release is selected once near the top of
+`bin/create-alpine-ext4`.
 
 New image definition
 --------------------

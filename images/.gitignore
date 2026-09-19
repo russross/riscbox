@@ -1,5 +1,4 @@
-# Shared source and build artifacts.
-/linux/
+# Shared image build artifacts.
 /build/
 
 # Per-image working files and deployable output.

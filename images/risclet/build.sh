@@ -3,6 +3,7 @@ set -eu
 
 IMAGE_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 BIN_DIR=$(CDPATH= cd -- "$IMAGE_DIR/../bin" && pwd)
+ROOT_DIR=$(CDPATH= cd -- "$IMAGE_DIR/../.." && pwd)
 BUILD_DIR="$IMAGE_DIR/build"
 ROOTFS_IMAGE="$BUILD_DIR/rootfs.ext4"
 RISCLET_BINARY="$BUILD_DIR/risclet"
@@ -10,7 +11,7 @@ RISCLET_URL=https://github.com/russross/risclet/releases/download/v0.4.8/risclet
 RISCLET_SHA256=ede5c483810c3ed4137a95ee84e62cb0a04f75dcf396899f7f2dbf5fb41361fc
 
 mkdir -p "$BUILD_DIR"
-"$BIN_DIR/build-kernel"
+make -C "$ROOT_DIR" kernel
 
 if [ ! -f "$RISCLET_BINARY" ]; then
     curl --fail --location --show-error --output "$RISCLET_BINARY.part" \

@@ -1,9 +1,15 @@
 riscbox emulator
 ================
 
-riscbox is a focused fork of Fabrice Bellard's [TinyEMU](https://bellard.org/tinyemu/). It keeps TinyEMU's small, direct implementation while updating its RISC-V CPU and virtual platform for use in education and specifically in the browser with WASM.
+riscbox is a Rust implementation of a small RISC-V virtual platform for use in
+education and specifically in the browser with WASM. It began as a focused fork
+of Fabrice Bellard's [TinyEMU](https://bellard.org/tinyemu/); the complete C
+reference implementation now lives independently under `c/`.
 
-riscbox is intended to run small RISC-V Linux systems and student kernels in a web page, with native builds for image preparation and testing. Its platform generally follows QEMU's RISC-V `virt` machine, and its ISA is moving in the general direction of RVA23.
+riscbox is intended to run small RISC-V Linux systems and student kernels in a
+web page, with native Rust builds for testing. Its platform generally follows
+QEMU's RISC-V `virt` machine, and its ISA is moving in the general direction of
+RVA23.
 
 The scope is deliberately narrow:
 
@@ -11,58 +17,59 @@ The scope is deliberately narrow:
 *   One hart. There is no SMP model.
 *   No vector or hypervisor extension.
 *   A small `virt`-style device set, not general device emulation.
-*   Browser deployment first; native builds support development and image work.
+*   Browser deployment first; native Rust builds are test runners.
 *   Networking is retained but deprioritized for now.
 
 
 Dependencies
 ------------
 
-The native build requires Clang, GNU Make, libcurl, OpenSSL, and SDL 1.2 development files. On Debian or Ubuntu:
-
-    sudo apt install clang make libcurl4-openssl-dev libssl-dev libsdl1.2-dev
-
-Image builds also require the RISC-V cross compiler, QEMU system emulator,
-`curl`, ext4 tools, and an OpenSBI generic `fw_jump.bin`:
+The root build requires Rust, GNU Make, `uv`, Node.js, and the
+`wasm32-unknown-unknown` target. Image and kernel builds also require the
+RISC-V cross compiler, QEMU system emulator, `curl`, ext4 tools, and an OpenSBI
+generic `fw_jump.bin`:
 
     sudo apt install curl e2fsprogs gcc-riscv64-linux-gnu opensbi qemu-system-misc
 
-The reference C WASM build requires Emscripten. The deployed Rust WASM build
-requires Rust and the `wasm32-unknown-unknown` target:
-
-    sudo apt install emscripten
     rustup target add wasm32-unknown-unknown
+
+The optional C reference under `c/` additionally requires Clang, Emscripten,
+libcurl, OpenSSL, and SDL 1.2 development files.
 
 
 Getting started
 ---------------
 
-Clone and build the native emulator:
+Clone and build the Rust implementation:
 
     git clone https://github.com/russross/riscbox.git
     cd riscbox
-    make -j4
-    ./riscbox --help
+    make
+    make test
 
-There are four supported build targets:
+The root build exposes the implementation and core distribution artifacts:
 
 | Target            | Output                                            | Use                                           |
 | ----------------- | ------------------------------------------------- | --------------------------------------------- |
-| `make release`    | `riscbox`, `splitimg`, `build_filelist`           | Fast native iteration; this is the default    |
-| `make debug`      | `riscbox-debug`                                   | Strict warnings, debug information, AddressSanitizer, and UndefinedBehaviorSanitizer |
-| `make wasm`       | `js/riscbox-wasm.js` and `js/riscbox-wasm.wasm`   | Reference C browser build |
-| `make rust-wasm`  | `target/wasm32-unknown-unknown/release/riscbox_wasm.wasm` | Browser deployment |
+| `make release` | optimized Rust workspace | Native test and development build |
+| `make test`    | Rust, Python, and JavaScript tests | Behavioral validation |
+| `make check`   | tests, Clippy, and Python type checks | Strict validation |
+| `make wasm`    | `target/wasm32-unknown-unknown/release/riscbox_wasm.wasm` | Browser runtime |
+| `make kernel`  | `kernel/linux` | Canonical custom kernel |
+| `make dist`    | WASM and kernel outputs | Core distribution artifacts |
 
-`make clean` removes all generated outputs. `make install` installs the native release programs under `/usr/local/bin` by default; set `DESTDIR` or `bindir` to stage them elsewhere.
+Build the reference implementation by changing into `c/`; its README documents
+the preserved C targets.
 
 
 Build and deploy an image
 -------------------------
 
-The tracked image definitions live under `images/`; downloads, the single
-Linux source tree, intermediate files, disk images, and deployment bundles are
-ignored. Build the general Alpine image or the Risclet teaching image from its
-own directory:
+The tracked image definitions live under `images/`. They consume the
+root-owned Rust WASM and `kernel/linux` artifacts while keeping their own
+downloads, intermediate files, disk images, and deployment bundles ignored.
+Build the general Alpine image or the Risclet teaching image from its own
+directory:
 
     cd images/alpine
     ./build.sh
@@ -70,8 +77,8 @@ own directory:
     cd images/risclet
     ./build.sh
 
-Each build downloads verified inputs as needed, incrementally builds the
-tracked kernel configuration and WASM runtime, creates an ext4 disk, runs the
+Each build consumes the incrementally built root kernel and WASM targets,
+downloads verified image inputs as needed, creates an ext4 disk, runs the
 image-specific setup under QEMU with networking, and writes a self-contained
 `dist/` directory. See [images/README.md](images/README.md) for the build layout.
 
@@ -86,8 +93,8 @@ page, and an all-in-one deployment README. It can be copied directly to a
 static server with `rsync`.
 
 
-Configuration and command line
-------------------------------
+Browser configuration
+---------------------
 
 riscbox reads TinyEMU's small JSON extension: comments, unquoted property names, and trailing commas are accepted. A minimal Linux configuration is:
 
@@ -111,26 +118,11 @@ Paths for boot files, disks, and network filesystems are relative to the configu
 *   `console: "virtio"` selects the VirtIO console. This is the default.
 *   `uart_output: true` mirrors early UART output while input remains attached to the selected VirtIO console.
 *   `driveN: { file: "...", device: "..." }` adds a VirtIO block device.
-*   `fsN: { file: "...", tag: "..." }` adds a VirtIO 9p filesystem backed by
-    a native directory or the browser HTTP filesystem.
-*   `fsN: { socket: "...", tag: "..." }` connects the VirtIO device directly
-    to a 9P server over a native Unix-domain socket.
 *   `fsN: { js9p: true, tag: "..." }` connects the VirtIO device to the
     synchronous `p9Server` supplied to the browser adapter.
-*   `ethN: { driver: "user" }` adds user-mode networking. Native builds also support `driver: "tap"` with an `ifname`; see `netinit.sh`.
 *   `display0: { device: "simplefb", width: 1024, height: 768 }` adds the simple framebuffer. `input_device: "virtio"` adds keyboard and tablet input.
 
-Command-line options:
-
-    usage: riscbox [options] config_file
-      -m MB             override RAM size
-      -rw               write directly to native disk images
-      -ro               reject disk writes
-      -ctrlc            let Ctrl-C stop riscbox instead of reaching the guest
-      -append TEXT       append to the kernel command line
-
-The default native disk mode is a private in-memory snapshot. The browser HTTP
-block device also keeps writes in memory.
+The browser HTTP block device keeps writes in memory.
 
 
 Technical status
@@ -155,9 +147,9 @@ Available devices are:
 *   VirtIO MMIO block, network, entropy, 9p, keyboard, and tablet devices.
 *   PLIC and legacy CLINT interrupt/timer controllers.
 *   SiFive-compatible poweroff/test device.
-*   A simple framebuffer backed by SDL natively and exposed as dirty-region
-    callbacks to browser integrations.
-*   Native raw disks and 9p directories, plus chunked HTTP disks and remote 9p.
+*   A simple framebuffer exposed as dirty-region callbacks to browser
+    integrations.
+*   Chunked HTTP disks and browser-backed 9p filesystems.
 
 Compared with QEMU `virt`, riscbox omits multiple harts, RV32, configurable CPU models, PCIe, flash, fw_cfg, ACPI, UEFI, AIA/IMSIC/APLIC, IOMMU, NUMA, and the broad device catalogue. Those omissions are intentional unless a small, standard implementation becomes necessary for the target guests.
 
@@ -167,7 +159,7 @@ The following paths are supported:
 
 | Profile           | Firmware slot                     | Kernel slot                                                                     | Storage |
 | ----------------- | --------------------------------- | ------------------------------------------------------------------------------- | ------- |
-| Linux direct boot | Raw OpenSBI `fw_jump.bin`         | Raw, uncompressed Linux `Image`; optional initramfs is passed through unchanged | Raw native disk or split HTTP disk |
+| Linux direct boot | Raw OpenSBI `fw_jump.bin`         | Raw, uncompressed Linux `Image`; optional initramfs is passed through unchanged | Split HTTP disk |
 | xv6 or bare metal | Flat M-mode image at `0x80000000` | Omit | Optional VirtIO block disk |
 | S-mode bootloader | Raw OpenSBI `fw_jump.bin`         | Flat bootloader at `0x80200000` | Bootloader-supported VirtIO media |
 

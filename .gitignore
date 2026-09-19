@@ -1,12 +1,5 @@
-*.o
-*.d
 .agents/
-build_filelist
-splitimg
-riscbox
-riscbox-debug
-build/
-js/riscbox-wasm.js
-js/riscbox-wasm.wasm
+__pycache__/
+*.pyc
 target/
 images/risclet/ui/node_modules/

@@ -180,22 +180,22 @@ Near-term priorities
 Build and validation
 --------------------
 
-There are three supported build profiles:
+The root build is Rust-focused:
 
-*   `make` or `make release` builds optimized native `riscbox` and the native image
-    tools with Clang. Use it for normal boot testing and rapid iteration.
-*   `make debug` builds `riscbox-debug` in `build/debug` with strict warnings,
-    AddressSanitizer, UndefinedBehaviorSanitizer, debug information, and frame
-    pointers. Use it for correctness work and meaningful boot-path coverage.
-    Successful debug runs must exit without sanitizer or undefined-behavior
-    diagnostics.
-*   `make wasm` builds the deployed WebAssembly artifacts through Emscripten in
-    `build/wasm`. Run `node js/riscbox-wasm.js` as a basic instantiation
-    check after rebuilding it.
+*   `make` or `make release` builds the optimized Rust workspace.
+*   `make test` runs Rust, Python tool, and JavaScript adapter tests; `make
+    check` also runs strict Clippy and Python type checks.
+*   `make wasm` builds the deployed Rust WebAssembly artifact, `make kernel`
+    builds the canonical custom kernel, and `make dist` builds both core
+    distribution artifacts.
+*   The isolated C reference is built from `c/`. Its `make`, `make debug`,
+    `make wasm`, and `make test` targets preserve the native, sanitizer,
+    Emscripten, and focused behavioral-test surfaces.
 
-For CPU or platform changes, rebuild all three profiles from a clean tree when
-the milestone is ready. Exercise the affected behavior with a guest or focused
-firmware probe rather than relying on compilation alone. Current xv6 is the
+For CPU or platform changes, rebuild the Rust checks and WASM target plus the
+relevant C reference profile from clean trees when the milestone is ready.
+Exercise the affected behavior with a guest or focused firmware probe rather
+than relying on compilation alone. Current xv6 is the
 primary UART and supervisor-mode integration guest. Stock Alpine through OpenSBI
 is the primary Linux/platform compatibility path; U-Boot is useful compatibility
 coverage when its extra boot path is relevant.

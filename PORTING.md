@@ -5,8 +5,8 @@ Goal
 ----
 
 Build an independent Rust implementation of the browser Riscbox platform. The
-C implementation remains available as the behavioral reference and as one side
-of differential tests, but no C object code is linked into Rust.
+C implementation remains isolated under `c/` as a behavioral reference, but
+no C source, object code, or build tool is required by Rust or image production.
 
 The production target is `wasm32-unknown-unknown`. The port covers the RV64
 CPU, Sv39 memory system, machine, guest-visible devices, configuration loader,
@@ -93,8 +93,8 @@ in-memory JavaScript 9p service,
 loads either tracked example without RPC, mirrors guest-created and deleted
 files, and updates optional instructions from `doc/doc.md`. Its interface
 retains the deployed CodeGrinder editor, terminal, draggable panes, and sizing
-behavior while removing the RPC and grading workflows. Clean
-C release, sanitizer, and reference WASM builds remain compatibility checks;
+behavior while removing the RPC and grading workflows. Clean C release,
+sanitizer, and reference WASM builds from `c/` remain compatibility checks;
 the Rust workspace, strict Clippy checks, WASM build, Node adapter tests, and
 the ignored full-guest acceptance tests are the port's validation surfaces.
 Run the full guests explicitly with:
@@ -170,6 +170,10 @@ Decision log
     source; the raw browser WASM adapter fills bounded buffers synchronously
     with Web Crypto rather than adding asynchronous device state or a
     guest-visible PRNG.
+*   2026-09-19: Make Rust and its browser adapters the root implementation.
+    Isolate the complete C reference under `c/`, replace its image splitter in
+    production with a standalone Python tool, and make the root-owned custom
+    kernel a distribution artifact consumed by image definitions.
 
 Next milestone
 --------------

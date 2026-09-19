@@ -4,7 +4,7 @@ set -eu
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 IMAGES_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 ROOT_DIR=$(CDPATH= cd -- "$IMAGES_DIR/.." && pwd)
-KERNEL_IMAGE=${KERNEL_IMAGE:-"$IMAGES_DIR/build/kernel/arch/riscv/boot/Image"}
+KERNEL_IMAGE=${KERNEL_IMAGE:-"$ROOT_DIR/kernel/linux"}
 OPENSBI=${OPENSBI:-/usr/lib/riscv64-linux-gnu/opensbi/generic/fw_jump.bin}
 
 if [ "$#" -ne 2 ]; then
@@ -25,8 +25,7 @@ for required_file in "$image_dir/riscbox.cfg" "$rootfs_image" \
     fi
 done
 
-make -C "$ROOT_DIR" splitimg
-make -C "$ROOT_DIR" rust-wasm
+make -C "$ROOT_DIR" wasm
 
 if [ -d "$image_dir/ui" ]; then
     if [ ! -d "$image_dir/ui/node_modules" ] || \
@@ -51,9 +50,6 @@ install -m 644 "$ROOT_DIR/js/riscbox.js" "$stage_dir/riscbox.js"
 install -m 644 "$ROOT_DIR/target/wasm32-unknown-unknown/release/riscbox_wasm.wasm" \
     "$stage_dir/riscbox.wasm"
 install -m 644 "$image_dir/riscbox.cfg" "$stage_dir/riscbox.cfg"
-if [ -f "$image_dir/riscbox-native.cfg" ]; then
-    install -m 644 "$image_dir/riscbox-native.cfg" "$stage_dir/riscbox-native.cfg"
-fi
 install -m 644 "$IMAGES_DIR/DEPLOYMENT.md" "$stage_dir/README.md"
 install -m 644 "$IMAGES_DIR/web/index.html" "$stage_dir/index.html"
 if [ -d "$image_dir/web" ]; then
@@ -72,7 +68,7 @@ if grep -R -q 'p9\.js' "$stage_dir" --include='*.html' --include='*.js' \
     install -m 644 "$ROOT_DIR/js/p9.js" "$stage_dir/p9.js"
     install -m 644 "$ROOT_DIR/js/p9.d.ts" "$stage_dir/p9.d.ts"
 fi
-"$ROOT_DIR/splitimg" "$rootfs_image" "$stage_dir/drive"
+"$ROOT_DIR/tools/splitimg.py" "$rootfs_image" "$stage_dir/drive"
 
 rm -rf "$output_dir"
 mv "$stage_dir" "$output_dir"

@@ -2,7 +2,7 @@ Riscbox image deployment
 ========================
 
 This directory is a complete browser-deployable Riscbox VM. It also contains
-the unsplit `rootfs.ext4` for native use and future image maintenance.
+the unsplit `rootfs.ext4` for future image maintenance.
 
 Files
 -----
@@ -11,10 +11,8 @@ Files
 *   `riscbox.js` and `riscbox.wasm` are the emulator runtime.
 *   `riscbox.cfg` describes the virtual machine. Boot paths are relative to
     this file.
-*   `riscbox-native.cfg` is the native equivalent when included. It selects
-    the unsplit ext4 disk and native host backends instead of browser resources.
 *   `fw_jump.bin` is OpenSBI firmware and `linux` is the guest kernel.
-*   `rootfs.ext4` is the complete writable disk image for native tools.
+*   `rootfs.ext4` is the complete writable source disk image.
 *   `drive/blk.txt` describes the HTTP disk; `drive/blkNNNNNNNNN.bin` files are
     its 256 KiB blocks.
 *   `p9.js` and its `p9.d.ts` declarations are included when the integration
@@ -114,11 +112,6 @@ Mount it in Linux with the same tag used by the configuration:
 
     mount -t 9p -o trans=virtio,version=9p2000.L shared /mnt/shared
 
-Native integrations may instead use `fsN: { file: "directory", tag: "shared" }`
-for a directory backend, or `fsN: { socket: "server.sock", tag: "shared" }`
-for a Unix-domain 9p server. The Rust browser runtime accepts `js9p` backends;
-native file and socket backends remain part of the C reference implementation.
-
 Browser integration
 -------------------
 
@@ -136,16 +129,8 @@ small adapter:
 *   Forward keyboard, pointer, wheel, network packet, and carrier events through
     the corresponding runtime methods.
 
-Native testing and updates
---------------------------
-
-When `riscbox-native.cfg` is included, use it with the unsplit disk for
-persistent native writes:
-
-    /path/to/riscbox -rw riscbox-native.cfg
-
-Do not pass the browser `riscbox.cfg` to the native emulator: its
-`drive/blk.txt` resource is an HTTP block descriptor, not a raw local disk.
+Updates
+-------
 
 The browser block backend starts from the published blocks each time; writes
 are session-local. To make persistent changes, update the image inputs, rebuild,

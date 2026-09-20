@@ -95,80 +95,143 @@ misaligned accesses, TLB invalidation, PMP, counters, interrupts, atomics, and
 self-modifying or externally modified RAM. Reject a stage that merely moves
 samples between symbols without improving end-to-end throughput.
 
-### Stage 2: release build interventions
+### Stage 2: page-chunk interpreter loop
 
-Compare release settings independently: thin and fat LTO, one codegen unit,
-WASM-oriented optimization levels, panic strategy, and a post-link optimizer if
-one is already available in the build environment. Track speed and deployed
-module size; do not assume the smallest module is fastest.
+Port the execution structure from `c/riscv_cpu_template.h` while retaining the
+Rust decoder and architectural state. TinyEMU keeps `code_ptr`, `code_end`, a
+PC addend, remaining cycles, and counter addends in locals. It translates code
+only when the current span is exhausted and materializes state at block or CSR
+boundaries. Reproduce those properties directly.
 
-Rust release builds already disable integer overflow checks by default unless
-configured otherwise. Cargo has no stable profile switch that globally removes
-slice bounds checks. Confirm the actual workspace flags and generated WASM
-before attributing cost to either. Prefer source shapes that let LLVM prove a
-single safe range check. Treat unchecked indexing as stage 3 unsafe work, not a
-build-only setting. Do not disable debug assertions or other checks unless the
-generated release artifact contains them and the benchmark shows material cost.
+Split `Cpu::run` into an outer block loop and an inner page-chunk loop. Add a
+private execute span with data equivalent to:
 
-### Stage 3: targeted unsafe RAM fast paths
+```text
+ExecuteChunk {
+    virtual_page: u64,
+    arena_page: ArenaOffset,
+    next_offset: u16,
+    end_offset: u16,
+}
+```
 
-Permit unsafe code only in a small internal module owned by memory/MMU code;
-keep the main CPU logic and platform safe. Introduce a validated RAM view such
-as `RamWindow { base: ArenaOffset, len: u32 }`, created only by checked
-`PhysicalMemory::ram_range`, and narrow helpers with signatures equivalent to
-`unsafe fn read_unchecked(arena: &[u8], offset: ArenaOffset, width:
-AccessWidth) -> u64` and the corresponding write. Document invariants at each
-unsafe definition: arena allocation is stable during execution, the entire
-access lies in the validated window, offsets fit the WASM memory arena,
-alignment or unaligned operation semantics are explicit, and mutable access is
-not aliased.
+The outer loop owns the remaining `u32` budget, counter deltas, and the
+architectural PC at each refill boundary. A refill helper accepts the current
+PC, checks its alignment, probes the execute TLB once, and uses the existing
+checked translation and bus path on a miss. A successful entry covers the
+complete 4 KiB virtual and arena page, so the chunk ends at that page boundary.
+A non-RAM instruction mapping remains a one-instruction checked slow path.
 
-Apply these helpers only to measured TLB-hit instruction fetches and aligned
-RAM loads/stores. Keep misses, MMIO, misalignment, dirty tracking, page-table
-updates, and TLB fill safe. Test offsets at zero, page and arena ends, every
-width and alignment, stale entries after invalidation, and malformed guest
-addresses. Measure targeted unchecked indexing separately from pointer caching
-so its value is known.
+The inner loop derives PC from the virtual page and offset, fetches one
+little-endian `u32`, passes that local PC into execution, advances by two or
+four bytes, and decrements the local budget. Sequential instructions stay in
+the loop without writing `self.pc`. A taken branch,
+jump, trap, privilege transition, execute-TLB flush, WFI, or other nonsequential
+PC installation ends the chunk and returns to the refill boundary, matching
+TinyEMU's `JUMP_INSN`. Do not add a second TLB lookup for same-page branch
+targets in this milestone.
 
-### Stage 4: pointer-based interpreter loop
+When fewer than four bytes remain in the page, read the low halfword from the
+chunk. Execute it directly if compressed. Otherwise read the high halfword
+through the checked execute-load path at `pc + 2`, preserving translation, PMP,
+and precise faults for a straddling instruction. The following sequential
+instruction forces a refill. This corresponds to TinyEMU's
+`code_ptr >= code_end` slow path.
 
-If stage 3 leaves a material gap, prototype a broader loop that caches raw
-pointers or equivalent WASM linear-memory offsets for CPU registers, the RAM
-arena, and read/write/execute TLB entries across a bounded run block. Keep a
-single checked slow-path boundary for TLB misses, traps, interrupts, MMIO, and
-host-visible exits. Define a `RunContext` containing the arena base and length,
-TLB tables, counter deltas, and an explicit exit reason; construct it only while
-the machine and arena cannot be reentered or resized.
+Make PC flow explicit rather than mutating and rereading `self.pc`. Change the
+private signatures to the equivalent of `execute(&mut self, bus: &mut B, pc:
+u64, instruction: u32, length: u64) -> Result<InstructionOutcome, Trap>` and
+`execute_compressed(&mut self, bus: &mut B, pc: u64, instruction: u16) ->
+Result<InstructionOutcome, Trap>`. The outcome contains `next_pc`, `retired`,
+and an `InstructionFlow` with sequential and exit variants. Thread `pc` through
+compressed jump and system helpers that currently read or write `self.pc`.
+Trap-return helpers return their target rather than installing it directly.
+System instructions that flush translations or change privilege, WFI, taken
+control flow, and trap returns report an exit. Arithmetic, memory operations,
+untaken branches, and non-flushing CSR operations remain sequential. Only the
+outer loop and trap entry commit `self.pc`.
 
-This stage may fuse fetch, decode, execute, PC advance, and counter accumulation
-in a style closer to TinyEMU. Its unsafe module must state pointer provenance,
-aliasing, arena-stability, and reentry invariants. No pointer or JavaScript view
-may survive a run call, allocation, device callback, or await. Compare the
-result both with stage 3 and TinyEMU; retain it only if the additional gain is
-large enough to justify the larger audit surface and duplicated slow exits.
+### Stage 3: block-local counters and event sampling
 
-### Stage 5: TinyEMU-derived CPU core boundary
+Keep PC and a private `RunCounters { elapsed: u32, cycle: u32, retired: u32 }`
+in loop locals and commit their wrapping deltas together on every chunk exit
+and final return. The remaining budget derives from `elapsed`, so there is one
+per-instruction decrement/increment rather than three architectural stores.
+Follow TinyEMU's CSR rule: materialize pending deltas before reading cycle or
+instret CSRs; after a write, rebase the corresponding local delta. An
+instruction that writes
+`minstret` must not also retire into the newly written value. Pass the pending
+deltas into CSR execution explicitly or materialize them before calling the
+existing CSR helpers; do not let CSR helpers observe stale architectural
+counters. Exceptions and interrupts consume one cycle but do not retire;
+completed instructions retire once.
 
-Use this as an architectural alternative, not the automatic conclusion. Adapt
-only TinyEMU's RV64 CPU execution core into a separately owned module while the
-Rust platform retains memory allocation, devices, configuration, browser
-runtime, and host I/O. Define a narrow boundary around operations equivalent to
-`run(budget) -> RunOutcome`, checked RAM window acquisition, physical/MMIO
-reads and writes, interrupt sampling, timer/counter state, and TLB invalidation.
-Use typed request and exit enums rather than exposing platform objects or loose
-callbacks. The core must implement Riscbox's current ISA, privilege, PMP, Sv39,
-counter, trap, and invalidation contract; historical TinyEMU behavior is not a
-compatibility authority.
+At each outer boundary, commit the previous chunk, then stop for an exhausted
+budget or WFI. Poll `CpuBus::take_interrupt_state_changed` only there. If it
+reports a change, return to `Machine::run`, whose existing pre/post
+`sync_interrupts` calls update CPU interrupt state. This bounds device-originated
+latency by a page chunk and the browser's 200,000-cycle block budget.
 
-Prototype the boundary first with the existing Rust CPU so its overhead and
-ownership model can be measured independently. Then compare two core options:
-a close Rust adaptation using isolated unsafe pointers, and a C-derived core
-compiled into WASM behind a minimal C ABI. A C core adds a second toolchain,
-cross-language state representation, and a much larger validation burden; take
-it only if stage 4 still leaves a consequential gap and the prototype produces
-a clear additional gain. The final decision should report performance, WASM
-size, unsafe or C line count, duplicated architectural logic, differential-test
-results, and maintenance cost for each accepted stage.
+Check interrupts at the same boundary, but gate all privilege and priority work
+on `self.mip & self.mie != 0`. Only then call the existing selection logic.
+Taking an interrupt consumes one cycle and begins a new chunk. CSR operations
+that can make a pending interrupt newly takeable must exit the chunk: writes to
+`mip`, `mie`, `mideleg`, interrupt-enable fields in `mstatus` or `sstatus`, and
+the state changes performed by `mret` and `sret` need explicit classification.
+
+Do not impose another instruction cap. With compressed instructions, one 4 KiB
+page contains at most 2,048 instructions, already well below the host budget.
+
+### Stage 4: validated unchecked arena access
+
+Once the block loop is correct and measured, remove bounds-result plumbing from
+TLB hits. Make each entry carry a validated page window rather than an
+unqualified offset. Only `fill_tlb`, after a successful
+`CpuBus::ram_range(physical_page, PAGE_SIZE, write)`, may construct it. Its
+invariant is that the complete page was inside the fixed arena, the arena cannot
+resize during `Cpu::run`, and every fast-path offset stays in that page.
+
+Put unsafe operations in one internal memory module. Replace the crate-wide
+`unsafe_code = "forbid"` setting with a policy that permits unsafe only there,
+and update `AGENTS.md` in the same change. Expose narrow safe wrappers backed by
+`get_unchecked` and `get_unchecked_mut`, with fixed-width little-endian helpers.
+Document the validated-page, width, arena-stability, and exclusive-borrow
+invariants at every unsafe block.
+
+Use unchecked `u32` access for common instruction fetch and `u16` for the
+page-end halfword. Use the same helpers for aligned read/write TLB hits after
+proving `page_offset + width <= PAGE_SIZE`. Misaligned and cross-page accesses,
+misses, MMIO, page walks, A/D updates, PMP checks, dirty marking, and mapping
+changes stay checked. Remove `Option` only from proved hit branches.
+
+Audit invalidation before enabling this. `flush_tlb` already covers address
+space, PMP, privilege, and relevant status changes, while
+`invalidate_write_range` covers writable entries for host memory lifecycle
+changes. If a host remap can stale read or execute entries, extend invalidation
+to all overlapping TLB kinds; an unchecked entry may not outlive its page proof.
+
+### Tests, measurement, and landing order
+
+Land separately measurable changes: execute chunks and explicit flow results;
+local counters and boundary event checks; unchecked instruction fetch; then
+unchecked aligned data hits. Do not combine release tuning, pointer-cached CPU
+state, decoder changes, or a C core boundary with this milestone.
+
+Test both page-end instruction positions, cross-page 32-bit fetch faults,
+same-page and cross-page branches, traps and interrupts at refills, enabling a
+pending interrupt by CSR, WFI, mid-chunk counter reads/writes, and budgets zero,
+one, and mid-page. Extend `tests/cpu_fast_path.rs` differential coverage for all
+widths and alignments, arena/page endpoints, self-modifying code, PMP rejection,
+Sv39 remapping, and host invalidation. A counted test bus must prove event polls
+occur once per chunk rather than once per instruction.
+
+For each step, run focused CPU, MMU, machine, and browser tests, then
+`make check` and a clean `make wasm`. Inspect generated WASM to verify that the
+sequential inner loop has no execute-TLB probe, slice-bounds branch, interrupt
+priority scan, event poll, or architectural counter store. Measure repeated xv6
+build runs, module size, and V8 profiles. Retain a step only if it improves
+end-to-end throughput without regressing xv6 or prepared Alpine boot, login,
+and clean shutdown.
 
 Candidate work
 --------------

@@ -194,10 +194,11 @@ Decision log
 Proposed 9p transport and filesystem design
 ------------------------------------------
 
-Status: implementation in progress. Milestone 1, the concurrent Rust transport
-core, is complete. The browser endpoint action/ABI boundary is the next
-milestone. The completed milestones and decision log above describe the
-pre-project implementation where this section has not yet superseded it.
+Status: implementation in progress. Milestones 1 and 2, the concurrent Rust
+transport core and asynchronous browser endpoint boundary, are complete. The
+TypeScript build and filesystem/session ownership split are the next milestone.
+The completed milestones and decision log above describe the pre-project
+implementation where this section has not yet superseded it.
 
 ### Scope and ownership
 
@@ -584,8 +585,8 @@ emitted modules.
     validate response envelopes, and retire the generation on device reset.
     Focused tests cover malformed, mismatched, oversized, duplicate, suppressed,
     out-of-order, reset, and stale-generation completions.
-2.  Carry endpoint and generation identity through machine host actions, the
-    raw WASM ABI, and the JavaScript adapter. Test queue saturation, two
+2.  **Complete:** carry endpoint and generation identity through machine host
+    actions, the raw WASM ABI, and the JavaScript adapter. Test queue saturation, two
     endpoints, VM restart, endpoint failure, adapter completion ordering, and
     late promise settlements with a controllable fake server.
 3.  Establish the TypeScript build and split shared filesystem state from 9p
@@ -635,6 +636,16 @@ Implementation decisions
     completions are ignored without accessing guest memory. Current-generation
     unknown or duplicate completions remain transport failures. Browser
     endpoint identity and asynchronous host actions form milestone 2.
+*   2026-09-19: Deliver browser 9p work as explicit open, request, and close
+    host actions. The raw ABI carries endpoint, generation, request ID, reply
+    capacity, and tagged reply/suppression/failure outcomes. The adapter owns
+    one independently connected session per endpoint, copies requests before
+    promise work, accepts settlement-order completions without WASM reentry,
+    closes failed sessions, and ignores closes for retired generations. The
+    legacy `js9p` configuration selects the temporary `default` registry key;
+    the typed configuration change remains in milestone 3.
+    At this checkpoint the dependency-free adapter is 13,992 bytes and the
+    optimized WASM module is 411,449 bytes.
 
 Later milestones (out of scope for now)
 ---------------------------------------

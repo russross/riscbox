@@ -13,7 +13,8 @@ use crate::platform::{Clint, FinishStatus, Finisher, GoldfishRtc, Plic, Uart1655
 use crate::virtio::{MMIO_SIZE, VirtioTransport};
 use crate::virtio_devices::{
     BlockBackend, BlockDevice, ConsoleDevice, DeviceError, EntropyDevice, InputDevice, InputKind,
-    NetworkBackend, NetworkDevice, NinePBackend, NinePDevice, VirtioMmioDevice,
+    NetworkBackend, NetworkDevice, NinePBackend, NinePDevice, NinePGeneration, NinePOutcome,
+    NinePRequestId, NinePTransportAction, VirtioMmioDevice,
 };
 
 pub const RAM_BASE: u64 = 0x8000_0000;
@@ -821,6 +822,26 @@ impl Machine {
         Ok(device.device.backend_mut().next_request())
     }
 
+    /// Returns the next generic browser 9p transport action.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `slot` does not identify a 9p device.
+    pub fn next_ninep_transport_action(
+        &mut self,
+        slot: usize,
+    ) -> Result<Option<NinePTransportAction>, MachineError> {
+        let VirtioSlot::NineP(device) = self
+            .bus
+            .virtio
+            .get_mut(slot)
+            .ok_or(MachineError::WrongVirtioDevice)?
+        else {
+            return Err(MachineError::WrongVirtioDevice);
+        };
+        Ok(device.device.backend_mut().next_transport_action())
+    }
+
     /// Completes one browser request and resumes its retained 9p descriptor.
     ///
     /// # Errors
@@ -846,6 +867,37 @@ impl Machine {
         device
             .device
             .resume_pending(&mut device.transport, memory)?;
+        self.bus.update_device_irqs();
+        Ok(())
+    }
+
+    /// Completes one generic browser 9p transport request.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid slot, generation, request, response, or
+    /// guest descriptor.
+    pub fn complete_ninep_transport_request(
+        &mut self,
+        slot: usize,
+        generation: NinePGeneration,
+        request_id: NinePRequestId,
+        outcome: NinePOutcome,
+    ) -> Result<(), MachineError> {
+        let PlatformBus { memory, virtio, .. } = &mut self.bus;
+        let VirtioSlot::NineP(device) = virtio
+            .get_mut(slot)
+            .ok_or(MachineError::WrongVirtioDevice)?
+        else {
+            return Err(MachineError::WrongVirtioDevice);
+        };
+        device.device.complete(
+            &mut device.transport,
+            memory,
+            generation,
+            request_id,
+            outcome,
+        )?;
         self.bus.update_device_irqs();
         Ok(())
     }

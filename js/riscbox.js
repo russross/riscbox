@@ -10,6 +10,7 @@
                 throw new TypeError("Riscbox WASM must export memory");
             this.exports = exports;
             this.options = options;
+            this.p9Sessions = new Map();
         }
 
         static hostImports(options = {}) {
@@ -53,24 +54,6 @@
                 },
                 network_write(ptr, len) {
                     options.networkWrite?.(bytes(ptr, len));
-                },
-                p9_request(requestPtr, requestLength, replyPtr, replyCapacity) {
-                    const server = options.p9Server;
-                    if (!server || typeof server.request !== "function")
-                        return -5;
-                    try {
-                        const reply = server.request(
-                            bytes(requestPtr, requestLength), replyCapacity,
-                        );
-                        if (!(reply instanceof Uint8Array) || reply.length > replyCapacity)
-                            return -71;
-                        new Uint8Array(runtime.exports.memory.buffer, replyPtr, reply.length)
-                            .set(reply);
-                        return reply.length;
-                    } catch (error) {
-                        options.onError?.(error);
-                        return -5;
-                    }
                 },
             };
             return {
@@ -195,10 +178,80 @@
                         memory.subarray(ptr, end),
                         { x, y, width, height, stride },
                     );
+                } else if (kind === 7) {
+                    const endpoint = this.exports.riscbox_action_endpoint();
+                    const generation = this.exports.riscbox_action_generation();
+                    const serverKey = decoder.decode(this.bytes(ptr, len));
+                    const server = this.options.p9Servers?.get(serverKey);
+                    if (!server || typeof server.connect !== "function")
+                        throw new Error(`9p server is not registered: ${serverKey}`);
+                    const session = server.connect();
+                    if (!session || typeof session.request !== "function" ||
+                        typeof session.close !== "function")
+                        throw new TypeError(`9p server returned an invalid session: ${serverKey}`);
+                    const previous = this.p9Sessions.get(endpoint);
+                    previous?.session.close();
+                    this.p9Sessions.set(endpoint, { generation, session });
+                } else if (kind === 8) {
+                    const endpoint = this.exports.riscbox_action_endpoint();
+                    const generation = this.exports.riscbox_action_generation();
+                    const requestId = this.exports.riscbox_action_request_id();
+                    const replyCapacity = this.exports.riscbox_action_reply_capacity();
+                    const current = this.p9Sessions.get(endpoint);
+                    if (!current || current.generation !== generation)
+                        throw new Error(`9p request targets an inactive endpoint ${endpoint}`);
+                    const request = this.bytes(ptr, len);
+                    Promise.resolve().then(() =>
+                        current.session.request(request, replyCapacity)
+                    ).then((outcome) => {
+                        if (outcome?.kind === "suppressed")
+                            return { outcome: 1, bytes: new Uint8Array() };
+                        if (outcome?.kind === "reply" &&
+                            outcome.bytes instanceof Uint8Array &&
+                            outcome.bytes.length <= replyCapacity)
+                            return { outcome: 0, bytes: outcome.bytes };
+                        else
+                            throw new TypeError("9p session returned an invalid outcome");
+                    }).catch((error) => {
+                        const active = this.p9Sessions.get(endpoint);
+                        if (active?.generation === generation) {
+                            this.p9Sessions.delete(endpoint);
+                            active.session.close();
+                        }
+                        this.completeP9(endpoint, generation, requestId, 2);
+                        this.options.onError?.(error);
+                        return null;
+                    }).then((completion) => {
+                        if (completion)
+                            this.completeP9(
+                                endpoint, generation, requestId,
+                                completion.outcome, completion.bytes,
+                            );
+                    }).catch((error) => {
+                        this.options.onError?.(error);
+                    });
+                } else if (kind === 9) {
+                    const endpoint = this.exports.riscbox_action_endpoint();
+                    const generation = this.exports.riscbox_action_generation();
+                    const current = this.p9Sessions.get(endpoint);
+                    if (current?.generation === generation) {
+                        this.p9Sessions.delete(endpoint);
+                        current.session.close();
+                    }
                 } else {
                     throw new Error(`unknown Riscbox host action ${kind}`);
                 }
             }
+        }
+
+        completeP9(endpoint, generation, requestId, outcome, bytes = new Uint8Array()) {
+            const result = this.withBytes(bytes, (ptr, len) =>
+                this.exports.riscbox_p9_complete(
+                    endpoint, generation, requestId, outcome, ptr, len,
+                ));
+            if (result !== 0)
+                throw new Error(`Riscbox rejected 9p completion ${requestId}`);
+            this.drainActions();
         }
 
         consoleInput(data) {

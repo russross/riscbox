@@ -95,18 +95,35 @@ backend with `driver: "tap"` and `ifname`.
 ---------------
 
 A browser-backed filesystem uses `js9p: true`. When instantiating the runtime,
-pass `p9Server` as a synchronous object with a
-`request(request, replyCapacity)` method. The supplied `p9.js` provides
-`Memory9PServer`:
+pass a `p9Servers` map. Each registered server creates an independent session
+with asynchronous `request(request, replyCapacity)` and synchronous `close()`
+methods. Until the TypeScript server split is complete, wrap the supplied
+`Memory9PServer` as follows:
 
 ```js
 import { Memory9PServer } from "./p9.js";
 
-const p9Server = new Memory9PServer({
+const filesystem = new Memory9PServer({
     "hello.txt": "shared with the guest\n",
 });
 
-const runtime = await Riscbox.instantiate(wasmBytes, { p9Server });
+const server = {
+    connect() {
+        return {
+            async request(bytes, replyCapacity) {
+                return {
+                    kind: "reply",
+                    bytes: filesystem.request(bytes, replyCapacity),
+                };
+            },
+            close() {},
+        };
+    },
+};
+
+const runtime = await Riscbox.instantiate(wasmBytes, {
+    p9Servers: new Map([["default", server]]),
+});
 ```
 
 Mount it in Linux with the same tag used by the configuration:

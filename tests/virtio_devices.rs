@@ -462,6 +462,29 @@ fn ninep_pending_completion_rejects_malformed_mismatched_and_oversized_replies()
             Err(DeviceError::InvalidRequest)
         );
     }
+
+    let (mut memory, mut p9, _) = pending_p9();
+    let generation = p9.device.generation();
+    assert_eq!(
+        p9.device.complete(
+            &mut p9.transport,
+            &mut memory,
+            generation,
+            NinePRequestId(1),
+            NinePOutcome::EndpointFailure,
+        ),
+        Err(DeviceError::Backend)
+    );
+    assert_eq!(
+        p9.device.complete(
+            &mut p9.transport,
+            &mut memory,
+            generation,
+            NinePRequestId(1),
+            NinePOutcome::Suppressed,
+        ),
+        Err(DeviceError::Backend)
+    );
 }
 
 #[test]

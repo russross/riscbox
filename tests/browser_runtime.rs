@@ -1,11 +1,11 @@
-use std::cell::RefCell;
-use std::rc::Rc;
-
 use riscbox::browser::BrowserController;
 use riscbox::browser_runtime::{
-    BrowserRuntime, CallbackNineP, HostAction, RuntimeError, RuntimeStart,
+    BrowserNineP, BrowserRuntime, HostAction, RuntimeError, RuntimeStart,
 };
-use riscbox::virtio_devices::{DeviceError, NinePBackend, NinePRequestId, NinePRequestStatus};
+use riscbox::virtio_devices::{
+    NinePBackend, NinePEndpointId, NinePGeneration, NinePRequestId, NinePRequestStatus,
+    NinePTransportAction,
+};
 
 fn start() -> RuntimeStart {
     RuntimeStart {
@@ -242,23 +242,50 @@ fn drive_manifest_precedes_machine_start_and_prefetch_requests_follow_it() {
 
 #[test]
 fn javascript_and_http_9p_backends_are_connected() {
-    let callback = Rc::new(RefCell::new(|request: &[u8]| {
-        let mut reply = request.to_vec();
-        reply[4] = reply[4].wrapping_add(1);
-        Ok::<_, DeviceError>(reply)
-    }));
-    let mut backend = CallbackNineP::new(callback.clone());
+    let mut backend = BrowserNineP::new(NinePEndpointId(7), "workspace".into());
+    assert_eq!(
+        backend.next_transport_action(),
+        Some(NinePTransportAction::Open {
+            endpoint: NinePEndpointId(7),
+            generation: NinePGeneration(1),
+            server_key: "workspace".into(),
+        })
+    );
+    backend.reset(NinePGeneration(2));
+    assert_eq!(
+        backend.next_transport_action(),
+        Some(NinePTransportAction::Close {
+            endpoint: NinePEndpointId(7),
+            generation: NinePGeneration(1),
+        })
+    );
+    assert_eq!(
+        backend.next_transport_action(),
+        Some(NinePTransportAction::Open {
+            endpoint: NinePEndpointId(7),
+            generation: NinePGeneration(2),
+            server_key: "workspace".into(),
+        })
+    );
     let message = [7, 0, 0, 0, 100, 1, 0];
-    let NinePRequestStatus::Complete(reply) = backend
-        .transact(NinePRequestId(1), &message, 4096)
-        .expect("callback reply")
-    else {
-        panic!("callback reply remained pending");
-    };
-    assert_eq!(reply[4], 101);
+    assert_eq!(
+        backend
+            .transact(NinePRequestId(1), &message, 4096)
+            .expect("queued request"),
+        NinePRequestStatus::Pending
+    );
+    assert_eq!(
+        backend.next_transport_action(),
+        Some(NinePTransportAction::Request {
+            endpoint: NinePEndpointId(7),
+            generation: NinePGeneration(2),
+            request_id: NinePRequestId(1),
+            bytes: message.to_vec(),
+            reply_capacity: 4096,
+        })
+    );
 
     let mut runtime = BrowserRuntime::default();
-    runtime.set_ninep_callback(callback);
     runtime.start(start()).expect("start");
     let (config_id, _) = request(&mut runtime);
     runtime
@@ -273,6 +300,16 @@ fn javascript_and_http_9p_backends_are_connected() {
         .complete_http(firmware_id, 200, vec![0; 64])
         .expect("firmware");
     assert!(runtime.is_running());
+    assert_eq!(
+        runtime.next_action(),
+        Some(HostAction::NineP(NinePTransportAction::Open {
+            endpoint: NinePEndpointId(1),
+            generation: NinePGeneration(1),
+            server_key: "default".into(),
+        }))
+    );
+    assert_eq!(runtime.next_action(), Some(HostAction::Started));
+    assert_eq!(runtime.next_action(), Some(HostAction::Schedule(0)));
 
     let mut http = BrowserRuntime::default();
     let mut http_start = start();

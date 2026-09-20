@@ -18,6 +18,9 @@ function fakeModule() {
             calls.push(["free", ptr, length]);
         },
         riscbox_next_action() { return 0; },
+        riscbox_action_value() { return 0; },
+        riscbox_action_data_address() { return 0; },
+        riscbox_action_data_length() { return 0; },
     };
     for (const name of [
         "start", "console_input", "console_resize", "key_event", "pointer_event",
@@ -116,38 +119,158 @@ test("random host import fills WASM memory from Web Crypto", () => {
     assert.equal(host.imports.random_fill(65535, 2), -1);
 });
 
-test("9p host import invokes the configured server and copies its reply", () => {
-    let request;
-    let capacity;
-    const host = Riscbox.hostImports({
-        p9Server: {
-            request(bytes, replyCapacity) {
-                request = bytes;
-                capacity = replyCapacity;
-                return Uint8Array.of(7, 0, 0, 0, 101, 3, 0);
-            },
-        },
-    });
+test("9p actions create independent sessions and complete out of order", async () => {
     const fake = fakeModule();
-    const runtime = host.attach(fake.exports);
-    new Uint8Array(fake.exports.memory.buffer, 32, 7)
-        .set(Uint8Array.of(7, 0, 0, 0, 100, 3, 0));
-    assert.equal(host.imports.p9_request(32, 7, 64, 128), 7);
-    assert.deepEqual(request, Uint8Array.of(7, 0, 0, 0, 100, 3, 0));
-    assert.equal(capacity, 128);
-    assert.deepEqual(runtime.bytes(64, 7), Uint8Array.of(7, 0, 0, 0, 101, 3, 0));
+    const actions = [
+        { kind: 7, endpoint: 1, generation: 1, bytes: Buffer.from("shared") },
+        { kind: 7, endpoint: 2, generation: 1, bytes: Buffer.from("shared") },
+        { kind: 8, endpoint: 1, generation: 1, requestId: 11,
+          capacity: 8, bytes: Uint8Array.of(7, 0, 0, 0, 100, 1, 0) },
+        { kind: 8, endpoint: 2, generation: 1, requestId: 12,
+          capacity: 8, bytes: Uint8Array.of(7, 0, 0, 0, 100, 2, 0) },
+    ];
+    let current;
+    fake.exports.riscbox_next_action = () => {
+        current = actions.shift();
+        if (!current) return 0;
+        new Uint8Array(fake.exports.memory.buffer, 64, current.bytes.length).set(current.bytes);
+        return current.kind;
+    };
+    fake.exports.riscbox_action_data_address = () => 64;
+    fake.exports.riscbox_action_data_length = () => current.bytes.length;
+    fake.exports.riscbox_action_endpoint = () => current.endpoint;
+    fake.exports.riscbox_action_generation = () => current.generation;
+    fake.exports.riscbox_action_request_id = () => current.requestId ?? 0;
+    fake.exports.riscbox_action_reply_capacity = () => current.capacity ?? 0;
+    fake.exports.riscbox_p9_complete = (...args) => {
+        fake.calls.push(["p9_complete", ...args]);
+        return 0;
+    };
+    const pending = [];
+    let connections = 0;
+    const server = {
+        connect() {
+            connections++;
+            return {
+                request(bytes, capacity) {
+                    return new Promise((resolve) => pending.push({ bytes, capacity, resolve }));
+                },
+                close() {},
+            };
+        },
+    };
+    const runtime = new Riscbox(fake.exports, {
+        p9Servers: new Map([["shared", server]]),
+    });
+    runtime.drainActions();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(connections, 2);
+    assert.deepEqual(pending.map((entry) => entry.bytes[5]), [1, 2]);
+    assert.deepEqual(pending.map((entry) => entry.capacity), [8, 8]);
+    pending[1].resolve({ kind: "suppressed" });
+    pending[0].resolve({
+        kind: "reply",
+        bytes: Uint8Array.of(7, 0, 0, 0, 101, 1, 0),
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    const completions = fake.calls.filter((call) => call[0] === "p9_complete");
+    assert.deepEqual(completions.map((call) => [call[1], call[3], call[4]]), [
+        [2, 12, 1],
+        [1, 11, 0],
+    ]);
 });
 
-test("9p host import rejects absent and oversized server replies", () => {
-    const missing = Riscbox.hostImports();
-    missing.attach(fakeModule().exports);
-    assert.equal(missing.imports.p9_request(0, 0, 0, 8), -5);
+test("9p close retires only the matching endpoint generation", () => {
+    const fake = fakeModule();
+    const closed = [];
+    const actions = [
+        { kind: 7, endpoint: 1, generation: 1, bytes: Buffer.from("shared") },
+        { kind: 9, endpoint: 1, generation: 1, bytes: new Uint8Array() },
+        { kind: 7, endpoint: 1, generation: 2, bytes: Buffer.from("shared") },
+        { kind: 9, endpoint: 1, generation: 1, bytes: new Uint8Array() },
+    ];
+    let current;
+    fake.exports.riscbox_next_action = () => {
+        current = actions.shift();
+        if (!current) return 0;
+        new Uint8Array(fake.exports.memory.buffer, 64, current.bytes.length).set(current.bytes);
+        return current.kind;
+    };
+    fake.exports.riscbox_action_data_address = () => 64;
+    fake.exports.riscbox_action_data_length = () => current.bytes.length;
+    fake.exports.riscbox_action_endpoint = () => current.endpoint;
+    fake.exports.riscbox_action_generation = () => current.generation;
+    const server = {
+        connect() {
+            const id = closed.length;
+            return { request() {}, close() { closed.push(id); } };
+        },
+    };
+    new Riscbox(fake.exports, {
+        p9Servers: new Map([["shared", server]]),
+    }).drainActions();
+    assert.deepEqual(closed, [0]);
+});
 
-    const oversized = Riscbox.hostImports({
-        p9Server: { request: () => new Uint8Array(9) },
+test("9p endpoint failures close the session and stop the request", async () => {
+    const fake = fakeModule();
+    const actions = [
+        { kind: 7, endpoint: 3, generation: 1, bytes: Buffer.from("broken") },
+        { kind: 8, endpoint: 3, generation: 1, requestId: 9,
+          capacity: 8, bytes: Uint8Array.of(7, 0, 0, 0, 100, 1, 0) },
+    ];
+    let current;
+    fake.exports.riscbox_next_action = () => {
+        current = actions.shift();
+        if (!current) return 0;
+        new Uint8Array(fake.exports.memory.buffer, 64, current.bytes.length).set(current.bytes);
+        return current.kind;
+    };
+    fake.exports.riscbox_action_value = () => 0;
+    fake.exports.riscbox_action_data_address = () => 64;
+    fake.exports.riscbox_action_data_length = () => current.bytes.length;
+    fake.exports.riscbox_action_endpoint = () => current.endpoint;
+    fake.exports.riscbox_action_generation = () => current.generation;
+    fake.exports.riscbox_action_request_id = () => current.requestId ?? 0;
+    fake.exports.riscbox_action_reply_capacity = () => current.capacity ?? 0;
+    fake.exports.riscbox_p9_complete = (...args) => {
+        fake.calls.push(["p9_complete", ...args]);
+        return 0;
+    };
+    let closes = 0;
+    const errors = [];
+    const runtime = new Riscbox(fake.exports, {
+        p9Servers: new Map([["broken", {
+            connect: () => ({
+                request: async () => { throw new Error("server failed"); },
+                close: () => closes++,
+            }),
+        }]]),
+        onError: (error) => errors.push(error.message),
     });
-    oversized.attach(fakeModule().exports);
-    assert.equal(oversized.imports.p9_request(0, 0, 0, 8), -71);
+    runtime.drainActions();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(closes, 1);
+    assert.deepEqual(errors, ["server failed"]);
+    const completion = fake.calls.find((call) => call[0] === "p9_complete");
+    assert.deepEqual(completion.slice(1, 5), [3, 1, 9, 2]);
+});
+
+test("9p registration is validated before later startup actions", () => {
+    const fake = fakeModule();
+    const key = Buffer.from("missing");
+    new Uint8Array(fake.exports.memory.buffer, 64, key.length).set(key);
+    const actions = [7, 2];
+    fake.exports.riscbox_next_action = () => actions.shift() ?? 0;
+    fake.exports.riscbox_action_data_address = () => 64;
+    fake.exports.riscbox_action_data_length = () => key.length;
+    fake.exports.riscbox_action_endpoint = () => 1;
+    fake.exports.riscbox_action_generation = () => 1;
+    assert.throws(
+        () => new Riscbox(fake.exports, { p9Servers: new Map() }).drainActions(),
+        /9p server is not registered: missing/,
+    );
+    assert.deepEqual(actions, [2]);
 });
 
 test("host scheduling delegates exactly once", () => {

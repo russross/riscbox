@@ -613,6 +613,12 @@ pub trait NinePBackend {
     fn complete_request(&mut self, _: u32, _: Vec<u8>) -> Result<(), DeviceError> {
         Err(DeviceError::Backend)
     }
+
+    fn reset(&mut self, _: NinePGeneration) {}
+
+    fn next_transport_action(&mut self) -> Option<NinePTransportAction> {
+        None
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -644,7 +650,18 @@ impl<T: NinePBackend + ?Sized> NinePBackend for Box<T> {
     fn complete_request(&mut self, id: u32, data: Vec<u8>) -> Result<(), DeviceError> {
         (**self).complete_request(id, data)
     }
+
+    fn reset(&mut self, generation: NinePGeneration) {
+        (**self).reset(generation);
+    }
+
+    fn next_transport_action(&mut self) -> Option<NinePTransportAction> {
+        (**self).next_transport_action()
+    }
 }
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct NinePEndpointId(pub u32);
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct NinePGeneration(pub u32);
@@ -656,6 +673,27 @@ pub struct NinePRequestId(pub u32);
 pub enum NinePOutcome {
     Reply(Vec<u8>),
     Suppressed,
+    EndpointFailure,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum NinePTransportAction {
+    Open {
+        endpoint: NinePEndpointId,
+        generation: NinePGeneration,
+        server_key: String,
+    },
+    Request {
+        endpoint: NinePEndpointId,
+        generation: NinePGeneration,
+        request_id: NinePRequestId,
+        bytes: Vec<u8>,
+        reply_capacity: u32,
+    },
+    Close {
+        endpoint: NinePEndpointId,
+        generation: NinePGeneration,
+    },
 }
 
 struct PendingNineP {
@@ -748,6 +786,7 @@ impl<B: NinePBackend> VirtioDevice for NinePDevice<B> {
         self.pending.clear();
         if let Some(generation) = self.generation.0.checked_add(1) {
             self.generation = NinePGeneration(generation);
+            self.backend.reset(self.generation);
         } else {
             self.generation_exhausted = true;
         }
@@ -798,6 +837,7 @@ impl<B: NinePBackend> NinePDevice<B> {
                 transport.complete_chain(memory, pending.queue, &pending.chain, 0)?;
                 Ok(())
             }
+            NinePOutcome::EndpointFailure => Err(DeviceError::Backend),
         }
     }
 

@@ -11,7 +11,7 @@ import { Compartment, EditorSelection, EditorState } from "@codemirror/state";
 import { EditorView, keymap, ViewUpdate } from "@codemirror/view";
 import { FitAddon, init as initializeGhostty, Terminal } from "ghostty-web";
 import { basicSetup } from "codemirror";
-import { Memory9PServer, P9Change } from "../../../js/p9";
+import { Memory9PServer, type P9Change, type SyncResult } from "../../../js/p9";
 
 interface ExampleDescription {
     readonly id: string;
@@ -109,6 +109,12 @@ let currentPath: string | null = null;
 let editor: EditorView;
 let programmaticEditorUpdate = false;
 let vmController: VmController;
+
+function resultValue<Value>(result: SyncResult<Value>): Value {
+    if (result.kind === "ok") return result.value;
+    if (result.kind === "not-loaded") throw new Error(`File is not loaded: ${result.paths.join(", ")}`);
+    throw new Error(result.error.message);
+}
 
 function requiredElement(id: string): HTMLElement {
     const result = document.getElementById(id);
@@ -222,7 +228,7 @@ function openFile(path: string): void {
     }
     let content: Uint8Array;
     try {
-        content = example.filesystem.readFile(path);
+        content = resultValue(example.filesystem.readFile(path));
     } catch {
         clearEditor();
         renderFileTree();
@@ -242,7 +248,7 @@ function syncEditor(): void {
     if (currentExample === null || currentPath === null || editor.state.readOnly) {
         return;
     }
-    currentExample.filesystem.writeFile(currentPath, fileContentFromEditor(), "editor");
+    resultValue(currentExample.filesystem.writeFile(currentPath, fileContentFromEditor(), "editor"));
 }
 
 function buildFileTree(paths: readonly string[]): Record<string, FileTreeNode> {
@@ -300,7 +306,7 @@ function renderTree(node: Record<string, FileTreeNode>, parent: HTMLElement, dep
 
 function renderFileTree(): void {
     const pane = requiredElement("file-tree-pane");
-    const paths = currentExample?.filesystem.listFiles() ?? [];
+    const paths = currentExample === null ? [] : resultValue(currentExample.filesystem.listFiles());
     if (currentPath !== null && !paths.includes(currentPath)) {
         clearEditor();
     }
@@ -332,10 +338,10 @@ function imageMimeType(path: string): string | null {
 
 function renderInstructions(): string {
     const filesystem = currentExample?.filesystem;
-    if (filesystem === undefined || !filesystem.listFiles().includes(DOC_PATH)) {
+    if (filesystem === undefined || !resultValue(filesystem.listFiles()).includes(DOC_PATH)) {
         return "";
     }
-    const document = markdownParser.parse(decoder.decode(filesystem.readFile(DOC_PATH)));
+    const document = markdownParser.parse(decoder.decode(resultValue(filesystem.readFile(DOC_PATH))));
     const documentUrl = new URL(DOC_PATH, "https://workspace.invalid/");
     const walker = document.walker();
     let event = walker.next();
@@ -344,7 +350,7 @@ function renderInstructions(): string {
             const url = new URL(event.node.destination, documentUrl);
             if (url.origin === documentUrl.origin) {
                 const path = decodeURIComponent(url.pathname.replace(/^\//, ""));
-                const content = filesystem.readFile(path);
+                const content = resultValue(filesystem.readFile(path));
                 const mimeType = imageMimeType(path);
                 if (mimeType === null) {
                     throw new Error(`Instruction image has an unsupported type: ${path}`);
@@ -401,7 +407,7 @@ function handleFilesystemChange(example: ExampleState, change: P9Change): void {
     if (currentPath !== null && change.source !== "editor"
         && (change.path === currentPath
             || (change.kind === "rename" && change.oldPath === currentPath))) {
-        const paths = example.filesystem.listFiles();
+        const paths = resultValue(example.filesystem.listFiles());
         if (paths.includes(currentPath)) {
             openFile(currentPath);
         } else {
@@ -626,7 +632,7 @@ function switchExample(example: ExampleState): void {
     renderFileTree();
     updateInstructions();
     clearEditor();
-    const paths = example.filesystem.listFiles();
+    const paths = resultValue(example.filesystem.listFiles());
     const preferred = paths.includes(example.description.editable)
         ? example.description.editable
         : paths[0];
@@ -634,7 +640,7 @@ function switchExample(example: ExampleState): void {
         openFile(preferred);
     }
     requiredElement("status").textContent = `Ready · ${example.description.title}`;
-    if (example.filesystem.listFiles().includes(DOC_PATH)) {
+    if (resultValue(example.filesystem.listFiles()).includes(DOC_PATH)) {
         selectTab("instructions");
     } else {
         selectTab("vm");

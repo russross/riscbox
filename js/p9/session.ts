@@ -6,6 +6,8 @@
  * wire values must fit in their low 32 bits.
  */
 
+import type { SeedEntry, SeedLoader, SeedMetadata, SeedPlugin } from "./seed.js";
+
 const MAX_FILE_SIZE = 256 * 1024 * 1024;
 const MAX_MESSAGE_SIZE = 64 * 1024;
 const NOTAG = 0xffff;
@@ -45,8 +47,10 @@ export interface Memory9PLimits {
 }
 export type ChangeSource = string;
 export type P9Change =
-    | { kind: "create" | "write" | "remove"; path: string; source: ChangeSource }
-    | { kind: "rename"; path: string; oldPath: string; source: ChangeSource }
+    | { kind: "create" | "write" | "remove" | "loaded" | "load-error";
+        inode: number; path: string; paths: readonly string[]; source: ChangeSource }
+    | { kind: "rename"; inode: number; path: string; paths: readonly string[];
+        oldPath: string; source: ChangeSource }
     | { kind: "reset"; path: ""; source: ChangeSource };
 
 interface BaseNode {
@@ -58,7 +62,19 @@ interface DirectoryNode extends BaseNode {
     kind: "directory"; children: Record<string, Node>;
     cookies: Record<string, number>; nextCookie: number;
 }
-interface FileNode extends BaseNode { kind: "file"; data: Uint8Array }
+interface ResidentContent { readonly kind: "resident"; readonly bytes: Uint8Array }
+interface UnloadedContent {
+    readonly kind: "unloaded"; readonly size: number; readonly key: unknown;
+    readonly loader: SeedLoader<unknown>;
+}
+interface LoadingContent extends Omit<UnloadedContent, "kind"> {
+    readonly kind: "loading"; readonly promise: Promise<void>;
+}
+interface FailedContent extends Omit<UnloadedContent, "kind"> {
+    readonly kind: "failed"; readonly error: unknown;
+}
+type FileContentState = ResidentContent | UnloadedContent | LoadingContent | FailedContent;
+interface FileNode extends BaseNode { kind: "file"; content: FileContentState; contentRevision: number }
 interface SymlinkNode extends BaseNode { kind: "symlink"; target: string }
 type Node = DirectoryNode | FileNode | SymlinkNode;
 interface Fid { node: Node; flags: number }
@@ -81,6 +97,10 @@ interface ByteRangeLock {
 export type P9Outcome =
     | { kind: "reply"; bytes: Uint8Array }
     | { kind: "suppressed" };
+export type FileReadState =
+    | { readonly kind: "resident"; readonly bytes: Uint8Array }
+    | { readonly kind: "not-loaded"; readonly paths: readonly string[] }
+    | { readonly kind: "failed"; readonly error: unknown };
 interface PendingRequest {
     generation: number;
     resolve: (outcome: P9Outcome) => void;
@@ -270,7 +290,7 @@ function nodeMode(node: Node): number {
 
 function nodeSize(node: Node): number {
     if (node.kind === "file") {
-        return node.data.length;
+        return node.content.kind === "resident" ? node.content.bytes.length : node.content.size;
     }
     if (node.kind === "symlink") {
         return new TextEncoder().encode(node.target).length;
@@ -393,9 +413,9 @@ export class ProtocolEngine {
     }
 
     register(node: Node): Node {
-        this.checkCapacity(1, 0, node.kind === "file" ? node.data.length : 0);
+        this.checkCapacity(1, 0, node.kind === "file" ? nodeSize(node) : 0);
         this.sharedState.inodeCount += 1;
-        if (node.kind === "file") this.sharedState.logicalBytes += node.data.length;
+        if (node.kind === "file") this.sharedState.logicalBytes += nodeSize(node);
         return node;
     }
 
@@ -443,7 +463,38 @@ export class ProtocolEngine {
             ctime: time,
             linkCount: 0,
             fidRefs: 0,
-            data,
+            content: { kind: "resident", bytes: data },
+            contentRevision: 0,
+        }) as FileNode;
+    }
+
+    createSeedFile(
+        name: string,
+        parent: DirectoryNode,
+        entry: Extract<SeedEntry<unknown>, { readonly kind: "file" }>,
+        loader: SeedLoader<unknown>,
+    ): FileNode {
+        this.checkCapacity(0, 1, 0);
+        if (entry.size > this.sharedState.limits.maxFileBytes) {
+            throw new P9Error(EFBIG, `file ${JSON.stringify(name)} exceeds the file limit`);
+        }
+        const time = nowSeconds();
+        return this.register({
+            kind: "file",
+            id: this.nextNodeId++,
+            version: 0,
+            name,
+            parent,
+            mode: (entry.mode ?? 0o644) & 0o7777,
+            uid: entry.uid ?? 1000,
+            gid: entry.gid ?? 1000,
+            atime: entry.atime ?? time,
+            mtime: entry.mtime ?? time,
+            ctime: entry.ctime ?? time,
+            linkCount: 0,
+            fidRefs: 0,
+            content: { kind: "unloaded", size: entry.size, key: entry.key, loader },
+            contentRevision: 0,
         }) as FileNode;
     }
 
@@ -555,6 +606,69 @@ export class ProtocolEngine {
         }
     }
 
+    loadSeed<Key>(plugin: SeedPlugin<Key>): void {
+        const entries = plugin.entries as readonly SeedEntry<unknown>[];
+        if (!Array.isArray(entries) || plugin.loader === null || typeof plugin.loader?.load !== "function") {
+            throw new TypeError("invalid seed plugin");
+        }
+        this.loadTree({});
+        const paths = new Set<string>();
+        const sharedFiles = new Map<string, {
+            readonly node: FileNode;
+            readonly entry: Extract<SeedEntry<unknown>, { readonly kind: "file" }>;
+        }>();
+        for (const entry of entries) {
+            const parts = normalizedParts(entry.path);
+            if (parts.length === 0 || parts.join("/") !== entry.path || paths.has(entry.path)) {
+                throw new TypeError(`invalid or duplicate seed path ${JSON.stringify(entry.path)}`);
+            }
+            paths.add(entry.path);
+            const { parent, name } = this.ensureParent(entry.path);
+            const existing = parent.children[name];
+            if (entry.kind === "directory") {
+                if (existing !== undefined && existing.kind !== "directory") {
+                    throw new TypeError(`seed path crosses a non-directory at ${JSON.stringify(entry.path)}`);
+                }
+                const directory = existing ?? this.createDirectory(name, parent, entry.mode ?? 0o755);
+                if (existing === undefined) this.addEntry(parent, name, directory);
+                this.applySeedMetadata(directory, entry);
+                continue;
+            }
+            if (existing !== undefined) throw new TypeError(`duplicate seed path ${JSON.stringify(entry.path)}`);
+            if (entry.kind === "symlink") {
+                const symlink = this.createSymlink(name, parent, entry.target);
+                this.applySeedMetadata(symlink, entry);
+                this.addEntry(parent, name, symlink);
+                continue;
+            }
+            const shared = entry.inodeKey === undefined ? undefined : sharedFiles.get(entry.inodeKey);
+            let file: FileNode;
+            if (shared === undefined) {
+                file = this.createSeedFile(name, parent, entry, plugin.loader as SeedLoader<unknown>);
+                if (entry.inodeKey !== undefined) sharedFiles.set(entry.inodeKey, { node: file, entry });
+            } else {
+                const original = shared.entry;
+                if (entry.size !== original.size || entry.key !== original.key
+                    || entry.mode !== original.mode || entry.uid !== original.uid
+                    || entry.gid !== original.gid || entry.atime !== original.atime
+                    || entry.mtime !== original.mtime || entry.ctime !== original.ctime) {
+                    throw new TypeError(`inconsistent shared seed inode ${JSON.stringify(entry.inodeKey)}`);
+                }
+                file = shared.node;
+            }
+            this.addEntry(parent, name, file);
+        }
+    }
+
+    applySeedMetadata(node: Node, metadata: SeedMetadata): void {
+        if (metadata.mode !== undefined) node.mode = metadata.mode & 0o7777;
+        if (metadata.uid !== undefined) node.uid = metadata.uid;
+        if (metadata.gid !== undefined) node.gid = metadata.gid;
+        if (metadata.atime !== undefined) node.atime = metadata.atime;
+        if (metadata.mtime !== undefined) node.mtime = metadata.mtime;
+        if (metadata.ctime !== undefined) node.ctime = metadata.ctime;
+    }
+
     addEntry(parent: DirectoryNode, name: string, node: Node, cookie?: number): void {
         this.checkCapacity(0, 1, 0);
         parent.children[name] = node;
@@ -581,7 +695,7 @@ export class ProtocolEngine {
     collect(node: Node): void {
         if (node.linkCount !== 0 || node.fidRefs !== 0) return;
         this.sharedState.inodeCount -= 1;
-        if (node.kind === "file") this.sharedState.logicalBytes -= node.data.length;
+        if (node.kind === "file") this.sharedState.logicalBytes -= nodeSize(node);
         this.sharedState.locks = this.sharedState.locks.filter((lock) => lock.inode !== node.id);
     }
 
@@ -589,11 +703,17 @@ export class ProtocolEngine {
         if (size > this.sharedState.limits.maxFileBytes) {
             throw new P9Error(EFBIG, "file exceeds the file limit");
         }
-        const growth = size - node.data.length;
+        const oldSize = nodeSize(node);
+        const growth = size - oldSize;
         this.checkCapacity(0, 0, growth);
         const data = new Uint8Array(size);
-        data.set(node.data.subarray(0, size));
-        node.data = data;
+        if (node.content.kind === "resident") {
+            data.set(node.content.bytes.subarray(0, size));
+        } else if (size !== 0) {
+            throw new P9Error(EIO, "file content is not loaded");
+        }
+        node.content = { kind: "resident", bytes: data };
+        node.contentRevision += 1;
         this.sharedState.logicalBytes += growth;
     }
 
@@ -608,6 +728,12 @@ export class ProtocolEngine {
         for (const listener of this.listeners) {
             listener(change);
         }
+    }
+
+    inodeChange(node: Node, path = this.pathOf(node)): {
+        readonly inode: number; readonly path: string; readonly paths: readonly string[];
+    } {
+        return { inode: node.id, path, paths: this.pathsOf(node) };
     }
 
     pathOf(node: Node): string {
@@ -670,7 +796,62 @@ export class ProtocolEngine {
         if (node.kind !== "file") {
             throw new P9Error(EISDIR, `${path} is not a regular file`);
         }
-        return node.data.slice();
+        if (node.content.kind !== "resident") throw new P9Error(EIO, "file content is not loaded");
+        return node.content.bytes.slice();
+    }
+
+    readFileState(path: string): FileReadState {
+        const node = this.lookup(path);
+        if (node.kind !== "file") throw new P9Error(EISDIR, `${path} is not a regular file`);
+        if (node.content.kind === "resident") {
+            return { kind: "resident", bytes: node.content.bytes.slice() };
+        }
+        if (node.content.kind === "failed") return { kind: "failed", error: node.content.error };
+        return { kind: "not-loaded", paths: this.pathsOf(node) };
+    }
+
+    async loadPaths(paths: readonly string[], retry = false): Promise<void> {
+        const nodes = new Set<FileNode>();
+        for (const path of paths) {
+            const node = this.lookup(path);
+            if (node.kind !== "file") throw new P9Error(EISDIR, `${path} is not a regular file`);
+            nodes.add(node);
+        }
+        await Promise.all([...nodes].map((node) => this.loadNode(node, retry)));
+    }
+
+    async loadNode(node: FileNode, retry = false): Promise<void> {
+        if (node.content.kind === "resident") return;
+        if (node.content.kind === "loading") return node.content.promise;
+        if (node.content.kind === "failed" && !retry) throw node.content.error;
+        const source = node.content;
+        const revision = node.contentRevision;
+        let loading: LoadingContent;
+        let loaded: Promise<Uint8Array>;
+        try {
+            loaded = source.loader.load(source.key, new AbortController().signal);
+        } catch (error) {
+            loaded = Promise.reject(error);
+        }
+        const promise = loaded.then((bytes) => {
+            if (!(bytes instanceof Uint8Array) || bytes.length !== source.size) {
+                throw new P9Error(EIO, "seed loader returned an unexpected length");
+            }
+            if (node.content !== loading || node.contentRevision !== revision
+                || (node.linkCount === 0 && node.fidRefs === 0)) return;
+            node.content = { kind: "resident", bytes };
+            this.emit({ kind: "loaded", ...this.inodeChange(node), source: "loader" });
+        }).catch((error: unknown) => {
+            if (node.content === loading && node.contentRevision === revision
+                && (node.linkCount !== 0 || node.fidRefs !== 0)) {
+                node.content = { ...source, kind: "failed", error };
+                this.emit({ kind: "load-error", ...this.inodeChange(node), source: "loader" });
+            }
+            throw error;
+        });
+        loading = { ...source, kind: "loading", promise };
+        node.content = loading;
+        return promise;
     }
 
     writeFile(path: string, content: FileContent, source: ChangeSource = "host"): void {
@@ -688,12 +869,18 @@ export class ProtocolEngine {
             if (existing.kind !== "file") {
                 throw new P9Error(EISDIR, `${path} is not a regular file`);
             }
-            this.resize(existing, data.length);
-            existing.data.set(data);
+            const oldSize = nodeSize(existing);
+            const growth = data.length - oldSize;
+            this.checkCapacity(0, 0, growth);
+            existing.contentRevision += 1;
+            existing.content = { kind: "resident", bytes: data };
+            this.sharedState.logicalBytes += growth;
             this.touch(existing);
         }
         this.touch(parent);
-        this.emit({ kind, path: normalizedParts(path).join("/"), source });
+        const changed = parent.children[name];
+        if (changed === undefined) throw new Error("created file is missing");
+        this.emit({ kind, ...this.inodeChange(changed, normalizedParts(path).join("/")), source });
     }
 
     remove(path: string, source: ChangeSource = "host"): void {
@@ -711,7 +898,10 @@ export class ProtocolEngine {
         const parent = this.directory(parentNode);
         this.removeEntry(parent, name);
         this.touch(parent);
-        this.emit({ kind: "remove", path: oldPath, source });
+        this.emit({
+            kind: "remove", inode: node.id, path: oldPath,
+            paths: [oldPath, ...this.pathsOf(node)], source,
+        });
     }
 
     rename(oldPath: string, newPath: string, source: ChangeSource = "host"): void {
@@ -839,6 +1029,22 @@ export class ProtocolEngine {
         }
     }
 
+    async prepare(request: Uint8Array): Promise<void> {
+        if (request.length < 11) return;
+        const view = new DataView(request.buffer, request.byteOffset, request.byteLength);
+        const type = request[4];
+        if (type !== 116 && type !== 118 && type !== 26) return;
+        const node = this.fid(view.getUint32(7, true)).node;
+        if (node.kind !== "file") return;
+        if (type === 26) {
+            if (request.length < 35 || (view.getUint32(11, true) & 8) === 0) return;
+            const sizeLow = view.getUint32(27, true);
+            const sizeHigh = view.getUint32(31, true);
+            if (sizeLow === 0 && sizeHigh === 0) return;
+        }
+        await this.loadNode(node);
+    }
+
     handle(type: number, tag: number, reader: Reader, writer: Writer): void {
         switch (type) {
             case 8: this.statfs(reader, writer); return;
@@ -895,7 +1101,7 @@ export class ProtocolEngine {
             }
             this.resize(fid.node, 0);
             this.touch(fid.node);
-            this.emit({ kind: "write", path: this.pathOf(fid.node), source: "guest" });
+            this.emit({ kind: "write", ...this.inodeChange(fid.node), source: "guest" });
         }
         fid.flags = flags;
         writer.qid(fid.node);
@@ -918,7 +1124,7 @@ export class ProtocolEngine {
         this.addEntry(directory, name, node);
         this.touch(directory);
         this.setFid(fidNumber, node, flags);
-        this.emit({ kind: "create", path: this.pathOf(node), source: "guest" });
+        this.emit({ kind: "create", ...this.inodeChange(node), source: "guest" });
         writer.qid(node);
         writer.u32(Math.max(0, this.msize - 24));
     }
@@ -938,7 +1144,7 @@ export class ProtocolEngine {
         const node = this.createSymlink(name, directory, target);
         this.addEntry(directory, name, node);
         this.touch(directory);
-        this.emit({ kind: "create", path: this.pathOf(node), source: "guest" });
+        this.emit({ kind: "create", ...this.inodeChange(node), source: "guest" });
         writer.qid(node);
     }
 
@@ -993,7 +1199,7 @@ export class ProtocolEngine {
             if (node.kind !== "file") throw new P9Error(EISDIR, "cannot resize a directory");
             this.resize(node, size);
             dataChanged = true;
-            this.emit({ kind: "write", path: this.pathOf(node), source: "guest" });
+            this.emit({ kind: "write", ...this.inodeChange(node), source: "guest" });
         }
         if ((mask & 0x10) !== 0) node.atime = (mask & 0x80) !== 0 ? atime : time;
         if ((mask & 0x20) !== 0) node.mtime = (mask & 0x100) !== 0 ? mtime : time;
@@ -1095,7 +1301,8 @@ export class ProtocolEngine {
         this.touch(directory);
         this.touch(node);
         const directoryPath = this.pathOf(directory);
-        this.emit({ kind: "create", path: directoryPath === "" ? name : `${directoryPath}/${name}`, source: "guest" });
+        const path = directoryPath === "" ? name : `${directoryPath}/${name}`;
+        this.emit({ kind: "create", ...this.inodeChange(node, path), source: "guest" });
     }
 
     mkdir(reader: Reader, writer: Writer): void {
@@ -1108,7 +1315,7 @@ export class ProtocolEngine {
         const node = this.createDirectory(name, directory, mode);
         this.addEntry(directory, name, node);
         this.touch(directory);
-        this.emit({ kind: "create", path: this.pathOf(node), source: "guest" });
+        this.emit({ kind: "create", ...this.inodeChange(node), source: "guest" });
         writer.qid(node);
     }
 
@@ -1165,7 +1372,7 @@ export class ProtocolEngine {
         this.touch(oldDirectory);
         if (newDirectory !== oldDirectory) this.touch(newDirectory);
         this.touch(node);
-        this.emit({ kind: "rename", path: this.pathOf(node), oldPath, source });
+        this.emit({ kind: "rename", ...this.inodeChange(node), oldPath, source });
     }
 
     unlinkat(reader: Reader): void {
@@ -1183,7 +1390,10 @@ export class ProtocolEngine {
         const path = this.pathOf(node);
         this.removeEntry(directory, name);
         this.touch(directory);
-        this.emit({ kind: "remove", path, source: "guest" });
+        this.emit({
+            kind: "remove", inode: node.id, path,
+            paths: [path, ...this.pathsOf(node)], source: "guest",
+        });
     }
 
     version(tag: number, reader: Reader, writer: Writer): void {
@@ -1248,9 +1458,11 @@ export class ProtocolEngine {
         const offset = reader.u64();
         const count = reader.u32();
         if (node.kind !== "file") throw new P9Error(EISDIR, "fid does not name a regular file");
-        const available = Math.max(0, Math.min(count, node.data.length - offset, writer.data.length - writer.offset - 4));
+        if (node.content.kind !== "resident") throw new P9Error(EIO, "file content is not loaded");
+        const bytes = node.content.bytes;
+        const available = Math.max(0, Math.min(count, bytes.length - offset, writer.data.length - writer.offset - 4));
         writer.u32(available);
-        writer.bytes(node.data.subarray(offset, offset + available));
+        writer.bytes(bytes.subarray(offset, offset + available));
         node.atime = nowSeconds();
     }
 
@@ -1261,13 +1473,15 @@ export class ProtocolEngine {
         const data = reader.bytes(count);
         const node = fid.node;
         if (node.kind !== "file") throw new P9Error(EISDIR, "fid does not name a regular file");
-        if ((fid.flags & O_APPEND) !== 0) offset = node.data.length;
+        if (node.content.kind !== "resident") throw new P9Error(EIO, "file content is not loaded");
+        if ((fid.flags & O_APPEND) !== 0) offset = node.content.bytes.length;
         if (offset + count > this.sharedState.limits.maxFileBytes) throw new P9Error(EFBIG, "file exceeds the file limit");
-        const size = Math.max(node.data.length, offset + count);
+        const size = Math.max(node.content.bytes.length, offset + count);
         this.resize(node, size);
-        node.data.set(data, offset);
+        if (node.content.kind !== "resident") throw new P9Error(EIO, "file content is not loaded");
+        node.content.bytes.set(data, offset);
         this.touch(node);
-        this.emit({ kind: "write", path: this.pathOf(node), source: "guest" });
+        this.emit({ kind: "write", ...this.inodeChange(node), source: "guest" });
         writer.u32(count);
     }
 
@@ -1343,7 +1557,15 @@ export class P9Session {
         return new Promise<P9Outcome>((resolve) => {
             const pending = { generation, resolve };
             this.active.set(tag, pending);
-            queueMicrotask(() => {
+            queueMicrotask(async () => {
+                if (this.active.get(tag) !== pending || this.generation !== generation) {
+                    return;
+                }
+                try {
+                    await this.protocol.prepare(request);
+                } catch {
+                    // The protocol request below reports retained loader failures as EIO.
+                }
                 if (this.active.get(tag) !== pending || this.generation !== generation) {
                     return;
                 }

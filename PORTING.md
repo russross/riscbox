@@ -597,7 +597,7 @@ emitted modules.
     directory cookies, quotas, and shared byte-range locks. Test atomic rename,
     append, truncation, quota races, lock release, QID stability, and two Linux
     clients mutating one tree.
-5.  Add typed seeds, the single loader operation, explicit direct-API results,
+5.  **Complete:** add typed seeds, the single loader operation, explicit direct-API results,
     and HTTPS and tar example plugins. Exercise shared loads, failure and retry,
     whole-file replacement without a load, load/mutation races, loader length
     validation, deletion, hard-linked seeds, and immutable deployment pinning.
@@ -668,6 +668,22 @@ Implementation decisions
     release, stable cookies, and QID/open-unlink lifetime. The three emitted
     server modules total 47,018 bytes of JavaScript and 7,713 bytes of
     declarations; the optimized Rust WASM remains 411,449 bytes.
+*   2026-09-20: Represent seeded regular-file bodies as unloaded, one shared
+    in-flight load, retained failure, or ordinary resident bytes. A successful
+    loader result is adopted directly, so peak filesystem load storage is one
+    declared file body plus promise state rather than a second copied body.
+    Content revisions discard stale completions after replacement or deletion;
+    partial 9P mutations await content, while whole-file application writes do
+    not. `SeedBuilder` validates and freezes typed entries and hard links, and
+    the HTTPS-manifest and pre-downloaded-tar examples use the same single
+    `load(key, signal)` boundary. Application methods now return discriminated
+    results, and change events carry inode identity and all affected paths.
+    Focused tests cover shared application and 9P loads, failure retention and
+    retry, length validation, quotas, deletion, hard-linked seeds, load/write
+    races, and pinned loader interpretation. The five emitted server modules
+    total 64,896 bytes of JavaScript and 12,816 bytes of declarations. Request
+    and reply copying at the WASM boundary is unchanged, and the optimized Rust
+    WASM remains 411,449 bytes.
 
 Later milestones (out of scope for now)
 ---------------------------------------

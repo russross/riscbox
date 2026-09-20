@@ -28,3 +28,24 @@ directory cookies are monotonic within each directory. A session close or
 and `maxDirectoryEntries` limits. Defaults are 256 MiB per file, 1 GiB of
 logical regular-file data, and 2^20 inodes and directory entries. File bytes are
 counted once per inode, including an open inode after its last link is removed.
+
+Application API and lazy seeds
+------------------------------
+
+Application operations return `SyncResult` values. A successful result has
+`kind: "ok"`; expected filesystem failures have `kind: "error"`. Reading a
+lazy seed before loading it returns `kind: "not-loaded"` with every path for
+that inode. Use `load(paths, retry)` or `readFileAsync(path, retry)` to request
+content explicitly. A failed load is retained until a call sets `retry`.
+
+`SeedBuilder<Key>` constructs and freezes a validated namespace with optional
+metadata and shared regular-file inode keys. Pass its entries and one
+`SeedLoader<Key>` to the third `MemoryFilesystem` constructor argument, or use
+`MemoryFilesystem.fromSeed(plugin)`. Concurrent application and 9P reads share
+one load. Whole-file application writes replace an unloaded or loading seed
+without waiting, and stale loader completions cannot restore old content.
+
+`createHttpsSeedPlugin()` is a small manifest-backed example whose opaque keys
+are resolved URLs. `createTarSeedPlugin()` inspects an already downloaded tar
+archive and lazily copies regular-file ranges. A filesystem pins the entry list
+and loader objects stored in its inodes; refreshes require a new filesystem.

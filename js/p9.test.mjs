@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { MAX_FILE_SIZE, Memory9PServer, P9Error } from "../build/js/p9/index.js";
+import {
+    MAX_FILE_SIZE,
+    Memory9PServer,
+    SeedBuilder,
+    createHttpsSeedPlugin,
+    createTarSeedPlugin,
+} from "../build/js/p9/index.js";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
@@ -114,25 +120,45 @@ async function versionAndAttach(session) {
     assert.equal(attach.qid().type, 0x80);
 }
 
+function ok(result) {
+    assert.equal(result.kind, "ok");
+    return result.value;
+}
+
+function errorCode(result) {
+    assert.equal(result.kind, "error");
+    return result.error.code;
+}
+
+function deferred() {
+    let resolve;
+    let reject;
+    const promise = new Promise((resolvePromise, rejectPromise) => {
+        resolve = resolvePromise;
+        reject = rejectPromise;
+    });
+    return { promise, resolve, reject };
+}
+
 test("host API uses copied bytes, nested paths, and notifications", () => {
     const original = encoder.encode("one");
     const server = new Memory9PServer({ src: { "main.c": original } });
     const changes = [];
     server.subscribe((change) => changes.push(change));
     original[0] = 0;
-    assert.equal(decoder.decode(server.readFile("src/main.c")), "one");
+    assert.equal(decoder.decode(ok(server.readFile("src/main.c"))), "one");
 
-    const read = server.readFile("src/main.c");
+    const read = ok(server.readFile("src/main.c"));
     read[0] = 0;
-    assert.equal(decoder.decode(server.readFile("src/main.c")), "one");
+    assert.equal(decoder.decode(ok(server.readFile("src/main.c"))), "one");
 
-    server.writeFile("src/main.c", "two", "editor");
-    server.writeFile("build/result.txt", "ok");
-    server.rename("build/result.txt", "result.txt");
-    server.remove("result.txt");
+    ok(server.writeFile("src/main.c", "two", "editor"));
+    ok(server.writeFile("build/result.txt", "ok"));
+    ok(server.rename("build/result.txt", "result.txt"));
+    ok(server.remove("result.txt"));
     server.loadFiles({ "__proto__/safe.txt": "safe" });
-    assert.equal(decoder.decode(server.readFile("__proto__/safe.txt")), "safe");
-    assert.deepEqual(server.listFiles(), ["__proto__/safe.txt"]);
+    assert.equal(decoder.decode(ok(server.readFile("__proto__/safe.txt"))), "safe");
+    assert.deepEqual(ok(server.listFiles()), ["__proto__/safe.txt"]);
     assert.deepEqual(changes.map((change) => change.kind), ["write", "create", "rename", "remove", "reset"]);
     assert.equal(changes[0].source, "editor");
 });
@@ -140,16 +166,10 @@ test("host API uses copied bytes, nested paths, and notifications", () => {
 test("host API enforces configured file and tree quotas atomically", () => {
     assert.equal(MAX_FILE_SIZE, 256 * 1024 * 1024);
     const server = new Memory9PServer({}, { maxFileBytes: 4, maxTreeBytes: 5 });
-    server.writeFile("maximum.bin", new Uint8Array(4));
-    assert.throws(
-        () => server.writeFile("too-large.bin", new Uint8Array(5)),
-        (error) => error instanceof P9Error && error.errno === 27,
-    );
-    assert.throws(
-        () => server.writeFile("other.bin", new Uint8Array(2)),
-        (error) => error instanceof P9Error && error.errno === 28,
-    );
-    assert.deepEqual(server.listFiles(), ["maximum.bin"]);
+    ok(server.writeFile("maximum.bin", new Uint8Array(4)));
+    assert.equal(errorCode(server.writeFile("too-large.bin", new Uint8Array(5))), "too-large");
+    assert.equal(errorCode(server.writeFile("other.bin", new Uint8Array(2))), "no-space");
+    assert.deepEqual(ok(server.listFiles()), ["maximum.bin"]);
     assert.throws(() => new Memory9PServer({ a: "1234", b: "12" }, { maxTreeBytes: 5 }));
 });
 
@@ -165,7 +185,7 @@ test("tree replacement validates before retiring shared-session fids", async () 
     server.loadTree({ next: "next" });
     const stale = await exchange(session, new Message(116).u32(2).u64(0).u32(3), 7);
     assert.equal(stale.u32(), 9);
-    assert.deepEqual(server.listFiles(), ["next"]);
+    assert.deepEqual(ok(server.listFiles()), ["next"]);
     session.close();
 });
 
@@ -185,14 +205,14 @@ test("9P reads and writes regular files", async () => {
 
     const write = await exchange(session, new Message(118).u32(2).u64(5).u32(6).data(encoder.encode(" world")));
     assert.equal(write.u32(), 6);
-    assert.equal(decoder.decode(server.readFile("hello.txt")), "hello world");
+    assert.equal(decoder.decode(ok(server.readFile("hello.txt"))), "hello world");
 
     await exchange(
         session,
         new Message(26).u32(2).u32(8).u32(0).u32(0).u32(0).u64(5)
             .u64(0).u64(0).u64(0).u64(0),
     );
-    assert.equal(decoder.decode(server.readFile("hello.txt")), "hello");
+    assert.equal(decoder.decode(ok(server.readFile("hello.txt"))), "hello");
 
     const getattr = await exchange(session, new Message(24).u32(2).u64(0x3fff));
     assert.equal(getattr.u64(), 0x3fff);
@@ -233,7 +253,7 @@ test("9P creates, lists, renames, links, and removes tree entries", async () => 
     await exchange(session, new Message(110).u32(1).u32(4).u16(1).string("out"));
     await exchange(session, new Message(76).u32(4).string("output").u32(0));
     await exchange(session, new Message(76).u32(1).string("out").u32(0x200));
-    assert.deepEqual(server.listFiles(), []);
+    assert.deepEqual(ok(server.listFiles()), []);
     assert.ok(changes.every((change) => change.source === "guest"));
 });
 
@@ -341,14 +361,11 @@ test("hard links preserve QIDs and open unlinked inodes until the last clunk", a
     await exchange(session, new Message(76).u32(1).string("original").u32(0));
     await exchange(session, new Message(76).u32(1).string("alias").u32(0));
     await exchange(session, new Message(118).u32(2).u64(0).u32(1).data(encoder.encode("z")));
-    assert.throws(
-        () => server.writeFile("new", "x"),
-        (error) => error instanceof P9Error && error.errno === 28,
-    );
+    assert.equal(errorCode(server.writeFile("new", "x")), "no-space");
     await exchange(session, new Message(120).u32(2));
     await exchange(session, new Message(120).u32(3));
-    server.writeFile("new", "x");
-    assert.equal(decoder.decode(server.readFile("new")), "x");
+    ok(server.writeFile("new", "x"));
+    assert.equal(decoder.decode(ok(server.readFile("new"))), "x");
     session.close();
 });
 
@@ -362,8 +379,8 @@ test("directory cookies remain stable across insertion and same-directory rename
     const cookie = first.u64();
     first.u8();
     assert.equal(first.string(), "a");
-    server.writeFile("c", "c");
-    server.rename("b", "d");
+    ok(server.writeFile("c", "c"));
+    ok(server.rename("b", "d"));
     const rest = await exchange(session, new Message(40).u32(1).u64(cookie).u32(4096));
     rest.u32();
     const names = [];
@@ -388,7 +405,7 @@ test("append and truncation enforce quotas across shared sessions", async () => 
         exchange(second, new Message(118).u32(2).u64(0).u32(1).data(encoder.encode("e"))),
     ]);
     assert.deepEqual(writes.map((reply) => reply.u32()), [1, 1]);
-    assert.equal(decoder.decode(server.readFile("file")), "abcde");
+    assert.equal(decoder.decode(ok(server.readFile("file"))), "abcde");
     const overflow = await exchange(first, new Message(118).u32(2).u64(0).u32(1).data(encoder.encode("f")), 7);
     assert.equal(overflow.u32(), 27);
     await exchange(
@@ -396,8 +413,8 @@ test("append and truncation enforce quotas across shared sessions", async () => 
         new Message(26).u32(2).u32(8).u32(0).u32(0).u32(0).u64(2)
             .u64(0).u64(0).u64(0).u64(0),
     );
-    server.writeFile("other", "xyz");
-    assert.equal(decoder.decode(server.readFile("file")), "ab");
+    ok(server.writeFile("other", "xyz"));
+    assert.equal(decoder.decode(ok(server.readFile("file"))), "ab");
     first.close(); second.close();
 });
 
@@ -439,8 +456,8 @@ test("rename replacement is atomic while existing fids retain their inode", asyn
     const target = await exchange(session, new Message(110).u32(1).u32(3).u16(1).string("target"));
     target.u16();
     const targetQid = target.qid();
-    server.rename("source", "target");
-    assert.equal(decoder.decode(server.readFile("target")), "new");
+    ok(server.rename("source", "target"));
+    assert.equal(decoder.decode(ok(server.readFile("target"))), "new");
     const renamed = await exchange(session, new Message(110).u32(1).u32(4).u16(1).string("target"));
     renamed.u16();
     assert.equal(renamed.qid().path, sourceQid.path);
@@ -448,4 +465,142 @@ test("rename replacement is atomic while existing fids retain their inode", asyn
     assert.equal(decoder.decode(old.remaining().subarray(4)), "old");
     assert.notEqual(sourceQid.path, targetQid.path);
     session.close();
+});
+
+test("seed builder validates paths and shares one lazy inode across hard links", async () => {
+    const entries = new SeedBuilder()
+        .addDirectory("src")
+        .addFile("src/main.c", 4, "body", { inodeKey: "source" })
+        .addHardLink("copy.c", "source")
+        .addSymlink("latest", "src/main.c")
+        .finish();
+    assert.throws(() => new SeedBuilder().addHardLink("lost", "missing").finish(), /dangling/);
+    assert.throws(
+        () => new SeedBuilder().addFile("same", 0, "a").addDirectory("same").finish(),
+        /duplicate/,
+    );
+    const pending = deferred();
+    let loads = 0;
+    const plugin = Object.freeze({
+        entries,
+        loader: { load: () => { loads += 1; return pending.promise; } },
+    });
+    const server = new Memory9PServer({}, {}, plugin);
+    assert.throws(() => new Memory9PServer({}, { maxTreeBytes: 3 }, plugin));
+    assert.deepEqual(server.readFile("src/main.c"), {
+        kind: "not-loaded",
+        paths: ["copy.c", "src/main.c"],
+    });
+    const first = server.readFileAsync("src/main.c");
+    const second = server.readFileAsync("copy.c");
+    assert.equal(loads, 1);
+    pending.resolve(encoder.encode("code"));
+    assert.equal(decoder.decode(ok(await first)), "code");
+    assert.equal(decoder.decode(ok(await second)), "code");
+    assert.equal(decoder.decode(ok(server.readFile("copy.c"))), "code");
+});
+
+test("seed failures are retained, validate length, and require explicit retry", async () => {
+    const entries = new SeedBuilder().addFile("file", 2, "key").finish();
+    let loads = 0;
+    const server = new Memory9PServer({}, {}, {
+        entries,
+        loader: {
+            async load() {
+                loads += 1;
+                if (loads === 1) throw new Error("offline");
+                if (loads === 2) return encoder.encode("bad");
+                return encoder.encode("ok");
+            },
+        },
+    });
+    assert.equal(errorCode(await server.load(["file"])), "io");
+    assert.equal(errorCode(await server.load(["file"])), "io");
+    assert.equal(loads, 1);
+    assert.equal(errorCode(await server.load(["file"], true)), "io");
+    assert.equal(loads, 2);
+    assert.equal(decoder.decode(ok(await server.readFileAsync("file", true))), "ok");
+    assert.equal(loads, 3);
+});
+
+test("whole-file replacement wins load races and deletion never resurrects a seed", async () => {
+    const entries = new SeedBuilder().addFile("race", 3, "race").addFile("deleted", 3, "deleted").finish();
+    const pending = new Map([["race", deferred()], ["deleted", deferred()]]);
+    let loads = 0;
+    const server = new Memory9PServer({}, {}, {
+        entries,
+        loader: { load: (key) => { loads += 1; return pending.get(key).promise; } },
+    });
+    const raced = server.readFileAsync("race");
+    ok(server.writeFile("race", "new"));
+    pending.get("race").resolve(encoder.encode("old"));
+    assert.equal(decoder.decode(ok(await raced)), "new");
+
+    const deleted = server.load(["deleted"]);
+    ok(server.remove("deleted"));
+    pending.get("deleted").resolve(encoder.encode("old"));
+    assert.equal((await deleted).kind, "ok");
+    assert.deepEqual(ok(server.listFiles()), ["race"]);
+    assert.equal(loads, 2);
+});
+
+test("9P clients share one seed load and receive ordinary EIO on loader failure", async () => {
+    const entries = new SeedBuilder().addFile("file", 2, "key").finish();
+    const pending = deferred();
+    let loads = 0;
+    const server = new Memory9PServer({}, {}, {
+        entries,
+        loader: { load: () => { loads += 1; return pending.promise; } },
+    });
+    const first = server.connect();
+    const second = server.connect();
+    for (const session of [first, second]) {
+        await versionAndAttach(session);
+        await exchange(session, new Message(110).u32(1).u32(2).u16(1).string("file"));
+    }
+    const firstRead = exchange(first, new Message(116).u32(2).u64(0).u32(2));
+    const secondRead = exchange(second, new Message(116).u32(2).u64(0).u32(2));
+    await Promise.resolve();
+    assert.equal(loads, 1);
+    pending.resolve(encoder.encode("ok"));
+    for (const read of await Promise.all([firstRead, secondRead])) {
+        assert.equal(read.u32(), 2);
+        assert.equal(decoder.decode(read.remaining()), "ok");
+    }
+    first.close(); second.close();
+
+    const failed = new Memory9PServer({}, {}, {
+        entries,
+        loader: { load: async () => { throw new Error("offline"); } },
+    }).connect();
+    await versionAndAttach(failed);
+    await exchange(failed, new Message(110).u32(1).u32(2).u16(1).string("file"));
+    const reply = await exchange(failed, new Message(116).u32(2).u64(0).u32(2), 7);
+    assert.equal(reply.u32(), 5);
+    failed.close();
+});
+
+test("HTTPS and tar seed plugins expose immutable lazy deployments", async () => {
+    const httpsPlugin = createHttpsSeedPlugin(
+        { files: [{ path: "hello.txt", size: 2, source: "data:application/octet-stream,hi" }] },
+        new URL("https://example.invalid/base/"),
+    );
+    const https = new Memory9PServer({}, {}, httpsPlugin);
+    assert.equal(decoder.decode(ok(await https.readFileAsync("hello.txt"))), "hi");
+
+    const archive = new Uint8Array(2048);
+    archive.set(encoder.encode("file.txt"), 0);
+    archive.set(encoder.encode("00000000003\0"), 124);
+    archive[156] = 48;
+    archive.set(encoder.encode("tar"), 512);
+    const tarPlugin = createTarSeedPlugin(archive);
+    assert.ok(Object.isFrozen(tarPlugin.entries));
+    const tar = new Memory9PServer({}, {}, tarPlugin);
+    assert.equal(decoder.decode(ok(await tar.readFileAsync("file.txt"))), "tar");
+
+    const entries = new SeedBuilder().addFile("pinned", 3, "key").finish();
+    const mutablePlugin = { entries, loader: { load: async () => encoder.encode("old") } };
+    const pinned = new Memory9PServer({}, {}, mutablePlugin);
+    mutablePlugin.loader = { load: async () => encoder.encode("new") };
+    assert.equal(decoder.decode(ok(await pinned.readFileAsync("pinned"))), "old");
 });

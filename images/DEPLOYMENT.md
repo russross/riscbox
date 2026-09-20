@@ -112,6 +112,23 @@ const runtime = await Riscbox.instantiate(wasmBytes, {
 });
 ```
 
+Application operations return explicit results rather than throwing for normal
+filesystem errors:
+
+```js
+const result = server.readFile("hello.txt");
+if (result.kind === "ok") {
+    console.log(new TextDecoder().decode(result.value));
+}
+```
+
+Large static trees may instead use `SeedBuilder` with a single typed loader.
+`readFile()` reports `not-loaded`; `readFileAsync()` and guest reads start and
+share the load. The supplied module includes HTTPS-manifest and pre-downloaded
+tar plugin examples. Deployment manifests, archives, loader interpretation,
+and content-addressed URLs should be immutable for a filesystem instance;
+publish a new plugin and server instance to refresh them.
+
 Mount it in Linux with the same tag used by the configuration:
 
     mount -t 9p -o trans=virtio,version=9p2000.L shared /mnt/shared

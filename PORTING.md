@@ -593,7 +593,7 @@ emitted modules.
     state from 9p session state. Route the current memory behavior through the concurrent
     boundary. Validate two sessions reusing the same fid and tag values,
     `Tversion` generations, all flush races, and session close.
-4.  Add inode-backed directories, hard links, open-unlink lifetime, stable
+4.  **Complete:** add inode-backed directories, hard links, open-unlink lifetime, stable
     directory cookies, quotas, and shared byte-range locks. Test atomic rename,
     append, truncation, quota races, lock release, QID stability, and two Linux
     clients mutating one tree.
@@ -656,6 +656,18 @@ Implementation decisions
     adapter remains handwritten JavaScript at the raw WASM boundary. The three
     emitted server modules total 37,420 bytes of JavaScript and 6,362 bytes of
     declarations at this checkpoint.
+*   2026-09-20: Give the shared TypeScript filesystem stable inode/QID identity,
+    per-directory monotonic cookies, link and fid reference counts, and
+    synchronous logical-byte, inode, and directory-entry quota accounting.
+    Hard links share one inode; unlink and rename detach names without retiring
+    open fids, and storage is reclaimed after the last link and fid disappear.
+    POSIX byte-range locks are shared across sessions and released by unlock,
+    `Tversion`, or session close. Initial and replacement trees validate before
+    retiring live fids. Focused protocol tests exercise two independent clients,
+    append commits, truncation, quota contention, rename replacement, lock
+    release, stable cookies, and QID/open-unlink lifetime. The three emitted
+    server modules total 47,018 bytes of JavaScript and 7,713 bytes of
+    declarations; the optimized Rust WASM remains 411,449 bytes.
 
 Later milestones (out of scope for now)
 ---------------------------------------

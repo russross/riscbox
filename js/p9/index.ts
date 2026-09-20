@@ -5,6 +5,7 @@ export {
     P9Session,
     type FileContent,
     type Memory9PEntry,
+    type Memory9PLimits,
     type Memory9PTree,
     type P9Change,
     type P9Outcome,

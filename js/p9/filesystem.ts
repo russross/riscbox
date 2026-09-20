@@ -3,14 +3,15 @@ import {
     ProtocolEngine,
     type FileContent,
     type Memory9PTree,
+    type Memory9PLimits,
     type P9Change,
 } from "./session.js";
 
 export class MemoryFilesystem {
     private readonly engine: ProtocolEngine;
 
-    constructor(tree: Memory9PTree = {}) {
-        this.engine = new ProtocolEngine(tree);
+    constructor(tree: Memory9PTree = {}, limits: Memory9PLimits = {}) {
+        this.engine = new ProtocolEngine(tree, null, limits);
     }
 
     connect(): P9Session { return new P9Session(this.engine.fork()); }

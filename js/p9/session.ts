@@ -2,11 +2,11 @@
  * Small synchronous 9P2000.L server for browser-hosted teaching VMs.
  *
  * The implementation deliberately favors a direct data model over general
- * filesystem features. Files are bounded at 16 MiB and all accepted 64-bit
+ * filesystem features. Files are bounded by explicit quotas and all accepted 64-bit
  * wire values must fit in their low 32 bits.
  */
 
-const MAX_FILE_SIZE = 16 * 1024 * 1024;
+const MAX_FILE_SIZE = 256 * 1024 * 1024;
 const MAX_MESSAGE_SIZE = 64 * 1024;
 const NOTAG = 0xffff;
 
@@ -37,6 +37,12 @@ const EOPNOTSUPP = 95;
 export type FileContent = string | Uint8Array;
 export type Memory9PEntry = FileContent | Memory9PTree;
 export interface Memory9PTree { readonly [name: string]: Memory9PEntry }
+export interface Memory9PLimits {
+    readonly maxFileBytes?: number;
+    readonly maxTreeBytes?: number;
+    readonly maxInodes?: number;
+    readonly maxDirectoryEntries?: number;
+}
 export type ChangeSource = string;
 export type P9Change =
     | { kind: "create" | "write" | "remove"; path: string; source: ChangeSource }
@@ -46,9 +52,11 @@ export type P9Change =
 interface BaseNode {
     id: number; version: number; name: string; parent: DirectoryNode | null;
     mode: number; uid: number; gid: number; atime: number; mtime: number; ctime: number;
+    linkCount: number; fidRefs: number;
 }
 interface DirectoryNode extends BaseNode {
     kind: "directory"; children: Record<string, Node>;
+    cookies: Record<string, number>; nextCookie: number;
 }
 interface FileNode extends BaseNode { kind: "file"; data: Uint8Array }
 interface SymlinkNode extends BaseNode { kind: "symlink"; target: string }
@@ -56,8 +64,19 @@ type Node = DirectoryNode | FileNode | SymlinkNode;
 interface Fid { node: Node; flags: number }
 interface SharedState {
     nextNodeId: number;
+    nextSessionId: number;
     listeners: Set<(change: P9Change) => void>;
+    limits: Required<Memory9PLimits>;
+    inodeCount: number;
+    directoryEntries: number;
+    logicalBytes: number;
+    locks: ByteRangeLock[];
+    engines: Set<ProtocolEngine>;
     root?: DirectoryNode;
+}
+interface ByteRangeLock {
+    inode: number; session: number; type: number; start: number; length: number;
+    procId: number; clientId: string;
 }
 export type P9Outcome =
     | { kind: "reply"; bytes: Uint8Array }
@@ -290,16 +309,47 @@ function copyContent(content: FileContent): Uint8Array {
     throw new TypeError("file content must be a string or Uint8Array");
 }
 
+function rangesOverlap(leftStart: number, leftLength: number, rightStart: number, rightLength: number): boolean {
+    const leftEnd = leftLength === 0 ? Number.POSITIVE_INFINITY : leftStart + leftLength;
+    const rightEnd = rightLength === 0 ? Number.POSITIVE_INFINITY : rightStart + rightLength;
+    return leftStart < rightEnd && rightStart < leftEnd;
+}
+
 export class ProtocolEngine {
     private readonly sharedState: SharedState;
+    private readonly sessionId: number;
     readonly fids: Map<number, Fid>;
     private msize: number;
-    constructor(tree: Memory9PTree = {}, sharedState: SharedState | null = null) {
+    constructor(
+        tree: Memory9PTree = {},
+        sharedState: SharedState | null = null,
+        limits: Memory9PLimits = {},
+    ) {
+        const resolvedLimits = {
+            maxFileBytes: limits.maxFileBytes ?? MAX_FILE_SIZE,
+            maxTreeBytes: limits.maxTreeBytes ?? 1024 * 1024 * 1024,
+            maxInodes: limits.maxInodes ?? 2 ** 20,
+            maxDirectoryEntries: limits.maxDirectoryEntries ?? 2 ** 20,
+        };
+        for (const [name, value] of Object.entries(resolvedLimits)) {
+            if (!Number.isSafeInteger(value) || value < 0) {
+                throw new TypeError(`${name} must be a nonnegative safe integer`);
+            }
+        }
         this.sharedState = sharedState ?? {
             nextNodeId: 1,
+            nextSessionId: 1,
             listeners: new Set(),
+            limits: resolvedLimits,
+            inodeCount: 0,
+            directoryEntries: 0,
+            logicalBytes: 0,
+            locks: [],
+            engines: new Set(),
         };
+        this.sessionId = this.sharedState.nextSessionId++;
         this.fids = new Map();
+        this.sharedState.engines.add(this);
         this.msize = MAX_MESSAGE_SIZE;
         if (sharedState === null) {
             this.root = this.createDirectory("", null, 0o755);
@@ -333,9 +383,26 @@ export class ProtocolEngine {
         return new ProtocolEngine({}, this.sharedState);
     }
 
+    checkCapacity(inodes: number, entries: number, bytes: number): void {
+        const state = this.sharedState;
+        if (state.inodeCount + inodes > state.limits.maxInodes
+            || state.directoryEntries + entries > state.limits.maxDirectoryEntries
+            || state.logicalBytes + bytes > state.limits.maxTreeBytes) {
+            throw new P9Error(ENOSPC, "filesystem quota exceeded");
+        }
+    }
+
+    register(node: Node): Node {
+        this.checkCapacity(1, 0, node.kind === "file" ? node.data.length : 0);
+        this.sharedState.inodeCount += 1;
+        if (node.kind === "file") this.sharedState.logicalBytes += node.data.length;
+        return node;
+    }
+
     createDirectory(name: string, parent: DirectoryNode | null, mode: number): DirectoryNode {
+        if (parent !== null) this.checkCapacity(0, 1, 0);
         const time = nowSeconds();
-        return {
+        return this.register({
             kind: "directory",
             id: this.nextNodeId++,
             version: 0,
@@ -347,17 +414,22 @@ export class ProtocolEngine {
             atime: time,
             mtime: time,
             ctime: time,
+            linkCount: parent === null ? 1 : 0,
+            fidRefs: 0,
             children: Object.create(null),
-        };
+            cookies: Object.create(null),
+            nextCookie: 1,
+        }) as DirectoryNode;
     }
 
     createFile(name: string, parent: DirectoryNode, content: FileContent, mode = 0o644): FileNode {
+        this.checkCapacity(0, 1, 0);
         const data = copyContent(content);
-        if (data.length > MAX_FILE_SIZE) {
-            throw new P9Error(EFBIG, `file ${JSON.stringify(name)} exceeds 16 MiB`);
+        if (data.length > this.sharedState.limits.maxFileBytes) {
+            throw new P9Error(EFBIG, `file ${JSON.stringify(name)} exceeds the file limit`);
         }
         const time = nowSeconds();
-        return {
+        return this.register({
             kind: "file",
             id: this.nextNodeId++,
             version: 0,
@@ -369,13 +441,16 @@ export class ProtocolEngine {
             atime: time,
             mtime: time,
             ctime: time,
+            linkCount: 0,
+            fidRefs: 0,
             data,
-        };
+        }) as FileNode;
     }
 
     createSymlink(name: string, parent: DirectoryNode, target: string): SymlinkNode {
+        this.checkCapacity(0, 1, 0);
         const time = nowSeconds();
-        return {
+        return this.register({
             kind: "symlink",
             id: this.nextNodeId++,
             version: 0,
@@ -387,18 +462,53 @@ export class ProtocolEngine {
             atime: time,
             mtime: time,
             ctime: time,
+            linkCount: 0,
+            fidRefs: 0,
             target,
-        };
+        }) as SymlinkNode;
     }
 
     loadTree(tree: Memory9PTree): void {
         if (tree === null || typeof tree !== "object" || tree instanceof Uint8Array) {
             throw new TypeError("the 9p tree root must be an object");
         }
-        this.root.children = Object.create(null);
-        this.fids.clear();
-        this.addTree(this.root, tree);
-        this.touch(this.root);
+        const oldRoot = this.root;
+        const oldNextNodeId = this.nextNodeId;
+        const oldInodes = this.sharedState.inodeCount;
+        const oldEntries = this.sharedState.directoryEntries;
+        const oldBytes = this.sharedState.logicalBytes;
+        let newRoot: DirectoryNode;
+        let newInodes: number;
+        let newEntries: number;
+        let newBytes: number;
+        try {
+            this.sharedState.inodeCount = 0;
+            this.sharedState.directoryEntries = 0;
+            this.sharedState.logicalBytes = 0;
+            this.root = this.createDirectory("", null, 0o755);
+            this.addTree(this.root, tree);
+            newRoot = this.root;
+            newInodes = this.sharedState.inodeCount;
+            newEntries = this.sharedState.directoryEntries;
+            newBytes = this.sharedState.logicalBytes;
+        } catch (error) {
+            this.root = oldRoot;
+            this.nextNodeId = oldNextNodeId;
+            this.sharedState.inodeCount = oldInodes;
+            this.sharedState.directoryEntries = oldEntries;
+            this.sharedState.logicalBytes = oldBytes;
+            throw error;
+        }
+        this.root = oldRoot;
+        this.sharedState.inodeCount = oldInodes;
+        this.sharedState.directoryEntries = oldEntries;
+        this.sharedState.logicalBytes = oldBytes;
+        for (const engine of this.sharedState.engines) engine.clearFids();
+        this.root = newRoot;
+        this.sharedState.inodeCount = newInodes;
+        this.sharedState.directoryEntries = newEntries;
+        this.sharedState.logicalBytes = newBytes;
+        this.sharedState.locks = [];
         this.emit({ kind: "reset", path: "", source: "host" });
     }
 
@@ -441,8 +551,50 @@ export class ProtocolEngine {
             } else {
                 throw new TypeError(`invalid tree entry ${JSON.stringify(name)}`);
             }
-            parent.children[name] = node;
+            this.addEntry(parent, name, node);
         }
+    }
+
+    addEntry(parent: DirectoryNode, name: string, node: Node, cookie?: number): void {
+        this.checkCapacity(0, 1, 0);
+        parent.children[name] = node;
+        parent.cookies[name] = cookie ?? parent.nextCookie++;
+        node.linkCount += 1;
+        if (node.kind === "directory") {
+            node.parent = parent;
+            node.name = name;
+        }
+        this.sharedState.directoryEntries += 1;
+    }
+
+    removeEntry(parent: DirectoryNode, name: string): Node {
+        const node = this.child(parent, name);
+        delete parent.children[name];
+        delete parent.cookies[name];
+        this.sharedState.directoryEntries -= 1;
+        node.linkCount -= 1;
+        if (node.kind === "directory") node.parent = null;
+        this.collect(node);
+        return node;
+    }
+
+    collect(node: Node): void {
+        if (node.linkCount !== 0 || node.fidRefs !== 0) return;
+        this.sharedState.inodeCount -= 1;
+        if (node.kind === "file") this.sharedState.logicalBytes -= node.data.length;
+        this.sharedState.locks = this.sharedState.locks.filter((lock) => lock.inode !== node.id);
+    }
+
+    resize(node: FileNode, size: number): void {
+        if (size > this.sharedState.limits.maxFileBytes) {
+            throw new P9Error(EFBIG, "file exceeds the file limit");
+        }
+        const growth = size - node.data.length;
+        this.checkCapacity(0, 0, growth);
+        const data = new Uint8Array(size);
+        data.set(node.data.subarray(0, size));
+        node.data = data;
+        this.sharedState.logicalBytes += growth;
     }
 
     subscribe(listener: (change: P9Change) => void): () => void {
@@ -459,13 +611,21 @@ export class ProtocolEngine {
     }
 
     pathOf(node: Node): string {
-        const parts = [];
-        let current = node;
-        while (current !== this.root && current.parent !== null) {
-            parts.push(current.name);
-            current = current.parent;
-        }
-        return parts.reverse().join("/");
+        return this.pathsOf(node)[0] ?? "";
+    }
+
+    pathsOf(target: Node): string[] {
+        if (target === this.root) return [""];
+        const paths: string[] = [];
+        const visit = (directory: DirectoryNode, prefix: string): void => {
+            for (const [name, node] of Object.entries(directory.children)) {
+                const path = prefix === "" ? name : `${prefix}/${name}`;
+                if (node === target) paths.push(path);
+                if (node.kind === "directory") visit(node, path);
+            }
+        };
+        visit(this.root, "");
+        return paths.sort();
     }
 
     lookup(path: string): Node {
@@ -494,7 +654,7 @@ export class ProtocolEngine {
             let child = parent.children[part];
             if (child === undefined) {
                 child = this.createDirectory(part, parent, 0o755);
-                parent.children[part] = child;
+                this.addEntry(parent, part, child);
                 this.touch(parent);
             }
             if (child.kind !== "directory") {
@@ -515,20 +675,21 @@ export class ProtocolEngine {
 
     writeFile(path: string, content: FileContent, source: ChangeSource = "host"): void {
         const data = copyContent(content);
-        if (data.length > MAX_FILE_SIZE) {
-            throw new P9Error(EFBIG, `file ${JSON.stringify(path)} exceeds 16 MiB`);
+        if (data.length > this.sharedState.limits.maxFileBytes) {
+            throw new P9Error(EFBIG, `file ${JSON.stringify(path)} exceeds the file limit`);
         }
         const { parent, name } = this.ensureParent(path);
         const existing = parent.children[name];
         let kind: "write" | "create" = "write";
         if (existing === undefined) {
-            parent.children[name] = this.createFile(name, parent, data);
+            this.addEntry(parent, name, this.createFile(name, parent, data));
             kind = "create";
         } else {
             if (existing.kind !== "file") {
                 throw new P9Error(EISDIR, `${path} is not a regular file`);
             }
-            existing.data = data;
+            this.resize(existing, data.length);
+            existing.data.set(data);
             this.touch(existing);
         }
         this.touch(parent);
@@ -537,41 +698,46 @@ export class ProtocolEngine {
 
     remove(path: string, source: ChangeSource = "host"): void {
         const node = this.lookup(path);
-        if (node === this.root || node.parent === null) {
+        const parts = normalizedParts(path);
+        const name = parts.pop();
+        if (node === this.root || name === undefined) {
             throw new P9Error(EPERM, "cannot remove the root");
         }
         if (node.kind === "directory" && Object.keys(node.children).length !== 0) {
             throw new P9Error(ENOTEMPTY, "directory is not empty");
         }
         const oldPath = this.pathOf(node);
-        const parent = node.parent;
-        delete parent.children[node.name];
-        node.parent = null;
+        const parentNode = this.lookup(parts.join("/"));
+        const parent = this.directory(parentNode);
+        this.removeEntry(parent, name);
         this.touch(parent);
         this.emit({ kind: "remove", path: oldPath, source });
     }
 
     rename(oldPath: string, newPath: string, source: ChangeSource = "host"): void {
         const node = this.lookup(oldPath);
-        if (node === this.root || node.parent === null) {
+        const oldParts = normalizedParts(oldPath);
+        const oldName = oldParts.pop();
+        if (node === this.root || oldName === undefined) {
             throw new P9Error(EPERM, "cannot rename the root");
         }
         const destination = this.ensureParent(newPath);
-        this.moveNode(node.parent, node.name, destination.parent, destination.name, source);
+        this.moveNode(this.directory(this.lookup(oldParts.join("/"))), oldName, destination.parent, destination.name, source);
     }
 
     listFiles(): string[] {
         const result: string[] = [];
-        const visit = (directory: DirectoryNode): void => {
-            for (const node of Object.values(directory.children)) {
+        const visit = (directory: DirectoryNode, prefix: string): void => {
+            for (const [name, node] of Object.entries(directory.children)) {
+                const path = prefix === "" ? name : `${prefix}/${name}`;
                 if (node.kind === "directory") {
-                    visit(node);
+                    visit(node, path);
                 } else if (node.kind === "file") {
-                    result.push(this.pathOf(node));
+                    result.push(path);
                 }
             }
         };
-        visit(this.root);
+        visit(this.root, "");
         return result.sort();
     }
 
@@ -596,6 +762,36 @@ export class ProtocolEngine {
             throw new P9Error(EBADF, `unknown fid ${number}`);
         }
         return fid;
+    }
+
+    setFid(number: number, node: Node, flags = 0): void {
+        this.dropFid(number);
+        node.fidRefs += 1;
+        this.fids.set(number, { node, flags });
+    }
+
+    dropFid(number: number): void {
+        const fid = this.fids.get(number);
+        if (fid === undefined) return;
+        this.fids.delete(number);
+        fid.node.fidRefs -= 1;
+        this.collect(fid.node);
+    }
+
+    clearFids(): void {
+        for (const number of [...this.fids.keys()]) this.dropFid(number);
+    }
+
+    resetSession(): void {
+        this.clearFids();
+        this.sharedState.locks = this.sharedState.locks.filter(
+            (lock) => lock.session !== this.sessionId,
+        );
+    }
+
+    close(): void {
+        this.resetSession();
+        this.sharedState.engines.delete(this);
     }
 
     directory(node: Node): DirectoryNode {
@@ -658,7 +854,7 @@ export class ProtocolEngine {
             case 50: this.fsync(reader); return;
             case 52: this.lock(reader, writer); return;
             case 54: this.getlock(reader, writer); return;
-            case 70: throw new P9Error(EOPNOTSUPP, "hard links are not supported");
+            case 70: this.link(reader); return;
             case 72: this.mkdir(reader, writer); return;
             case 74: this.renameat(reader); return;
             case 76: this.unlinkat(reader); return;
@@ -675,13 +871,17 @@ export class ProtocolEngine {
 
     statfs(reader: Reader, writer: Writer): void {
         this.fid(reader.u32());
+        const blocks = Math.floor(this.sharedState.limits.maxTreeBytes / 4096);
+        const freeBlocks = Math.floor(
+            (this.sharedState.limits.maxTreeBytes - this.sharedState.logicalBytes) / 4096,
+        );
         writer.u32(0x01021997);
         writer.u32(4096);
-        writer.u64(0x100000);
-        writer.u64(0x0f0000);
-        writer.u64(0x0f0000);
-        writer.u64(0x100000);
-        writer.u64(0x0f0000);
+        writer.u64(blocks);
+        writer.u64(freeBlocks);
+        writer.u64(freeBlocks);
+        writer.u64(this.sharedState.limits.maxInodes);
+        writer.u64(this.sharedState.limits.maxInodes - this.sharedState.inodeCount);
         writer.u64(1);
         writer.u32(255);
     }
@@ -693,7 +893,7 @@ export class ProtocolEngine {
             if (fid.node.kind !== "file") {
                 throw new P9Error(EISDIR, "cannot truncate a directory");
             }
-            fid.node.data = new Uint8Array();
+            this.resize(fid.node, 0);
             this.touch(fid.node);
             this.emit({ kind: "write", path: this.pathOf(fid.node), source: "guest" });
         }
@@ -703,7 +903,8 @@ export class ProtocolEngine {
     }
 
     lcreate(reader: Reader, writer: Writer): void {
-        const fid = this.fid(reader.u32());
+        const fidNumber = reader.u32();
+        const fid = this.fid(fidNumber);
         const directory = this.directory(fid.node);
         const name = reader.string();
         const flags = reader.u32();
@@ -714,10 +915,9 @@ export class ProtocolEngine {
             throw new P9Error(EEXIST, "file already exists");
         }
         const node = this.createFile(name, directory, new Uint8Array(), mode);
-        directory.children[name] = node;
+        this.addEntry(directory, name, node);
         this.touch(directory);
-        fid.node = node;
-        fid.flags = flags;
+        this.setFid(fidNumber, node, flags);
         this.emit({ kind: "create", path: this.pathOf(node), source: "guest" });
         writer.qid(node);
         writer.u32(Math.max(0, this.msize - 24));
@@ -736,7 +936,7 @@ export class ProtocolEngine {
             throw new P9Error(EEXIST, "file already exists");
         }
         const node = this.createSymlink(name, directory, target);
-        directory.children[name] = node;
+        this.addEntry(directory, name, node);
         this.touch(directory);
         this.emit({ kind: "create", path: this.pathOf(node), source: "guest" });
         writer.qid(node);
@@ -758,7 +958,9 @@ export class ProtocolEngine {
         writer.u32(nodeMode(node));
         writer.u32(node.uid);
         writer.u32(node.gid);
-        writer.u64(node.kind === "directory" ? 2 + Object.values(node.children).filter((child) => child.kind === "directory").length : 1);
+        writer.u64(node.kind === "directory"
+            ? 2 + Object.values(node.children).filter((child) => child.kind === "directory").length
+            : node.linkCount);
         writer.u64(0);
         writer.u64(nodeSize(node));
         writer.u64(4096);
@@ -789,10 +991,7 @@ export class ProtocolEngine {
         if ((mask & 4) !== 0) node.gid = gid;
         if ((mask & 8) !== 0) {
             if (node.kind !== "file") throw new P9Error(EISDIR, "cannot resize a directory");
-            if (size > MAX_FILE_SIZE) throw new P9Error(EFBIG, "file exceeds 16 MiB");
-            const data = new Uint8Array(size);
-            data.set(node.data.subarray(0, size));
-            node.data = data;
+            this.resize(node, size);
             dataChanged = true;
             this.emit({ kind: "write", path: this.pathOf(node), source: "guest" });
         }
@@ -807,19 +1006,21 @@ export class ProtocolEngine {
         const directory = this.directory(this.fid(reader.u32()).node);
         const offset = reader.u64();
         const count = reader.u32();
-        const entries = Object.values(directory.children).sort((left, right) => left.name.localeCompare(right.name));
+        const entries = Object.entries(directory.children)
+            .map(([name, node]) => ({ name, node, cookie: directory.cookies[name] ?? 0 }))
+            .filter((entry) => entry.cookie > offset)
+            .sort((left, right) => left.cookie - right.cookie);
         const payload = new Writer(Math.min(count + 7, MAX_MESSAGE_SIZE), 0, 0);
         payload.offset = 0;
-        for (let index = offset; index < entries.length; index += 1) {
-            const node = entries[index];
-            if (node === undefined) break;
-            const encodedName = new TextEncoder().encode(node.name);
+        for (const entry of entries) {
+            const { node, name, cookie } = entry;
+            const encodedName = new TextEncoder().encode(name);
             const entrySize = 13 + 8 + 1 + 2 + encodedName.length;
             if (payload.offset + entrySize > count) break;
             payload.qid(node);
-            payload.u64(index + 1);
+            payload.u64(cookie);
             payload.u8(node.kind === "directory" ? 4 : node.kind === "symlink" ? 10 : 8);
-            payload.string(node.name);
+            payload.string(name);
         }
         writer.u32(payload.offset);
         writer.bytes(payload.data.subarray(0, payload.offset));
@@ -831,19 +1032,70 @@ export class ProtocolEngine {
     }
 
     lock(reader: Reader, writer: Writer): void {
-        this.fid(reader.u32());
-        reader.u8(); reader.u32(); reader.u64(); reader.u64(); reader.u32(); reader.string();
+        const node = this.fid(reader.u32()).node;
+        if (node.kind !== "file") throw new P9Error(EOPNOTSUPP, "locks require a regular file");
+        const type = reader.u8();
+        reader.u32();
+        const start = reader.u64();
+        const length = reader.u64();
+        const procId = reader.u32();
+        const clientId = reader.string();
+        if (type > 2) throw new P9Error(EINVAL, "invalid lock type");
+        if (type === 2) {
+            this.sharedState.locks = this.sharedState.locks.filter((lock) =>
+                !(lock.inode === node.id && lock.session === this.sessionId
+                    && lock.procId === procId && lock.clientId === clientId
+                    && rangesOverlap(lock.start, lock.length, start, length))
+            );
+            writer.u8(0);
+            return;
+        }
+        const conflict = this.sharedState.locks.find((lock) =>
+            lock.inode === node.id && lock.session !== this.sessionId
+            && (lock.type === 1 || type === 1)
+            && rangesOverlap(lock.start, lock.length, start, length)
+        );
+        if (conflict !== undefined) {
+            writer.u8(1);
+            return;
+        }
+        this.sharedState.locks.push({
+            inode: node.id, session: this.sessionId, type, start, length, procId, clientId,
+        });
         writer.u8(0);
     }
 
     getlock(reader: Reader, writer: Writer): void {
-        this.fid(reader.u32());
-        reader.u8(); reader.u64(); reader.u64(); reader.u32(); reader.string();
-        writer.u8(2);
-        writer.u64(0);
-        writer.u64(0);
-        writer.u32(0);
-        writer.string("");
+        const node = this.fid(reader.u32()).node;
+        if (node.kind !== "file") throw new P9Error(EOPNOTSUPP, "locks require a regular file");
+        const type = reader.u8();
+        const start = reader.u64();
+        const length = reader.u64();
+        reader.u32(); reader.string();
+        const conflict = this.sharedState.locks.find((lock) =>
+            lock.inode === node.id && lock.session !== this.sessionId
+            && (lock.type === 1 || type === 1)
+            && rangesOverlap(lock.start, lock.length, start, length)
+        );
+        writer.u8(conflict?.type ?? 2);
+        writer.u64(conflict?.start ?? 0);
+        writer.u64(conflict?.length ?? 0);
+        writer.u32(conflict?.procId ?? 0);
+        writer.string(conflict?.clientId ?? "");
+    }
+
+    link(reader: Reader): void {
+        const directory = this.directory(this.fid(reader.u32()).node);
+        const node = this.fid(reader.u32()).node;
+        const name = reader.string();
+        validateName(name);
+        if (node.kind === "directory") throw new P9Error(EPERM, "directory hard links are forbidden");
+        if (directory.children[name] !== undefined) throw new P9Error(EEXIST, "file already exists");
+        this.addEntry(directory, name, node);
+        this.touch(directory);
+        this.touch(node);
+        const directoryPath = this.pathOf(directory);
+        this.emit({ kind: "create", path: directoryPath === "" ? name : `${directoryPath}/${name}`, source: "guest" });
     }
 
     mkdir(reader: Reader, writer: Writer): void {
@@ -854,7 +1106,7 @@ export class ProtocolEngine {
         validateName(name);
         if (directory.children[name] !== undefined) throw new P9Error(EEXIST, "file already exists");
         const node = this.createDirectory(name, directory, mode);
-        directory.children[name] = node;
+        this.addEntry(directory, name, node);
         this.touch(directory);
         this.emit({ kind: "create", path: this.pathOf(node), source: "guest" });
         writer.qid(node);
@@ -896,13 +1148,20 @@ export class ProtocolEngine {
             if ((replaced.kind === "directory") !== (node.kind === "directory")) {
                 throw new P9Error(replaced.kind === "directory" ? EISDIR : ENOTDIR, "rename type mismatch");
             }
-            replaced.parent = null;
+            this.removeEntry(newDirectory, newName);
         }
         const oldPath = this.pathOf(node);
+        const oldCookie = oldDirectory.cookies[oldName];
         delete oldDirectory.children[oldName];
+        delete oldDirectory.cookies[oldName];
         newDirectory.children[newName] = node;
-        node.parent = newDirectory;
-        node.name = newName;
+        newDirectory.cookies[newName] = oldDirectory === newDirectory && oldCookie !== undefined
+            ? oldCookie
+            : newDirectory.nextCookie++;
+        if (node.kind === "directory") {
+            node.parent = newDirectory;
+            node.name = newName;
+        }
         this.touch(oldDirectory);
         if (newDirectory !== oldDirectory) this.touch(newDirectory);
         this.touch(node);
@@ -922,8 +1181,7 @@ export class ProtocolEngine {
             throw new P9Error(ENOTEMPTY, "directory is not empty");
         }
         const path = this.pathOf(node);
-        delete directory.children[name];
-        node.parent = null;
+        this.removeEntry(directory, name);
         this.touch(directory);
         this.emit({ kind: "remove", path, source: "guest" });
     }
@@ -933,7 +1191,7 @@ export class ProtocolEngine {
         const requestedSize = reader.u32();
         const version = reader.string();
         if (requestedSize < 256) throw new P9Error(EINVAL, "negotiated msize is too small");
-        this.fids.clear();
+        this.resetSession();
         this.msize = Math.min(requestedSize, MAX_MESSAGE_SIZE);
         writer.u32(this.msize);
         writer.string(version === "9P2000.L" ? version : "unknown");
@@ -946,7 +1204,7 @@ export class ProtocolEngine {
         reader.string();
         reader.u32();
         if (this.fids.has(fidNumber)) throw new P9Error(EEXIST, "fid already exists");
-        this.fids.set(fidNumber, { node: this.root, flags: 0 });
+        this.setFid(fidNumber, this.root);
         writer.qid(this.root);
     }
 
@@ -980,7 +1238,7 @@ export class ProtocolEngine {
                 break;
             }
         }
-        this.fids.set(newFidNumber, { node, flags: 0 });
+        this.setFid(newFidNumber, node);
         writer.u16(qids.length);
         for (const qid of qids) writer.qid(qid);
     }
@@ -1004,12 +1262,10 @@ export class ProtocolEngine {
         const node = fid.node;
         if (node.kind !== "file") throw new P9Error(EISDIR, "fid does not name a regular file");
         if ((fid.flags & O_APPEND) !== 0) offset = node.data.length;
-        if (offset + count > MAX_FILE_SIZE) throw new P9Error(EFBIG, "file exceeds 16 MiB");
+        if (offset + count > this.sharedState.limits.maxFileBytes) throw new P9Error(EFBIG, "file exceeds the file limit");
         const size = Math.max(node.data.length, offset + count);
-        const replacement = new Uint8Array(size);
-        replacement.set(node.data);
-        replacement.set(data, offset);
-        node.data = replacement;
+        this.resize(node, size);
+        node.data.set(data, offset);
         this.touch(node);
         this.emit({ kind: "write", path: this.pathOf(node), source: "guest" });
         writer.u32(count);
@@ -1018,7 +1274,7 @@ export class ProtocolEngine {
     clunk(reader: Reader): void {
         const fidNumber = reader.u32();
         this.fid(fidNumber);
-        this.fids.delete(fidNumber);
+        this.dropFid(fidNumber);
     }
 }
 
@@ -1114,7 +1370,7 @@ export class P9Session {
         this.closed = true;
         this.generation += 1;
         this.retireActive();
-        this.protocol.fids.clear();
+        this.protocol.close();
     }
 }
 

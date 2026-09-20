@@ -15,10 +15,16 @@ Operation matrix
 | `version`, `flush`, `attach`, `walk`, `lopen`, `lcreate` | Implemented |
 | `read`, `write`, `clunk`, `statfs`, `getattr`, `setattr` | Implemented |
 | `readdir`, `fsync`, `symlink`, `readlink`, `mkdir` | Implemented |
-| `renameat`, `unlinkat` | Implemented |
-| `lock`, `getlock` | Compatibility stubs; shared locking is milestone 4 |
-| `auth`, `mknod`, `xattrwalk`, `link`, and unknown operations | `EOPNOTSUPP` |
+| `link`, `renameat`, `unlinkat` | Implemented |
+| `lock`, `getlock` | Shared POSIX byte-range locks |
+| `auth`, `mknod`, `xattrwalk`, and unknown operations | `EOPNOTSUPP` |
 
-The current namespace retains the pre-project tree model and 16 MiB per-file
-limit. Inode identity, hard links, stable directory cookies, quotas, and shared
-locks belong to milestone 4.
+Directory entries refer to stable inode/QID identities. Regular-file hard links
+share contents and metadata, unlinked inodes remain live through open fids, and
+directory cookies are monotonic within each directory. A session close or
+`Tversion` releases its fids and byte-range locks.
+
+`MemoryFilesystem` accepts optional `maxFileBytes`, `maxTreeBytes`, `maxInodes`,
+and `maxDirectoryEntries` limits. Defaults are 256 MiB per file, 1 GiB of
+logical regular-file data, and 2^20 inodes and directory entries. File bytes are
+counted once per inode, including an open inode after its last link is removed.

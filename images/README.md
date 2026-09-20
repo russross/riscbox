@@ -17,6 +17,19 @@ Build either current image from its directory:
     cd images/alpine
     ./build.sh
 
+The `xv6-profile` definition is an offline boot workload for performance
+measurement. It builds the current xv6 kernel, excluding `fs.img`, as the
+unprivileged `test` user and powers off. Build it once, then collect matching
+Node/V8 profiles for the Rust and
+historical C WebAssembly runtimes:
+
+    images/xv6-profile/build.sh
+    tools/profile-xv6
+
+The profiler writes `.cpuprofile` files and guest console logs under
+`images/xv6-profile/build/profiles/` by default. Pass another directory as
+the profiler's sole argument when profiles should be retained elsewhere.
+
 The shared helpers under `bin/` download and verify the pinned Alpine
 minirootfs, consume the root-owned `kernel/linux` and Rust WASM build, boot
 setup scripts under QEMU with user networking, and assemble the deployment.

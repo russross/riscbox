@@ -4,6 +4,10 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Added a reproducible Alpine xv6 kernel-only compile image and Node/V8
+    profiling harness for comparable Rust Riscbox and archived TinyEMU WASM
+    runs. The image uses native guest RISC-V build tools, excludes `fs.img`,
+    and shuts down automatically after emitting a completion marker.
 *   Completed the browser network path with a dependency-free TypeScript
     WebSocket adapter and a documented binary Ethernet protocol. The adapter
     tracks carrier, bounds browser send buffering, validates messages, and

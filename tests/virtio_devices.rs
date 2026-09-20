@@ -4,8 +4,9 @@ use riscbox::memory::{AccessWidth, GuestAddress, PhysicalMemory, RamFlags};
 use riscbox::virtio::VirtioTransport;
 use riscbox::virtio_devices::{
     BlockBackend, BlockDevice, ConsoleDevice, DeviceError, EntropyDevice, InputDevice, InputEvent,
-    InputKind, NetworkBackend, NetworkDevice, NinePBackend, NinePDevice, NinePGeneration,
-    NinePOutcome, NinePRequestId, VirtioMmioDevice,
+    InputKind, MAX_NETWORK_FRAME_SIZE, MAX_PENDING_NETWORK_FRAMES, NetworkBackend, NetworkDevice,
+    NetworkIngress, NinePBackend, NinePDevice, NinePGeneration, NinePOutcome, NinePRequestId,
+    VirtioMmioDevice,
 };
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -383,6 +384,121 @@ fn network_strips_and_adds_the_ten_byte_header() {
         .receive_packet(&mut receive.transport, &mut memory, b"frame".to_vec())
         .unwrap();
     assert_eq!(&memory.arena()[0x400a..0x400f], b"frame");
+}
+
+#[test]
+fn network_carrier_updates_status_and_interrupts_only_on_transitions() {
+    let mut memory = test_memory();
+    let mut device = VirtioMmioDevice::new(
+        VirtioTransport::new(1, (1 << 5) | (1 << 16), &[8, 8]),
+        NetworkDevice::new(Net::default(), [2, 3, 4, 5, 6, 7]),
+    );
+    assert_eq!(device.read(0x104, AccessWidth::Word), 0x0000_0706);
+    assert_eq!(device.read(0x0fc, AccessWidth::Word), 0);
+
+    device.device.set_carrier(&mut device.transport, true);
+    assert!(device.device.carrier_is_up());
+    assert_eq!(device.read(0x106, AccessWidth::HalfWord), 1);
+    assert_eq!(device.read(0x060, AccessWidth::Word), 2);
+    assert_eq!(device.read(0x0fc, AccessWidth::Word), 1);
+    device.device.set_carrier(&mut device.transport, true);
+    assert_eq!(device.read(0x0fc, AccessWidth::Word), 1);
+
+    device
+        .write(&mut memory, 0x064, 2, AccessWidth::Word)
+        .expect("interrupt acknowledgement");
+    device.device.set_carrier(&mut device.transport, false);
+    assert_eq!(device.read(0x106, AccessWidth::HalfWord), 0);
+    assert_eq!(device.read(0x0fc, AccessWidth::Word), 2);
+}
+
+#[test]
+fn network_bounds_ingress_and_reset_discards_pending_frames() {
+    let mut memory = test_memory();
+    let mut device = VirtioMmioDevice::new(
+        VirtioTransport::new(1, 0, &[8, 8]),
+        NetworkDevice::new(Net::default(), [0; 6]),
+    );
+    assert_eq!(
+        device
+            .device
+            .receive_packet(&mut device.transport, &mut memory, Vec::new()),
+        Ok(NetworkIngress::Dropped)
+    );
+    assert_eq!(
+        device.device.receive_packet(
+            &mut device.transport,
+            &mut memory,
+            vec![0; MAX_NETWORK_FRAME_SIZE + 1],
+        ),
+        Ok(NetworkIngress::Dropped)
+    );
+    for value in 0..MAX_PENDING_NETWORK_FRAMES {
+        assert_eq!(
+            device.device.receive_packet(
+                &mut device.transport,
+                &mut memory,
+                vec![u8::try_from(value).expect("test byte"); 1],
+            ),
+            Ok(NetworkIngress::Accepted)
+        );
+    }
+    assert_eq!(device.device.pending_frames(), MAX_PENDING_NETWORK_FRAMES);
+    assert_eq!(
+        device
+            .device
+            .receive_packet(&mut device.transport, &mut memory, vec![0; 1]),
+        Ok(NetworkIngress::Dropped)
+    );
+
+    device
+        .write(&mut memory, 0x070, 0, AccessWidth::Word)
+        .expect("device reset");
+    assert_eq!(device.device.pending_frames(), 0);
+}
+
+#[test]
+fn network_drops_frames_that_do_not_fit_and_rejects_offload_headers() {
+    let mut memory = test_memory();
+    let mut receive = VirtioMmioDevice::new(
+        VirtioTransport::new(1, 0, &[8, 8]),
+        NetworkDevice::new(Net::default(), [0; 6]),
+    );
+    configure(&mut receive, &mut memory, 0);
+    descriptor(&mut memory, 0, DATA, 12, 2, 0);
+    available(&mut memory, 0);
+    assert_eq!(
+        receive
+            .device
+            .receive_packet(&mut receive.transport, &mut memory, b"frame".to_vec(),),
+        Ok(NetworkIngress::Accepted)
+    );
+    assert_eq!(
+        memory
+            .read(GuestAddress(USED + 2), AccessWidth::HalfWord)
+            .expect("used index"),
+        1
+    );
+    assert_eq!(
+        memory
+            .read(GuestAddress(USED + 8), AccessWidth::Word)
+            .expect("used length"),
+        0
+    );
+
+    let mut transmit = VirtioMmioDevice::new(
+        VirtioTransport::new(1, 0, &[8, 8]),
+        NetworkDevice::new(Net::default(), [0; 6]),
+    );
+    configure(&mut transmit, &mut memory, 1);
+    bytes(&mut memory, DATA, &[1, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    descriptor(&mut memory, 0, DATA, 10, 0, 0);
+    available(&mut memory, 0);
+    assert_eq!(
+        transmit.write(&mut memory, 0x50, 1, AccessWidth::Word),
+        Err(DeviceError::InvalidRequest)
+    );
+    assert!(transmit.device.backend().packets.is_empty());
 }
 
 #[derive(Default)]

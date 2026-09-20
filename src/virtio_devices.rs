@@ -1,7 +1,7 @@
 //! Synchronous `VirtIO` device protocols used by the browser platform.
 
 use core::fmt;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 
 use crate::entropy::SharedEntropy;
 use crate::memory::{AccessWidth, PhysicalMemory};
@@ -10,6 +10,10 @@ use crate::virtio::{DescriptorChain, QueueError, QueueIndex, VirtioTransport};
 const CONFIG_BASE: u32 = 0x100;
 const NET_HEADER_LEN: usize = 10;
 const ENTROPY_CHUNK_SIZE: usize = 65_536;
+
+pub const MAX_NETWORK_FRAME_SIZE: usize = 65_535;
+pub const MAX_PENDING_NETWORK_FRAMES: usize = 256;
+pub const MAX_PENDING_NETWORK_BYTES: usize = 1 << 20;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DeviceError {
@@ -484,6 +488,12 @@ pub trait NetworkBackend {
     fn transmit(&mut self, packet: &[u8]) -> Result<(), DeviceError>;
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NetworkIngress {
+    Accepted,
+    Dropped,
+}
+
 impl<T: NetworkBackend + ?Sized> NetworkBackend for Box<T> {
     fn transmit(&mut self, packet: &[u8]) -> Result<(), DeviceError> {
         (**self).transmit(packet)
@@ -492,18 +502,36 @@ impl<T: NetworkBackend + ?Sized> NetworkBackend for Box<T> {
 pub struct NetworkDevice<B> {
     backend: B,
     mac: [u8; 6],
-    receive: Vec<Vec<u8>>,
+    carrier_up: bool,
+    receive: VecDeque<Vec<u8>>,
+    receive_bytes: usize,
 }
 impl<B> NetworkDevice<B> {
     pub const fn new(backend: B, mac: [u8; 6]) -> Self {
         Self {
             backend,
             mac,
-            receive: Vec::new(),
+            carrier_up: false,
+            receive: VecDeque::new(),
+            receive_bytes: 0,
         }
     }
-    pub fn push_packet(&mut self, packet: Vec<u8>) {
-        self.receive.push(packet);
+
+    fn push_packet(&mut self, packet: Vec<u8>) -> NetworkIngress {
+        let within_byte_limit = self
+            .receive_bytes
+            .checked_add(packet.len())
+            .is_some_and(|total| total <= MAX_PENDING_NETWORK_BYTES);
+        if packet.is_empty()
+            || packet.len() > MAX_NETWORK_FRAME_SIZE
+            || self.receive.len() >= MAX_PENDING_NETWORK_FRAMES
+            || !within_byte_limit
+        {
+            return NetworkIngress::Dropped;
+        }
+        self.receive_bytes += packet.len();
+        self.receive.push_back(packet);
+        NetworkIngress::Accepted
     }
     /// Delivers a frame to an already posted receive chain.
     ///
@@ -515,18 +543,40 @@ impl<B> NetworkDevice<B> {
         transport: &mut VirtioTransport,
         memory: &mut PhysicalMemory,
         packet: Vec<u8>,
-    ) -> Result<(), DeviceError>
+    ) -> Result<NetworkIngress, DeviceError>
     where
         B: NetworkBackend,
     {
-        self.push_packet(packet);
-        if transport.status() & 4 == 0 {
-            return Ok(());
+        let ingress = self.push_packet(packet);
+        if ingress == NetworkIngress::Dropped {
+            return Ok(ingress);
         }
-        self.drain_receive(transport, memory)
+        if transport.status() & 4 == 0 {
+            return Ok(ingress);
+        }
+        self.drain_receive(transport, memory)?;
+        Ok(ingress)
     }
+
+    pub fn set_carrier(&mut self, transport: &mut VirtioTransport, up: bool) {
+        if self.carrier_up != up {
+            self.carrier_up = up;
+            transport.raise_config_interrupt();
+        }
+    }
+
     pub fn backend(&self) -> &B {
         &self.backend
+    }
+
+    #[must_use]
+    pub const fn carrier_is_up(&self) -> bool {
+        self.carrier_up
+    }
+
+    #[must_use]
+    pub fn pending_frames(&self) -> usize {
+        self.receive.len()
     }
 }
 impl<B: NetworkBackend> NetworkDevice<B> {
@@ -539,10 +589,15 @@ impl<B: NetworkBackend> NetworkDevice<B> {
             let Some(chain) = transport.next_chain(memory, QueueIndex(0))? else {
                 break;
             };
-            let packet = self.receive.remove(0);
+            let packet = self
+                .receive
+                .pop_front()
+                .expect("nonempty receive queue has a front frame");
+            self.receive_bytes -= packet.len();
             let total = NET_HEADER_LEN + packet.len();
             if total > chain.writable as usize {
-                return Err(DeviceError::InvalidRequest);
+                transport.complete_chain(memory, QueueIndex(0), &chain, 0)?;
+                continue;
             }
             transport.write_chain(memory, &chain, 0, &[0; NET_HEADER_LEN])?;
             transport.write_chain(memory, &chain, 10, &packet)?;
@@ -558,9 +613,16 @@ impl<B: NetworkBackend> NetworkDevice<B> {
 }
 impl<B: NetworkBackend> VirtioDevice for NetworkDevice<B> {
     fn read_config(&self, offset: u32, width: AccessWidth) -> u32 {
-        config_bytes(&self.mac, offset, width)
+        let mut config = [0; 8];
+        config[..6].copy_from_slice(&self.mac);
+        config[6..].copy_from_slice(&u16::from(self.carrier_up).to_le_bytes());
+        config_bytes(&config, offset, width)
     }
     fn write_config(&mut self, _: u32, _: u32, _: AccessWidth) {}
+    fn reset(&mut self) {
+        self.receive.clear();
+        self.receive_bytes = 0;
+    }
     fn notify(
         &mut self,
         transport: &mut VirtioTransport,
@@ -577,6 +639,9 @@ impl<B: NetworkBackend> VirtioDevice for NetworkDevice<B> {
                 }
                 let mut data = vec![0; chain.readable as usize];
                 transport.read_chain(memory, &chain, 0, &mut data)?;
+                if data[..NET_HEADER_LEN].iter().any(|byte| *byte != 0) {
+                    return Err(DeviceError::InvalidRequest);
+                }
                 self.backend.transmit(&data[NET_HEADER_LEN..])?;
                 0
             } else {

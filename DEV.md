@@ -66,10 +66,6 @@ work. Candidate measurements include interpreter hot paths, HTTP block request
 latency, 9p request/reply copy volume, concurrent request latency, resident and
 logical 9p tree sizes, and peak lazy-load memory.
 
-Investigate a synchronous 9p fast path only if measurements show the current
-promise boundary is material. It must preserve asynchronous custom servers,
-flush ordering, completion generation checks, and the no-reentry rule.
-
 Design and milestone format
 ---------------------------
 

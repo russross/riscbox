@@ -3,8 +3,7 @@ use riscbox::browser_runtime::{
     BrowserNineP, BrowserRuntime, HostAction, RuntimeError, RuntimeStart,
 };
 use riscbox::virtio_devices::{
-    NinePBackend, NinePEndpointId, NinePGeneration, NinePRequestId, NinePRequestStatus,
-    NinePTransportAction,
+    NinePBackend, NinePEndpointId, NinePGeneration, NinePRequestId, NinePTransportAction,
 };
 
 fn start() -> RuntimeStart {
@@ -267,12 +266,7 @@ fn configured_9p_servers_are_connected() {
         })
     );
     let message = [7, 0, 0, 0, 100, 1, 0];
-    assert_eq!(
-        backend
-            .transact(NinePRequestId(1), &message, 4096)
-            .expect("queued request"),
-        NinePRequestStatus::Pending
-    );
+    backend.submit(NinePRequestId(1), message.to_vec(), 4096);
     assert_eq!(
         backend.next_transport_action(),
         Some(NinePTransportAction::Request {
@@ -317,7 +311,6 @@ fn configured_9p_servers_are_connected() {
     );
     assert_eq!(runtime.next_action(), Some(HostAction::Started));
     assert_eq!(runtime.next_action(), Some(HostAction::Schedule(0)));
-
 }
 
 #[test]

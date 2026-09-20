@@ -14,7 +14,7 @@ use crate::machine::{
 };
 use crate::virtio_devices::{
     DeviceError, InputKind, NetworkBackend, NinePBackend, NinePEndpointId, NinePGeneration,
-    NinePOutcome, NinePRequestId, NinePRequestStatus, NinePTransportAction,
+    NinePOutcome, NinePRequestId, NinePTransportAction,
 };
 
 pub type EntropyCallback = Rc<RefCell<dyn FnMut(&mut [u8]) -> Result<(), EntropyError>>>;
@@ -55,20 +55,14 @@ impl BrowserNineP {
 }
 
 impl NinePBackend for BrowserNineP {
-    fn transact(
-        &mut self,
-        request_id: NinePRequestId,
-        request: &[u8],
-        reply_capacity: u32,
-    ) -> Result<NinePRequestStatus, DeviceError> {
+    fn submit(&mut self, request_id: NinePRequestId, request: Vec<u8>, reply_capacity: u32) {
         self.actions.push_back(NinePTransportAction::Request {
             endpoint: self.endpoint,
             generation: self.generation,
             request_id,
-            bytes: request.to_vec(),
+            bytes: request,
             reply_capacity,
         });
-        Ok(NinePRequestStatus::Pending)
     }
 
     fn reset(&mut self, generation: NinePGeneration) {
@@ -636,10 +630,8 @@ impl BrowserRuntime {
                 u32::try_from(index + 1)
                     .map_err(|_| RuntimeError::InvalidConfig("too many 9p endpoints".into()))?,
             );
-            let backend: Box<dyn NinePBackend> = Box::new(BrowserNineP::new(
-                endpoint,
-                filesystem.server.clone(),
-            ));
+            let backend: Box<dyn NinePBackend> =
+                Box::new(BrowserNineP::new(endpoint, filesystem.server.clone()));
             let slot = machine.add_ninep_device(backend, filesystem.tag.as_bytes())?;
             slots.push(slot);
             endpoints.insert(endpoint, slot);

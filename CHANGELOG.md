@@ -4,6 +4,9 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Simplified VirtIO 9p to one asynchronous request/completion model after the
+    last synchronous Rust backend was removed. Request buffers now move into
+    host actions while retained descriptors store only their protocol tags.
 *   Exposed VirtIO console resize notifications to browser hosts through
     `runtime.consoleResize()` and the raw `riscbox_console_resize` export.
 *   Consolidated project documentation around stable agent guidance,

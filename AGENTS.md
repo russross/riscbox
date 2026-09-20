@@ -70,13 +70,14 @@ prepared Alpine system through OpenSBI to login and clean shutdown. The browser
 adapter loads configuration, firmware, kernels, initrds, and split HTTP disks
 relative to the configuration URL. HTTP disk writes are session-local.
 
-VirtIO 9p is a generic concurrent transport. Rust validates descriptors and
-message envelopes but does not implement filesystem semantics. Each configured
-`{ server, tag }` endpoint gets an independent asynchronous session from the
-host registry. The supplied TypeScript server provides shared inode state,
-independent sessions, hard links, stable directory cookies, quotas, byte-range
-locks, explicit application results, and optional lazy seed loading. Do not
-restore the removed `file`, `socket`, or `js9p` configuration forms.
+VirtIO 9p is a generic concurrent asynchronous transport. Rust validates
+descriptors and message envelopes but does not implement filesystem semantics.
+Each configured `{ server, tag }` endpoint gets an independent asynchronous
+session from the host registry. The supplied TypeScript server provides shared
+inode state, independent sessions, hard links, stable directory cookies,
+quotas, byte-range locks, explicit application results, and optional lazy seed
+loading. Do not restore the removed `file`, `socket`, or `js9p` configuration
+forms.
 
 Architecture rules
 ------------------

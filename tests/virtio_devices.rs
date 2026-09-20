@@ -5,7 +5,7 @@ use riscbox::virtio::VirtioTransport;
 use riscbox::virtio_devices::{
     BlockBackend, BlockDevice, ConsoleDevice, DeviceError, EntropyDevice, InputDevice, InputEvent,
     InputKind, NetworkBackend, NetworkDevice, NinePBackend, NinePDevice, NinePGeneration,
-    NinePOutcome, NinePRequestId, NinePRequestStatus, VirtioMmioDevice,
+    NinePOutcome, NinePRequestId, VirtioMmioDevice,
 };
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -385,35 +385,14 @@ fn network_strips_and_adds_the_ten_byte_header() {
     assert_eq!(&memory.arena()[0x400a..0x400f], b"frame");
 }
 
-struct Echo9p;
-impl NinePBackend for Echo9p {
-    fn transact(
-        &mut self,
-        _: NinePRequestId,
-        request: &[u8],
-        _: u32,
-    ) -> Result<NinePRequestStatus, DeviceError> {
-        let mut r = request.to_vec();
-        r[4] = r[4].wrapping_add(1);
-        Ok(NinePRequestStatus::Complete(r))
-    }
-}
-
 #[derive(Default)]
 struct Pending9p {
     requests: Vec<(NinePRequestId, Vec<u8>, u32)>,
 }
 
 impl NinePBackend for Pending9p {
-    fn transact(
-        &mut self,
-        request_id: NinePRequestId,
-        request: &[u8],
-        reply_capacity: u32,
-    ) -> Result<NinePRequestStatus, DeviceError> {
-        self.requests
-            .push((request_id, request.to_vec(), reply_capacity));
-        Ok(NinePRequestStatus::Pending)
+    fn submit(&mut self, request_id: NinePRequestId, request: Vec<u8>, reply_capacity: u32) {
+        self.requests.push((request_id, request, reply_capacity));
     }
 }
 
@@ -641,7 +620,7 @@ fn ninep_validates_messages_and_input_emits_events() {
     let mut memory = test_memory();
     let mut p9 = VirtioMmioDevice::new(
         VirtioTransport::new(9, 1, &[8]),
-        NinePDevice::new(Echo9p, b"root"),
+        NinePDevice::new(Pending9p::default(), b"root"),
     );
     configure(&mut p9, &mut memory, 0);
     let request = [7, 0, 0, 0, 100, 0x34, 0x12];
@@ -650,6 +629,17 @@ fn ninep_validates_messages_and_input_emits_events() {
     descriptor(&mut memory, 1, DATA + 0x100, 7, 2, 0);
     available(&mut memory, 0);
     p9.write(&mut memory, 0x50, 0, AccessWidth::Word).unwrap();
+    let mut reply = request;
+    reply[4] += 1;
+    p9.device
+        .complete(
+            &mut p9.transport,
+            &mut memory,
+            p9.device.generation(),
+            NinePRequestId(1),
+            NinePOutcome::Reply(reply.to_vec()),
+        )
+        .unwrap();
     assert_eq!(
         &memory.arena()[0x4100..0x4107],
         &[7, 0, 0, 0, 101, 0x34, 0x12]

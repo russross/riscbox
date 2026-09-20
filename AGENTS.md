@@ -1,228 +1,173 @@
-Riscbox project direction
-=========================
+Riscbox project guide
+=====================
 
-This is a focused fork of TinyEMU for small RISC-V teaching and grading VMs in
-a web browser. The implementation stays lean and direct while moving the
-machine and CPU toward current standards.
+Purpose and scope
+-----------------
 
-Current Riscbox implementation
--------------------------------
+Riscbox is a focused RV64 virtual platform for small teaching and grading VMs
+in a web browser. It is a Rust successor to the repository's historical
+TinyEMU fork, not a general-purpose emulator. The production target is
+`wasm32-unknown-unknown`; native Rust builds are test runners and development
+tools, not a supported native emulator.
 
-Riscbox is the Rust implementation targeting WebAssembly in the browser. Read
-`PORTING.md` before making architectural changes; it records the architecture,
-milestone order, validation contract, and current status. Update its status and
-decision log at completed milestones or whenever a durable project assumption
-changes. The `c/` directory is the historical TinyEMU-derived C fork,
-preserved only as a reference archive. It is not the target of development,
-compatibility, parity, or new tests.
+The supported machine is deliberately narrow:
 
-Riscbox includes the RV64 CPU, memory system, virtual platform, browser
-loaders, and browser backends through the existing WASM integration boundary.
-It does not include a native Rust emulator, SDL, SLIRP, native filesystem and
-socket backends, or image-preparation tools. Native Rust builds are test
-runners only. The archived C tree is not a build dependency or validation
-surface for current work.
-
-Implement one bounded subsystem at a time. Start from the relevant RISC-V,
-device, and QEMU `virt` behavior, add focused Rust tests, and implement Riscbox
-until those tests pass. Specifications take precedence over historical behavior
-in the archived C tree. Reserve full guest boot validation for the completed
-platform, while running component and integration tests at every milestone.
-
-Riscbox implementation guidelines
-----------------------------------
-
-*   `wasm32-unknown-unknown` is the production target. Preserve the existing
-    browser API with a small handwritten JavaScript adapter; do not introduce
-    Emscripten, WASI, `wasm-bindgen`, or an async runtime into the Rust build.
-*   Keep guest virtual and physical addresses as `u64`. Use validated `u32`
-    offsets for storage in the fixed WASM memory arena. Keep JavaScript calls,
-    allocations, and uncommon checks out of cached CPU and RAM paths.
-*   Start with safe Rust. Add a small unsafe fast path only after a WASM
-    benchmark demonstrates a material benefit, and document its invariants.
-*   Keep dependencies few and inspect the complete transitive graph before
-    adding one. Prefer direct implementations for the interpreter, memory,
-    SoftFP, and configuration parser. The planned exception is narrowly
-    configured RustCrypto crates for the legacy encrypted HTTP filesystem.
-*   Use strong types for architectural state and host interfaces. Keep device
-    dispatch concrete and ownership explicit; avoid shared ownership and
-    interior mutability in the interpreter.
-*   Test native Rust for fast diagnostics and Rust WASM for deployed behavior.
-    Measure WASM throughput, module size, and memory use during milestones, but
-    correctness is the initial gate. The archived C tree is not part of this
-    validation contract.
-
-Supported scope
----------------
-
-*   RV64 only, with Sv39 virtual memory and one hart.
-*   A small QEMU `virt`-compatible platform for current xv6 and small Alpine
+*   One little-endian RV64 hart with M/S/U modes and Sv39.
+*   A small QEMU `virt`-compatible platform for current xv6 and prepared Alpine
     Linux systems.
-*   Browser deployment through WebAssembly. Native builds exist for fast image
-    preparation, iteration, and deeper correctness testing.
-*   A 16550A UART with standard serial-console behavior, plus an optional
-    VirtIO console. xv6 must work entirely over the UART. Linux may use the
-    VirtIO console while UART output exposes firmware and early kernel logs.
-*   VirtIO block, console, 9p, input, and existing network devices. The 9p path
-    favors simple browser integration over throughput. Do not expand networking
-    without an explicit change in scope.
-*   SDL framebuffer output suitable for an HTML canvas integration.
+*   A 16550A UART, optional VirtIO console, Goldfish RTC, PLIC, legacy CLINT,
+    SiFive test finisher, simple framebuffer, and VirtIO MMIO block, 9p,
+    network, entropy, keyboard, and tablet devices.
+*   Browser delivery through raw WebAssembly, a handwritten JavaScript adapter,
+    HTTP-backed disks, and host-provided 9P2000.L servers.
 
-The RISC-V specifications are the primary architectural reference. QEMU `virt`
-behavior is the next compatibility reference. RVA23 without vector instructions
-is the mid-term CPU goal; full RVA23 is only an eventual possibility. Vector and
-hypervisor support are deliberately out of scope.
+RV32, multiple harts, vectors, the hypervisor extension, PCIe, AIA, UEFI,
+general device emulation, a native UI, SDL, SLIRP, and native filesystem or
+socket backends are outside the current scope. Networking exists but is not a
+near-term expansion area. Add scope only when a target guest or deployment has
+a concrete need.
 
-Prefer standard features that are small, useful to Alpine or xv6, and unlikely
-to burden the interpreter. Defer features that are invasive or have little value
-for browser-hosted student VMs. Deployed images may be deliberately prepared,
-so new image and boot-loader paths must earn their complexity by materially
-improving preparation or compatibility. Linux already handles compressed
-initrds loaded opaquely by Riscbox; a well-supported boot-loader path remains a
-reasonable candidate, not a requirement.
+Repository map and terminology
+------------------------------
 
-Current platform contract
--------------------------
+*   `src/` is the authoritative emulator library: CPU, SoftFP, memory, machine,
+    devices, configuration, storage, and browser runtime.
+*   `riscbox-wasm/` supplies the small stable raw WASM export surface. Keep
+    unsafe boundary code isolated there; the main crate forbids unsafe code.
+*   `js/riscbox.js` is the dependency-free browser adapter for the raw ABI.
+*   `js/p9/` is the authoritative TypeScript 9P2000.L server, shared in-memory
+    filesystem, and optional seed plugins. Generated JavaScript and declarations
+    go under `build/js/p9/`.
+*   `images/` contains reproducible image definitions and deployment tooling.
+    Generated downloads, images, boot assets, and distributions are not source.
+*   `kernel/` owns the canonical custom Linux kernel consumed by image builds.
+*   `c/` is a read-only historical TinyEMU-derived archive. It is not an
+    implementation source, compatibility target, build dependency, parity
+    requirement, or validation surface.
+*   `README.md` is user-facing documentation. `DEV.md` holds only active plans,
+    future work, and deferred findings. `CHANGELOG.md` is the historical record.
 
-*   The generated device tree uses the standard header, reservation map,
-    structure, and strings layout expected by current libfdt consumers.
-*   The CPU exposes 16 standard RV64 PMP entries with 54-bit address registers.
-    PMP permissions cover explicit accesses and implicit page-table accesses
-    without adding checks to cached TLB hits.
-*   Sstc provides `stimecmp` and supervisor timer interrupts. Svadu exposes
-    `menvcfg.ADUE` and selects hardware A/D updates or Svade page faults. Both
-    extensions are reported through the device tree.
-*   The CPU reports Ssccptr, Sscounterenw, Sstvala, Sstvecd, and Ssu64xl. A
-    supervisor probe validates hardware Sv39 page-table reads, writable enables
-    for every implemented counter, complete trap values, direct trap vectors,
-    and hardwired 64-bit U-mode. Exceptions without a defined trap value clear
-    the value instead of retaining prior trap state.
-*   Svinval implements `SINVAL.VMA` with the existing conservative TLB flush.
-    Its two ordering-only fences are no-ops in the in-order one-hart model.
-    Privilege and TVM traps follow the standard, and Linux retains the reported
-    extension during boot.
-*   Svpbmt accepts standard NC and IO leaf PTEs when `menvcfg.PBMTE` is
-    enabled and faults on disabled, reserved, or non-leaf uses. The cacheless,
-    in-order memory model provides ordering at least as strong as either type;
-    PBMT does not add work to cached TLB hits. Linux retains the extension.
-*   Svnapot implements the ratified 64 KiB leaf-PTE encoding by substituting
-    four physical page-number bits during a page walk. Ordinary 4 KiB TLB
-    entries remain unchanged. Reserved encodings and upper-level uses fault,
-    and Linux retains the extension.
-*   Zicond implements both conditional-zero instructions and is reported
-    through the legacy and structured device-tree ISA properties.
-*   Zihintpause and Zihintntl are reported because their standard and
-    compressed encodings already execute as architectural no-ops.
-*   Zimop implements all 40 full-width may-be-operations, and Zcmop implements
-    all eight compressed may-be-operations while keeping adjacent reserved
-    encodings illegal.
-*   Zcb implements its RV64 compressed loads, stores, extensions, NOT, and
-    multiply operations. `c.sext.w` uses the standard existing `c.addiw rd,0`
-    alias.
-*   Zawrs implements both wait-on-reservation instructions as permitted
-    immediate completions, without adding scheduler or timing state.
-*   Zba implements all nine RV64 address-generation instructions.
-*   Zbb implements all 24 RV64 basic bit-manipulation instructions, including
-    the RV64 word forms and zero-extension alias.
-*   Zbs implements all eight single-bit manipulation instructions. With Zba,
-    Zbb, and Zbs complete, the CPU reports the combined `B` extension in `misa`
-    and both device-tree ISA properties.
-*   Zicbop reports a 64-byte cache-operation block and implements all prefetch
-    variants as architectural hints. Linux accepts the discovery data without
-    disabling the extension.
-*   Zicbom and Zicboz use 64-byte cache blocks. Cache management operations are
-    cacheless no-ops after standard translation and permission checks; cache
-    zeroing clears the complete block. `menvcfg` and `senvcfg` enforce the
-    standard lower-privilege controls, and faults report the original effective
-    address. OpenSBI and Linux discover and use the extensions successfully.
-*   The one-hart RAM model reports Ziccif, Ziccrse, Ziccamoa, Zicclsm, and
-    Za64rs. Linux accepts Ziccrse and uses its queued-spinlock path. Device-tree
-    ISA names follow the architecture's category order rather than lexical
-    order.
-*   Privilege returns restore their own level's interrupt-enable bit, and CSR
-    writes that enable an already-pending interrupt end the current interpreter
-    block. This is required for standard interrupt delivery between adjacent
-    guest instructions without adding work to the normal instruction path.
-*   The machine exposes the UART at `0x10000000`. `console: "uart"` connects
-    input and output there and omits the VirtIO console. With the default VirtIO
-    console, `uart_output: true` mirrors UART output to the host without routing
-    input to both devices.
-*   The QEMU-compatible Goldfish RTC at `0x00101000` exposes the host wall clock
-    and alarm interrupts on PLIC IRQ 11. Linux initializes its system clock from
-    the device in native and browser builds.
-*   VirtIO MMIO devices report QEMU's standard vendor ID. Current upstream xv6
-    boots from the UART, mounts its VirtIO block device, and passes its complete
-    user test suite.
-*   VirtIO block implements the standard 20-byte device identification request
-    and completes unsupported requests with `VIRTIO_BLK_S_UNSUPP`. A prepared
-    Alpine 3.24.2 system boots through OpenSBI, mounts its installation ISO,
-    reaches a UART login prompt, and shuts down cleanly.
-*   Native, debug, and browser release surfaces use the Riscbox name. Web assets
-    resolve firmware, kernel, initrd, disk, and 9p paths relative to the VM
-    configuration. The dependency-free example page boots Alpine to a UART
-    login prompt in current Chrome.
+In this repository, "native" means a Rust test or image-preparation execution
+environment. It does not imply a supported native emulator. "Browser runtime"
+means the Rust machine, raw WASM ABI, and JavaScript adapter together. A "9p
+server" implements protocol sessions; a "seed plugin" only supplies an initial
+namespace and lazy regular-file bodies to the provided in-memory server.
 
-Near-term priorities
+Current contract
+----------------
+
+The CPU implements RV64 I, M, A, F, D, C, and the advertised scalar extensions
+needed by the target guests. This includes the implemented B subsets, current
+counter and supervisor guarantees, PMP, Sstc, Svadu, Svinval, Svnapot, Svpbmt,
+cache-block operations, conditional operations, hints, may-be-operations, and
+wait-on-reservation. It is moving toward RVA23 where that is useful, but it is
+not RVA23 compliant because vectors and several other required extensions are
+intentionally absent. Advertise only implemented behavior.
+
+The generated device tree follows standard libfdt layout and QEMU `virt`
+bindings. The platform boots current xv6 over UART and VirtIO block and boots a
+prepared Alpine system through OpenSBI to login and clean shutdown. The browser
+adapter loads configuration, firmware, kernels, initrds, and split HTTP disks
+relative to the configuration URL. HTTP disk writes are session-local.
+
+VirtIO 9p is a generic concurrent transport. Rust validates descriptors and
+message envelopes but does not implement filesystem semantics. Each configured
+`{ server, tag }` endpoint gets an independent asynchronous session from the
+host registry. The supplied TypeScript server provides shared inode state,
+independent sessions, hard links, stable directory cookies, quotas, byte-range
+locks, explicit application results, and optional lazy seed loading. Do not
+restore the removed `file`, `socket`, or `js9p` configuration forms.
+
+Architecture rules
+------------------
+
+*   Specifications are authoritative. Use the relevant RISC-V specification
+    first and QEMU `virt` behavior second. Historical C behavior is evidence
+    only when investigating lineage.
+*   Keep guest virtual and physical addresses as `u64`. Store validated `u32`
+    offsets into the fixed WASM memory arena. Keep allocation, JavaScript calls,
+    and uncommon checks out of cached CPU and RAM paths.
+*   Start with safe Rust. Add a small unsafe fast path only after a WASM
+    benchmark shows a material benefit, and document its invariants.
+*   Keep architectural state and host interfaces strongly typed. Favor concrete
+    device ownership, shallow control flow, explicit dependencies, and immutable
+    values. Avoid shared ownership and interior mutability in the interpreter.
+*   Keep the raw WASM ABI and adapter small. Do not add Emscripten, WASI,
+    `wasm-bindgen`, an async Rust runtime, or adapter runtime dependencies.
+*   Keep dependencies exceptional. Inspect the complete resolved graph before
+    adding one. Prefer direct implementations for the interpreter, memory,
+    SoftFP, and configuration parser. The narrowly configured RustCrypto crates
+    remain only for encrypted split HTTP block images.
+*   Keep browser I/O explicit through request/completion and event queues.
+    Never retain a JavaScript view across an await or reenter borrowed Rust
+    runtime state from a host callback.
+*   Deploy boot payloads and split disks under content-derived names. Replace
+    the configuration last as the atomic rollout and retain old assets until an
+    explicit cleanup.
+
+Development workflow
 --------------------
 
-*   Keep current xv6 and a deliberately prepared current Alpine image booting
-    without emulator-specific guest patches. Use new guest failures to select
-    the next platform or CPU compatibility work.
-*   Fill small, broadly useful RVA23 gaps when focused architectural probes and
-    real guests can validate them. Continue to omit vectors, hypervisor support,
-    multiple harts, and features whose complexity does not serve the target VM.
-*   Tighten QEMU `virt` device-tree and platform parity where firmware or Linux
-    depends on it. Prefer correcting the existing platform over adding parallel
-    compatibility modes.
-*   Improve image preparation only when a small loader feature removes material
-    friction. Keep specially prepared uncompressed kernels and initrds as the
-    baseline; evaluate compressed initrds or a standard boot loader from actual
-    Alpine deployment needs.
+1.  Trace the affected path end to end before editing: guest-visible behavior,
+    Rust state and dispatch, raw ABI, JavaScript host integration, and image or
+    guest configuration where applicable.
+2.  Define one bounded subsystem or compatibility failure. Start from the
+    specification and add focused tests for meaningful behavior, edge cases,
+    malformed input, reset/lifetime behavior, and failure reporting.
+3.  Implement the smallest direct change. Preserve the interpreter and TLB hit
+    paths; place uncommon checks on writes, misses, or device paths when the
+    architecture permits it.
+4.  Validate native Rust first, then the WASM and JavaScript surfaces that can
+    differ. For guest compatibility work, also exercise the real guest or a
+    focused non-PIE firmware probe.
+5.  Update documentation in the same change, then make one focused commit with
+    an imperative one-line message.
 
-Build and validation
---------------------
+Do not convert a PIE ELF with sections near zero and `0x80000000` directly to a
+flat probe image: `objcopy` preserves the address gap and can create a
+multi-gigabyte sparse file. Link probes as non-PIE firmware or extract the
+intended loadable section explicitly.
 
-The root build is Rust-focused:
+Validation
+----------
 
-*   `make` or `make release` builds the optimized Rust workspace.
-*   `make test` runs Rust, Python tool, and JavaScript adapter tests; `make
-    check` also runs strict Clippy and Python type checks.
-*   `make wasm` builds the deployed Rust WebAssembly artifact, `make kernel`
-    builds the canonical custom kernel, and `make dist` builds both core
-    distribution artifacts.
-For CPU or platform changes, rebuild the Rust checks and WASM target from a
-clean tree when the milestone is ready. Exercise the affected behavior with a
-guest or focused firmware probe rather than relying on compilation alone. Current xv6 is the
-primary UART and supervisor-mode integration guest. Stock Alpine through OpenSBI
-is the primary Linux/platform compatibility path; U-Boot is useful compatibility
-coverage when its extra boot path is relevant.
+*   `make test` runs Rust, Python tool, and JavaScript adapter/server tests.
+*   `make check` adds strict Clippy and Python type checks.
+*   `make wasm` builds the deployed Rust WebAssembly artifact.
+*   `make kernel` builds the canonical custom kernel; `make dist` builds the
+    core WASM, JavaScript, and kernel artifacts.
 
-Bare-metal probe images must be linked as non-PIE firmware or extracted from
-the intended loadable section explicitly. Do not convert a PIE ELF with sections
-near zero and `0x80000000` directly to a flat binary: `objcopy` preserves the
-address gap and creates a multi-gigabyte sparse image.
+For CPU or platform milestones, run `make check` and rebuild WASM from a clean
+tree. Current xv6 is the primary UART and supervisor-mode integration guest.
+Prepared Alpine through OpenSBI is the primary Linux and platform guest. Run it
+through discovery, root-media access, userspace startup, login, and shutdown.
+U-Boot is additional coverage only when its boot path is relevant.
 
-Engineering guidelines
-----------------------
+Documentation lifecycle
+-----------------------
 
-*   Preserve the short, predictable interpreter and TLB hit paths. Put uncommon
-    architectural checks on CSR writes, translation misses, or device paths when
-    the standard permits it. Do not add speculative performance abstractions;
-    measure before tuning.
-*   Prefer direct data structures and shallow control flow. Platform drivers
-    prioritize simple, standard, correct behavior over cleverness.
-*   Keep changes incremental and focused. Test and commit each completed
-    milestone, then re-evaluate the next priority using what the guest exposed.
-*   For guest compatibility failures, trace the complete firmware, kernel, and
-    device transaction before changing code. Validate the fix with the real
-    guest plus a focused architectural probe when register semantics are at
-    issue. Run Linux through the debug build far enough to cover device
-    discovery, root-media access, userspace startup, login, and shutdown.
-*   All commit messages are one line and should match the existing imperative
-    style.
-*   Track source and durable project documentation only. Keep images, generated
-    boot assets, temporary firmware probes, and test configuration files out of
-    git.
-*   This repository is an exception to the system-wide read-only git rule.
-    Focused, high-confidence fixes should be committed automatically after
-    validation. Never use git checkout or reset to discard work.
+Documentation is part of every development milestone, not a later cleanup:
+
+*   Update `AGENTS.md` when project scope, terminology, repository ownership,
+    durable architecture decisions, workflow, or the current platform contract
+    changes. Keep it sufficient to start a fresh task without rediscovery.
+*   Update `README.md` when users gain or lose a feature, option, public API,
+    setup step, image workflow, or supported use case.
+*   Add completed user-visible work, compatibility changes, migrations,
+    measurements worth preserving, and durable implementation decisions to the
+    current `CHANGELOG.md` release section.
+*   Keep active designs, milestones, TODOs, and out-of-scope discoveries in
+    `DEV.md`. When work completes, remove its plan and move only lasting results
+    to `AGENTS.md`, `README.md`, or `CHANGELOG.md` as appropriate.
+*   Do not duplicate the same status narrative across files. Verify internal
+    links and search for stale terminology and removed interfaces before the
+    milestone commit.
+
+Repository policy
+-----------------
+
+Track source and durable documentation only. Keep VM images, generated boot
+assets, temporary probes, test configurations, and build outputs out of Git.
+This repository is an explicit exception to the general read-only Git rule:
+commit focused, high-confidence changes automatically after validation. Never
+use `git checkout` or `git reset` to discard work.

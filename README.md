@@ -118,12 +118,9 @@ Paths for boot files, disks, and network filesystems are relative to the configu
 *   `console: "virtio"` selects the VirtIO console. This is the default.
 *   `uart_output: true` mirrors early UART output while input remains attached to the selected VirtIO console.
 *   `driveN: { file: "...", device: "..." }` adds a VirtIO block device.
-*   `fsN: { js9p: true, tag: "..." }` connects the VirtIO device to an
-    independent asynchronous session from the `default` entry in the
-    `p9Servers` registry supplied to the browser adapter.
-*   `fsN: { file: "...", tag: "..." }` mounts a mutable HTTP-backed 9p tree.
-    Metadata loads from the legacy `head` and file-list layout; file bodies are
-    fetched on first access and guest changes remain in browser memory.
+*   `fsN: { server: "...", tag: "..." }` connects the VirtIO device to an
+    independent asynchronous session from the named entry in the `p9Servers`
+    registry supplied to the browser adapter.
 *   `display0: { device: "simplefb", width: 1024, height: 768 }` adds the simple framebuffer. `input_device: "virtio"` adds keyboard and tablet input.
 
 The browser HTTP block device keeps writes in memory.

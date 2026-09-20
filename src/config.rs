@@ -320,15 +320,8 @@ pub struct DriveConfig {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum FilesystemBackend {
-    File(String),
-    Socket(String),
-    JavaScript9p,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FilesystemConfig {
-    pub backend: FilesystemBackend,
+    pub server: String,
     pub tag: String,
 }
 
@@ -426,22 +419,17 @@ impl VmConfig {
                 break;
             };
             let entry = require_object(value, &name)?;
-            let file = optional_string(entry, "file")?;
-            let socket = optional_string(entry, "socket")?;
-            let js9p = optional_bool(entry, "js9p")?.unwrap_or(false);
-            let backend = match (file, socket, js9p) {
-                (Some(file), None, false) => FilesystemBackend::File(file.to_owned()),
-                (None, Some(socket), false) => FilesystemBackend::Socket(socket.to_owned()),
-                (None, None, true) => FilesystemBackend::JavaScript9p,
-                _ => {
-                    return Err(ConfigError(format!(
-                        "{name} must select exactly one backend"
-                    )));
+            let server = required_string(entry, "server")?.to_owned();
+            let tag = required_string(entry, "tag")?.to_owned();
+            if server.is_empty() || tag.is_empty() {
+                return Err(ConfigError(format!("{name} server and tag may not be empty")));
+            }
+            for legacy in ["file", "socket", "js9p"] {
+                if entry.contains_key(legacy) {
+                    return Err(ConfigError(format!("{name} contains legacy '{legacy}'")));
                 }
-            };
-            let tag =
-                optional_string(entry, "tag")?.map_or_else(|| default_fs_tag(index), str::to_owned);
-            filesystems.push(FilesystemConfig { backend, tag });
+            }
+            filesystems.push(FilesystemConfig { server, tag });
         }
         reject_over_limit(object, "fs", MAX_FILESYSTEMS)?;
 
@@ -518,14 +506,6 @@ pub fn resolve_asset_path(config_path: Option<&str>, asset_path: &str) -> String
         return asset_path.to_owned();
     };
     format!("{}{asset_path}", &config_path[..=slash])
-}
-
-fn default_fs_tag(index: usize) -> String {
-    if index == 0 {
-        "/dev/root".to_owned()
-    } else {
-        format!("/dev/root{index}")
-    }
 }
 
 fn require_object<'a>(

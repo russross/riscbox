@@ -78,7 +78,7 @@ to `riscbox.cfg` only when the host integration supplies their frontend:
 
 ```js
 {
-    fs0: { js9p: true, tag: "shared" },
+    fs0: { server: "workspace", tag: "shared" },
     eth0: { driver: "user" },
     display0: { device: "simplefb", width: 1024, height: 768 },
     input_device: "virtio",
@@ -94,8 +94,9 @@ backend with `driver: "tap"` and `ifname`.
 9p file sharing
 ---------------
 
-A browser-backed filesystem uses `js9p: true`. When instantiating the runtime,
-pass a `p9Servers` map. Each registered server creates an independent session
+A browser-backed filesystem names a registered server and mount tag with
+`{ server, tag }`. The former `file`, `socket`, and `js9p` forms are not
+accepted. When instantiating the runtime, pass a `p9Servers` map. Each registered server creates an independent session
 with asynchronous `request(request, replyCapacity)` and synchronous `close()`
 methods. The generated `build/js/p9/index.js` module provides
 `Memory9PServer`:
@@ -108,7 +109,7 @@ const server = new Memory9PServer({
 });
 
 const runtime = await Riscbox.instantiate(wasmBytes, {
-    p9Servers: new Map([["default", server]]),
+    p9Servers: new Map([["workspace", server]]),
 });
 ```
 

@@ -12,7 +12,6 @@ fn start() -> RuntimeStart {
         config_url: "https://host/vm/riscbox.cfg".into(),
         ram_mib: 32,
         command_line: "quiet".into(),
-        password: String::new(),
         width: 0,
         height: 0,
         has_network: false,
@@ -241,7 +240,7 @@ fn drive_manifest_precedes_machine_start_and_prefetch_requests_follow_it() {
 }
 
 #[test]
-fn javascript_and_http_9p_backends_are_connected() {
+fn configured_9p_servers_are_connected() {
     let mut backend = BrowserNineP::new(NinePEndpointId(7), "workspace".into());
     assert_eq!(
         backend.next_transport_action(),
@@ -292,7 +291,7 @@ fn javascript_and_http_9p_backends_are_connected() {
         .complete_http(
             config_id,
             200,
-            br#"{version:1,machine:"riscv64",memory_size:32,bios:"fw.bin",console:"uart",fs0:{js9p:true,tag:"shared"}}"#.to_vec(),
+            br#"{version:1,machine:"riscv64",memory_size:32,bios:"fw.bin",console:"uart",fs0:{server:"workspace",tag:"shared"},fs1:{server:"workspace",tag:"peer"}}"#.to_vec(),
         )
         .expect("JavaScript 9p configuration");
     let (firmware_id, _) = request(&mut runtime);
@@ -305,31 +304,20 @@ fn javascript_and_http_9p_backends_are_connected() {
         Some(HostAction::NineP(NinePTransportAction::Open {
             endpoint: NinePEndpointId(1),
             generation: NinePGeneration(1),
-            server_key: "default".into(),
+            server_key: "workspace".into(),
+        }))
+    );
+    assert_eq!(
+        runtime.next_action(),
+        Some(HostAction::NineP(NinePTransportAction::Open {
+            endpoint: NinePEndpointId(2),
+            generation: NinePGeneration(1),
+            server_key: "workspace".into(),
         }))
     );
     assert_eq!(runtime.next_action(), Some(HostAction::Started));
     assert_eq!(runtime.next_action(), Some(HostAction::Schedule(0)));
 
-    let mut http = BrowserRuntime::default();
-    let mut http_start = start();
-    http_start.password = "secret".into();
-    http.start(http_start).expect("start");
-    let (config_id, _) = request(&mut http);
-    http.complete_http(
-        config_id,
-        200,
-        br#"{version:1,machine:"riscv64",memory_size:32,bios:"fw.bin",fs0:{file:"root"}}"#.to_vec(),
-    )
-    .expect("configuration");
-    let (firmware_id, _) = request(&mut http);
-    http.complete_http(firmware_id, 200, vec![0; 64])
-        .expect("firmware");
-    assert!(http.is_running());
-    assert_eq!(http.next_action(), Some(HostAction::Started));
-    assert_eq!(http.next_action(), Some(HostAction::Schedule(0)));
-    let (_, url) = request(&mut http);
-    assert_eq!(url, "https://host/vm/root/head");
 }
 
 #[test]

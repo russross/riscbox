@@ -601,30 +601,11 @@ pub trait NinePBackend {
         reply_capacity: u32,
     ) -> Result<NinePRequestStatus, DeviceError>;
 
-    fn next_request(&mut self) -> Option<NinePHostRequest> {
-        None
-    }
-
-    /// Completes a host request previously returned by `next_request`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for an unknown request or invalid host response.
-    fn complete_request(&mut self, _: u32, _: Vec<u8>) -> Result<(), DeviceError> {
-        Err(DeviceError::Backend)
-    }
-
     fn reset(&mut self, _: NinePGeneration) {}
 
     fn next_transport_action(&mut self) -> Option<NinePTransportAction> {
         None
     }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct NinePHostRequest {
-    pub id: u32,
-    pub url: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -641,14 +622,6 @@ impl<T: NinePBackend + ?Sized> NinePBackend for Box<T> {
         reply_capacity: u32,
     ) -> Result<NinePRequestStatus, DeviceError> {
         (**self).transact(request_id, request, reply_capacity)
-    }
-
-    fn next_request(&mut self) -> Option<NinePHostRequest> {
-        (**self).next_request()
-    }
-
-    fn complete_request(&mut self, id: u32, data: Vec<u8>) -> Result<(), DeviceError> {
-        (**self).complete_request(id, data)
     }
 
     fn reset(&mut self, generation: NinePGeneration) {

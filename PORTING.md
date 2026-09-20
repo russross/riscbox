@@ -601,8 +601,8 @@ emitted modules.
     and HTTPS and tar example plugins. Exercise shared loads, failure and retry,
     whole-file replacement without a load, load/mutation races, loader length
     validation, deletion, hard-linked seeds, and immutable deployment pinning.
-6.  Remove the Rust `fs_net` path and the old configuration forms. Keep the C
-    reference unchanged. Run
+6.  **Complete:** remove the Rust `fs_net` path and the old configuration
+    forms. Keep the C reference unchanged. Run
     focused native transport and TypeScript tests, strict type checks, WASM
     builds, and headed Chrome guest tests. Boot Linux with two configured tags,
     verify sharing under documented cache modes, restart during outstanding
@@ -684,6 +684,20 @@ Implementation decisions
     total 64,896 bytes of JavaScript and 12,816 bytes of declarations. Request
     and reply copying at the WASM boundary is unchanged, and the optimized Rust
     WASM remains 411,449 bytes.
+*   2026-09-20: Make `{ server, tag }` the sole Rust filesystem configuration
+    form and reject the former `file`, `socket`, and `js9p` keys. Delete the
+    proprietary Rust HTTP 9p backend and its request, completion, password, and
+    WASM ABI paths; every browser filesystem now uses the generic concurrent
+    descriptor transport. Retain the crypto module because encrypted split HTTP
+    block images still use it. The C reference remains unchanged. Chrome 152
+    headless acceptance booted Linux with two tags backed by one server, mounted
+    them with `cache=mmap` and `cache=none`, observed mutations across clients,
+    unmounted and remounted one client, continued through the other after close,
+    and wrote successfully after a VM restart. Focused adapter and transport
+    tests cover outstanding asynchronous settlement across endpoint and device
+    generations, while seed tests cover load/mutation races. The emitted 9p
+    server remains 64,896 bytes of JavaScript and 12,816 bytes of declarations;
+    the adapter is 13,825 bytes and the optimized Rust WASM is 319,720 bytes.
 
 Later milestones (out of scope for now)
 ---------------------------------------

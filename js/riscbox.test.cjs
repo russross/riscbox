@@ -298,20 +298,19 @@ test("run passes complete epoch milliseconds across the 32-bit WASM ABI", () => 
     assert.deepEqual(calls, [[0xcc09_147b, 0x192]]);
 });
 
-test("vm_start compatibility call marshals strings and scalar options", () => {
+test("vm_start compatibility call marshals current strings and scalar options", () => {
     const fake = fakeModule();
     const runtime = new Riscbox(fake.exports);
     runtime.ccall(
         "vm_start", null,
-        ["string", "number", "string", "string", "number", "number", "number"],
-        ["https://host/vm.cfg", 256, "quiet", "secret", 640, 480, 1],
+        ["string", "number", "string", "number", "number", "number"],
+        ["https://host/vm.cfg", 256, "quiet", 640, 480, 1],
     );
     const call = fake.calls.find((entry) => entry[0] === "start");
     assert.deepEqual(call.slice(3, 4), [256]);
     assert.deepEqual(call.slice(-3), [640, 480, 1]);
     assert.equal(new TextDecoder().decode(runtime.bytes(call[1], call[2])), "https://host/vm.cfg");
     assert.equal(new TextDecoder().decode(runtime.bytes(call[4], call[5])), "quiet");
-    assert.equal(new TextDecoder().decode(runtime.bytes(call[6], call[7])), "secret");
 });
 
 test("input events use stable scalar exports", () => {

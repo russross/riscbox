@@ -100,17 +100,15 @@
             }
         }
 
-        start(configUrl, ramMiB, commandLine = "", password = "", width = 0,
+        start(configUrl, ramMiB, commandLine = "", width = 0,
               height = 0, hasNetwork = false) {
             this.configUrl = configUrl;
             const result = this.withBytes(configUrl, (urlPtr, urlLen) =>
                 this.withBytes(commandLine, (commandPtr, commandLen) =>
-                    this.withBytes(password ?? "", (passwordPtr, passwordLen) =>
-                        this.exports.riscbox_start(
-                            urlPtr, urlLen, ramMiB, commandPtr, commandLen,
-                            passwordPtr, passwordLen, width, height,
-                            hasNetwork ? 1 : 0,
-                        ))));
+                    this.exports.riscbox_start(
+                        urlPtr, urlLen, ramMiB, commandPtr, commandLen,
+                        width, height, hasNetwork ? 1 : 0,
+                    )));
             this.drainActions();
             return result;
         }
@@ -287,7 +285,7 @@
         ccall(name, returnType, argumentTypes, args = []) {
             if (name !== "vm_start")
                 throw new Error(`unsupported compatibility call: ${name}`);
-            if (returnType !== null || argumentTypes.length !== 7 || args.length !== 7)
+            if (returnType !== null || argumentTypes.length !== 6 || args.length !== 6)
                 throw new TypeError("vm_start compatibility signature mismatch");
             return this.start(...args);
         }

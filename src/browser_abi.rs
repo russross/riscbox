@@ -13,7 +13,6 @@ pub struct StartRequest {
     pub config_url: String,
     pub ram_mib: u32,
     pub command_line: String,
-    pub password: String,
     pub width: u32,
     pub height: u32,
     pub has_network: bool,
@@ -72,8 +71,6 @@ pub extern "C" fn riscbox_start(
     ram_mib: u32,
     command_address: u32,
     command_length: u32,
-    password_address: u32,
-    password_length: u32,
     width: u32,
     height: u32,
     has_network: u32,
@@ -85,9 +82,6 @@ pub extern "C" fn riscbox_start(
         let Some(command_line) = allocated_string(state, command_address, command_length) else {
             return -1;
         };
-        let Some(password) = allocated_string(state, password_address, password_length) else {
-            return -1;
-        };
         if config_url.is_empty() || ram_mib == 0 {
             return -1;
         }
@@ -95,7 +89,6 @@ pub extern "C" fn riscbox_start(
             config_url: config_url.clone(),
             ram_mib,
             command_line: command_line.clone(),
-            password: password.clone(),
             width,
             height,
             has_network: has_network != 0,
@@ -104,7 +97,6 @@ pub extern "C" fn riscbox_start(
             config_url,
             ram_mib,
             command_line,
-            password,
             width,
             height,
             has_network: has_network != 0,

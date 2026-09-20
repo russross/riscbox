@@ -1,6 +1,4 @@
-use riscbox::config::{
-    Console, FilesystemBackend, Value, VmConfig, parse_value, resolve_asset_path,
-};
+use riscbox::config::{Console, Value, VmConfig, parse_value, resolve_asset_path};
 
 const COMPLETE: &str = r#"
 {
@@ -15,8 +13,7 @@ const COMPLETE: &str = r#"
     console: "uart",
     uart_output: true,
     drive0: { file: "drive/blk.txt", device: "virtio" },
-    fs0: { file: "fs/head", },
-    fs1: { js9p: true, tag: "shared" },
+    fs0: { server: "workspace", tag: "shared" },
     eth0: { driver: "tap", ifname: "tap0" },
     display0: { device: "simplefb", width: 640, height: 480 },
     input_device: "virtio",
@@ -32,12 +29,8 @@ fn parses_deployed_syntax_and_complete_schema() {
     assert_eq!(config.console, Console::Uart);
     assert!(config.uart_output);
     assert_eq!(config.drives[0].file, "drive/blk.txt");
-    assert_eq!(config.filesystems[0].tag, "/dev/root");
-    assert_eq!(config.filesystems[1].tag, "shared");
-    assert_eq!(
-        config.filesystems[1].backend,
-        FilesystemBackend::JavaScript9p
-    );
+    assert_eq!(config.filesystems[0].server, "workspace");
+    assert_eq!(config.filesystems[0].tag, "shared");
     assert_eq!(config.networks[0].interface_name.as_deref(), Some("tap0"));
     assert_eq!(config.display.expect("display").width, 640);
     assert!(config.rtc_local_time);
@@ -81,6 +74,9 @@ fn applies_defaults_and_reports_schema_errors() {
         "{version:1,machine:\"riscv64\",memory_size:128,console:\"bad\"}",
         "{version:1,machine:\"riscv64\",memory_size:128,uart_output:1}",
         "{version:1,machine:\"riscv64\",memory_size:128,fs0:{js9p:true,file:\"x\"}}",
+        "{version:1,machine:\"riscv64\",memory_size:128,fs0:{js9p:true,tag:\"x\"}}",
+        "{version:1,machine:\"riscv64\",memory_size:128,fs0:{server:\"x\"}}",
+        "{version:1,machine:\"riscv64\",memory_size:128,fs0:{server:\"\",tag:\"x\"}}",
         "{version:1,machine:\"riscv64\",memory_size:128,eth0:{driver:\"tap\"}}",
     ] {
         assert!(VmConfig::parse(invalid).is_err(), "accepted {invalid}");

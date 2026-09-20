@@ -2,7 +2,7 @@
 
 use std::cell::RefCell;
 
-use crate::browser::BrowserController;
+use crate::browser::{BrowserController, NetworkInputResult};
 use crate::browser_runtime::{BrowserRuntime, EntropyCallback, HostAction, RuntimeStart};
 use crate::virtio_devices::{
     NinePEndpointId, NinePGeneration, NinePOutcome, NinePRequestId, NinePTransportAction,
@@ -155,8 +155,10 @@ pub extern "C" fn riscbox_network_input(address: u32, length: u32) -> i32 {
         let Some(bytes) = allocated_bytes(state, address, length).map(<[u8]>::to_vec) else {
             return -1;
         };
-        state.controller.network_packet(&bytes);
-        0
+        match state.controller.network_packet(&bytes) {
+            NetworkInputResult::Accepted => 0,
+            NetworkInputResult::Dropped => 1,
+        }
     })
 }
 

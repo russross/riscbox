@@ -7,6 +7,7 @@ use riscbox::machine::{
 };
 use riscbox::memory::{AccessWidth, GuestAddress};
 use riscbox::platform::FinishStatus;
+use riscbox::virtio_devices::{DeviceError, NetworkBackend, NetworkIngress};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -16,6 +17,15 @@ impl EntropySource for FixedEntropy {
     fn fill(&mut self, destination: &mut [u8]) -> Result<(), EntropyError> {
         destination.fill(self.0);
         self.0 = self.0.wrapping_add(1);
+        Ok(())
+    }
+}
+
+#[derive(Default)]
+struct Net;
+
+impl NetworkBackend for Net {
+    fn transmit(&mut self, _: &[u8]) -> Result<(), DeviceError> {
         Ok(())
     }
 }
@@ -43,6 +53,67 @@ fn virtio_slots_route_mmio_and_appear_in_the_device_tree() {
             .expect("VirtIO magic"),
         0x7472_6976
     );
+    let layout = machine
+        .load_boot(BootImages {
+            firmware: &[0; 64],
+            kernel: None,
+            initrd: None,
+            command_line: "",
+        })
+        .expect("boot layout");
+    let tree = machine
+        .read_ram(layout.fdt_address, layout.fdt_size as usize)
+        .expect("FDT RAM");
+    let node = b"virtio@10001000";
+    assert!(tree.windows(node.len()).any(|window| window == node));
+}
+
+#[test]
+fn network_slot_has_standard_features_carrier_and_fdt_discovery() {
+    let entropy = Rc::new(RefCell::new(FixedEntropy(0x40)));
+    let mut machine = Machine::new_with_entropy(
+        MachineConfig {
+            ram_size: 64 << 20,
+            framebuffer: None,
+        },
+        entropy,
+    )
+    .expect("valid machine");
+    let first_mac = machine.generate_network_mac().expect("first MAC");
+    let second_mac = machine.generate_network_mac().expect("second MAC");
+    assert_ne!(first_mac, second_mac);
+    assert_eq!(first_mac[0] & 3, 2);
+    assert_eq!(second_mac[0] & 3, 2);
+
+    let slot = machine
+        .add_network_device(Box::new(Net), first_mac)
+        .expect("network slot");
+    assert_eq!(slot, 0);
+    let mmio = VIRTIO_BASE;
+    assert_eq!(
+        machine
+            .bus_mut()
+            .read(GuestAddress(mmio + 0x10), AccessWidth::Word)
+            .expect("network features"),
+        (1 << 5) | (1 << 16)
+    );
+    machine
+        .virtio_network_set_carrier(slot, true)
+        .expect("carrier up");
+    assert_eq!(
+        machine
+            .bus_mut()
+            .read(GuestAddress(mmio + 0x106), AccessWidth::HalfWord)
+            .expect("network status"),
+        1
+    );
+    assert_eq!(
+        machine
+            .virtio_network_receive(slot, Vec::new())
+            .expect("nonfatal invalid host frame"),
+        NetworkIngress::Dropped
+    );
+
     let layout = machine
         .load_boot(BootImages {
             firmware: &[0; 64],

@@ -1,4 +1,4 @@
-use riscbox::config::{Console, Value, VmConfig, parse_value, resolve_asset_path};
+use riscbox::config::{Console, NetworkDriver, Value, VmConfig, parse_value, resolve_asset_path};
 
 const COMPLETE: &str = r#"
 {
@@ -14,7 +14,7 @@ const COMPLETE: &str = r#"
     uart_output: true,
     drive0: { file: "drive/blk.txt", device: "virtio" },
     fs0: { server: "workspace", tag: "shared" },
-    eth0: { driver: "tap", ifname: "tap0" },
+    eth0: { driver: "user" },
     display0: { device: "simplefb", width: 640, height: 480 },
     input_device: "virtio",
     rtc_local_time: true,
@@ -31,7 +31,7 @@ fn parses_deployed_syntax_and_complete_schema() {
     assert_eq!(config.drives[0].file, "drive/blk.txt");
     assert_eq!(config.filesystems[0].server, "workspace");
     assert_eq!(config.filesystems[0].tag, "shared");
-    assert_eq!(config.networks[0].interface_name.as_deref(), Some("tap0"));
+    assert_eq!(config.networks[0].driver, NetworkDriver::User);
     assert_eq!(config.display.expect("display").width, 640);
     assert!(config.rtc_local_time);
 }
@@ -78,6 +78,7 @@ fn applies_defaults_and_reports_schema_errors() {
         "{version:1,machine:\"riscv64\",memory_size:128,fs0:{server:\"x\"}}",
         "{version:1,machine:\"riscv64\",memory_size:128,fs0:{server:\"\",tag:\"x\"}}",
         "{version:1,machine:\"riscv64\",memory_size:128,eth0:{driver:\"tap\"}}",
+        "{version:1,machine:\"riscv64\",memory_size:128,eth0:{driver:\"user\",ifname:\"tap0\"}}",
     ] {
         assert!(VmConfig::parse(invalid).is_err(), "accepted {invalid}");
     }

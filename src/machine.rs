@@ -13,8 +13,8 @@ use crate::platform::{Clint, FinishStatus, Finisher, GoldfishRtc, Plic, Uart1655
 use crate::virtio::{MMIO_SIZE, VirtioTransport};
 use crate::virtio_devices::{
     BlockBackend, BlockDevice, ConsoleDevice, DeviceError, EntropyDevice, InputDevice, InputKind,
-    NetworkBackend, NetworkDevice, NinePBackend, NinePDevice, NinePGeneration, NinePOutcome,
-    NinePRequestId, NinePTransportAction, VirtioMmioDevice,
+    NetworkBackend, NetworkDevice, NetworkIngress, NinePBackend, NinePDevice, NinePGeneration,
+    NinePOutcome, NinePRequestId, NinePTransportAction, VirtioMmioDevice,
 };
 
 pub const RAM_BASE: u64 = 0x8000_0000;
@@ -499,9 +499,21 @@ impl Machine {
         mac: [u8; 6],
     ) -> Result<usize, MachineError> {
         self.add_virtio(VirtioSlot::Network(VirtioMmioDevice::new(
-            VirtioTransport::new(1, 1 << 5, &[16, 16]),
+            VirtioTransport::new(1, (1 << 5) | (1 << 16), &[16, 16]),
             NetworkDevice::new(backend, mac),
         )))
+    }
+
+    /// Generates a locally administered unicast MAC address from machine entropy.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the host entropy source fails.
+    pub fn generate_network_mac(&mut self) -> Result<[u8; 6], MachineError> {
+        let mut mac = [0; 6];
+        self.entropy.borrow_mut().fill(&mut mac)?;
+        mac[0] = (mac[0] | 0x02) & 0xfe;
+        Ok(mac)
     }
 
     /// Adds a raw-protocol `VirtIO` 9p device and returns its MMIO slot.
@@ -886,7 +898,7 @@ impl Machine {
         &mut self,
         slot: usize,
         packet: Vec<u8>,
-    ) -> Result<(), MachineError> {
+    ) -> Result<NetworkIngress, MachineError> {
         let PlatformBus { memory, virtio, .. } = &mut self.bus;
         let VirtioSlot::Network(device) = virtio
             .get_mut(slot)
@@ -894,9 +906,32 @@ impl Machine {
         else {
             return Err(MachineError::WrongVirtioDevice);
         };
-        device
+        let ingress = device
             .device
             .receive_packet(&mut device.transport, memory, packet)?;
+        self.bus.update_device_irqs();
+        Ok(ingress)
+    }
+
+    /// Updates the host carrier state of a `VirtIO` network slot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid slot or wrong device type.
+    pub fn virtio_network_set_carrier(
+        &mut self,
+        slot: usize,
+        up: bool,
+    ) -> Result<(), MachineError> {
+        let device = self
+            .bus
+            .virtio
+            .get_mut(slot)
+            .ok_or(MachineError::WrongVirtioDevice)?;
+        let VirtioSlot::Network(device) = device else {
+            return Err(MachineError::WrongVirtioDevice);
+        };
+        device.device.set_carrier(&mut device.transport, up);
         self.bus.update_device_irqs();
         Ok(())
     }

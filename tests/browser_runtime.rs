@@ -156,7 +156,7 @@ fn virtio_input_before_driver_initialization_is_buffered() {
         .complete_http(
             config_id,
             200,
-            br#"{version:1,machine:"riscv64",memory_size:32,bios:"fw.bin",console:"virtio",input_device:"virtio",net0:{driver:"virtio",ifname:"eth0"}}"#.to_vec(),
+            br#"{version:1,machine:"riscv64",memory_size:32,bios:"fw.bin",console:"virtio",input_device:"virtio",eth0:{driver:"user"}}"#.to_vec(),
         )
         .expect("configuration");
     let (firmware_id, _) = request(&mut runtime);
@@ -170,7 +170,10 @@ fn virtio_input_before_driver_initialization_is_buffered() {
     controller.queue_console(b"x");
     controller.key_event(true, 30);
     controller.pointer_event(50, 60, 0);
-    controller.network_packet(b"frame");
+    assert_eq!(
+        controller.network_packet(b"frame"),
+        riscbox::browser::NetworkInputResult::Accepted
+    );
     runtime.run(&mut controller, 0, 0).expect("execution slice");
     assert_eq!(runtime.next_action(), Some(HostAction::Schedule(10)));
 }

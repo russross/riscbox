@@ -2,7 +2,17 @@
 
 use std::collections::VecDeque;
 
+use crate::virtio_devices::{
+    MAX_NETWORK_FRAME_SIZE, MAX_PENDING_NETWORK_BYTES, MAX_PENDING_NETWORK_FRAMES,
+};
+
 pub const CONSOLE_INPUT_CAPACITY: usize = 1024;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NetworkInputResult {
+    Accepted,
+    Dropped,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct TerminalSize {
@@ -41,6 +51,8 @@ pub struct BrowserController {
     pointer_y: u32,
     pointer_buttons: u32,
     network_carrier: bool,
+    network_frames: usize,
+    network_bytes: usize,
 }
 
 impl Default for BrowserController {
@@ -53,6 +65,8 @@ impl Default for BrowserController {
             pointer_y: 0,
             pointer_buttons: 0,
             network_carrier: false,
+            network_frames: 0,
+            network_bytes: 0,
         }
     }
 }
@@ -121,9 +135,23 @@ impl BrowserController {
     }
 
     /// Queues one packet received from the browser network backend.
-    pub fn network_packet(&mut self, packet: &[u8]) {
+    pub fn network_packet(&mut self, packet: &[u8]) -> NetworkInputResult {
+        let within_byte_limit = self
+            .network_bytes
+            .checked_add(packet.len())
+            .is_some_and(|total| total <= MAX_PENDING_NETWORK_BYTES);
+        if packet.is_empty()
+            || packet.len() > MAX_NETWORK_FRAME_SIZE
+            || self.network_frames >= MAX_PENDING_NETWORK_FRAMES
+            || !within_byte_limit
+        {
+            return NetworkInputResult::Dropped;
+        }
         self.events
             .push_back(BrowserEvent::NetworkPacket(packet.to_vec()));
+        self.network_frames += 1;
+        self.network_bytes += packet.len();
+        NetworkInputResult::Accepted
     }
 
     /// Records and queues a browser network carrier transition.
@@ -139,7 +167,12 @@ impl BrowserController {
 
     /// Removes the oldest pending browser event.
     pub fn next_event(&mut self) -> Option<BrowserEvent> {
-        self.events.pop_front()
+        let event = self.events.pop_front()?;
+        if let BrowserEvent::NetworkPacket(packet) = &event {
+            self.network_frames -= 1;
+            self.network_bytes -= packet.len();
+        }
+        Some(event)
     }
 }
 

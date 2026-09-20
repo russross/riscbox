@@ -326,9 +326,13 @@ pub struct FilesystemConfig {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub enum NetworkDriver {
+    User,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NetworkConfig {
-    pub driver: String,
-    pub interface_name: Option<String>,
+    pub driver: NetworkDriver,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -422,7 +426,9 @@ impl VmConfig {
             let server = required_string(entry, "server")?.to_owned();
             let tag = required_string(entry, "tag")?.to_owned();
             if server.is_empty() || tag.is_empty() {
-                return Err(ConfigError(format!("{name} server and tag may not be empty")));
+                return Err(ConfigError(format!(
+                    "{name} server and tag may not be empty"
+                )));
             }
             for legacy in ["file", "socket", "js9p"] {
                 if entry.contains_key(legacy) {
@@ -440,15 +446,15 @@ impl VmConfig {
                 break;
             };
             let entry = require_object(value, &name)?;
-            let network_driver = required_string(entry, "driver")?.to_owned();
-            let interface_name = if network_driver == "tap" {
-                Some(required_string(entry, "ifname")?.to_owned())
-            } else {
-                optional_string(entry, "ifname")?.map(str::to_owned)
+            let network_driver = match required_string(entry, "driver")? {
+                "user" => NetworkDriver::User,
+                _ => return Err(ConfigError(format!("{name} driver must be 'user'"))),
             };
+            if entry.contains_key("ifname") {
+                return Err(ConfigError(format!("{name} contains unsupported 'ifname'")));
+            }
             networks.push(NetworkConfig {
                 driver: network_driver,
-                interface_name,
             });
         }
         reject_over_limit(object, "eth", MAX_NETWORK_INTERFACES)?;

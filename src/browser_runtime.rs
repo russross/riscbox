@@ -168,6 +168,51 @@ struct Running {
     pending_http: BTreeMap<u32, PendingHttp>,
 }
 
+impl Running {
+    fn deliver_event(&mut self, event: BrowserEvent) -> Result<(), MachineError> {
+        match event {
+            BrowserEvent::Key(event) => {
+                if let Some(slot) = self.keyboard_slot {
+                    self.machine
+                        .virtio_key_event(slot, event.code, event.pressed)?;
+                }
+            }
+            BrowserEvent::Pointer(event) => {
+                if let Some(slot) = self.pointer_slot {
+                    let position =
+                        self.pointer_dimensions
+                            .map_or((event.x, event.y), |(width, height)| {
+                                (
+                                    scale_pointer_coordinate(event.x, width),
+                                    scale_pointer_coordinate(event.y, height),
+                                )
+                            });
+                    self.machine.virtio_pointer_event(
+                        slot,
+                        (
+                            i32::try_from(position.0).unwrap_or(i32::MAX),
+                            i32::try_from(position.1).unwrap_or(i32::MAX),
+                        ),
+                        event.wheel,
+                        event.buttons,
+                    )?;
+                }
+            }
+            BrowserEvent::NetworkPacket(packet) => {
+                if let Some(slot) = self.network_slot {
+                    self.machine.virtio_network_receive(slot, packet)?;
+                }
+            }
+            BrowserEvent::NetworkCarrier(up) => {
+                if let Some(slot) = self.network_slot {
+                    self.machine.virtio_network_set_carrier(slot, up)?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
 enum PendingHttp {
     Block { slot: usize, request: u32 },
 }
@@ -419,43 +464,7 @@ impl BrowserRuntime {
             }
         }
         while let Some(event) = controller.next_event() {
-            match event {
-                BrowserEvent::Key(event) => {
-                    if let Some(slot) = running.keyboard_slot {
-                        running
-                            .machine
-                            .virtio_key_event(slot, event.code, event.pressed)?;
-                    }
-                }
-                BrowserEvent::Pointer(event) => {
-                    if let Some(slot) = running.pointer_slot {
-                        let position = running.pointer_dimensions.map_or(
-                            (event.x, event.y),
-                            |(width, height)| {
-                                (
-                                    scale_pointer_coordinate(event.x, width),
-                                    scale_pointer_coordinate(event.y, height),
-                                )
-                            },
-                        );
-                        running.machine.virtio_pointer_event(
-                            slot,
-                            (
-                                i32::try_from(position.0).unwrap_or(i32::MAX),
-                                i32::try_from(position.1).unwrap_or(i32::MAX),
-                            ),
-                            event.wheel,
-                            event.buttons,
-                        )?;
-                    }
-                }
-                BrowserEvent::NetworkPacket(packet) => {
-                    if let Some(slot) = running.network_slot {
-                        running.machine.virtio_network_receive(slot, packet)?;
-                    }
-                }
-                BrowserEvent::NetworkCarrier(_) => {}
-            }
+            running.deliver_event(event)?;
         }
         running.machine.update_time(timer_ticks, host_nanoseconds);
         for _ in 0..self.policy.blocks_per_slice() {
@@ -577,10 +586,10 @@ impl BrowserRuntime {
         };
         let network_output = Rc::new(RefCell::new(VecDeque::new()));
         let network_slot = if loading.start.has_network && !config.networks.is_empty() {
-            Some(machine.add_network_device(
-                Box::new(OutputNetwork(network_output.clone())),
-                [0x02, 0, 0, 0, 0, 1],
-            )?)
+            let mac = machine.generate_network_mac()?;
+            let slot =
+                machine.add_network_device(Box::new(OutputNetwork(network_output.clone())), mac)?;
+            Some(slot)
         } else {
             None
         };

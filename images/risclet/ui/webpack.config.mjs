@@ -18,6 +18,7 @@ export default {
     },
     resolve: {
         extensions: [".ts", ".js"],
+        extensionAlias: { ".js": [".ts", ".js"] },
         modules: [path.resolve(directory, "node_modules"), "node_modules"],
     },
 };

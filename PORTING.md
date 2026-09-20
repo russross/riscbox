@@ -194,10 +194,10 @@ Decision log
 Proposed 9p transport and filesystem design
 ------------------------------------------
 
-Status: implementation in progress. Milestones 1 and 2, the concurrent Rust
-transport core and asynchronous browser endpoint boundary, are complete. The
-TypeScript build and filesystem/session ownership split are the next milestone.
-The completed milestones and decision log above describe the pre-project
+Status: implementation in progress. Milestones 1 through 3 are complete through
+the TypeScript server build and filesystem/session ownership split. Inode-backed
+namespace semantics, quotas, and shared locks are the next milestone. The
+completed milestones and decision log above describe the pre-project
 implementation where this section has not yet superseded it.
 
 ### Scope and ownership
@@ -358,9 +358,9 @@ Split the supplied implementation into these concrete owners:
 | Seed loader | Immutable namespace entries plus one asynchronous regular-file body loader |
 | Application facade | Synchronous tree operations, explicit loading, and subscriptions over the same filesystem |
 
-The current `Memory9PServer` combines the first and second owners, so registering
-the same instance with two VMs is insufficient: their fid and tag namespaces
-would collide. `connect()` creates separate protocol state over one filesystem.
+The former `Memory9PServer` combined the first and second owners. Milestone 3
+separates them: `connect()` creates distinct protocol state over one filesystem,
+so two VMs may reuse the same fid and tag values without collisions.
 `Tversion` resets only its session. Stable inode identity preserves references
 across rename and unlink; storage remains alive while referenced by open fids.
 Do not equate inode identity with a pathname. Never reuse a QID path during a
@@ -589,8 +589,8 @@ emitted modules.
     actions, the raw WASM ABI, and the JavaScript adapter. Test queue saturation, two
     endpoints, VM restart, endpoint failure, adapter completion ordering, and
     late promise settlements with a controllable fake server.
-3.  Establish the TypeScript build and split shared filesystem state from 9p
-    session state. Route the current memory behavior through the concurrent
+3.  **Complete:** establish the TypeScript build and split shared filesystem
+    state from 9p session state. Route the current memory behavior through the concurrent
     boundary. Validate two sessions reusing the same fid and tag values,
     `Tversion` generations, all flush races, and session close.
 4.  Add inode-backed directories, hard links, open-unlink lifetime, stable
@@ -643,9 +643,19 @@ Implementation decisions
     promise work, accepts settlement-order completions without WASM reentry,
     closes failed sessions, and ignores closes for retired generations. The
     legacy `js9p` configuration selects the temporary `default` registry key;
-    the typed configuration change remains in milestone 3.
+    the typed configuration change remains in the removal milestone.
     At this checkpoint the dependency-free adapter is 13,992 bytes and the
     optimized WASM module is 411,449 bytes.
+*   2026-09-20: Make `js/p9/*.ts` the authoritative supplied-server source and
+    emit JavaScript plus declarations under `build/js/p9/`. A
+    `MemoryFilesystem` owns the shared namespace and application facade, while
+    every `connect()` creates a `P9Session` with independent `msize`, fids,
+    active tags, cancellation, and lifetime. `Tversion` retires earlier session
+    work and clears fids; `Tflush` suppresses an active response before its
+    `Rflush`, including repeated flush and immediate tag reuse. The standalone
+    adapter remains handwritten JavaScript at the raw WASM boundary. The three
+    emitted server modules total 37,420 bytes of JavaScript and 6,362 bytes of
+    declarations at this checkpoint.
 
 Later milestones (out of scope for now)
 ---------------------------------------

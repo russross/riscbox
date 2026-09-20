@@ -34,46 +34,86 @@ const ENOTEMPTY = 39;
 const EPROTO = 71;
 const EOPNOTSUPP = 95;
 
+export type FileContent = string | Uint8Array;
+export type Memory9PEntry = FileContent | Memory9PTree;
+export interface Memory9PTree { readonly [name: string]: Memory9PEntry }
+export type ChangeSource = string;
+export type P9Change =
+    | { kind: "create" | "write" | "remove"; path: string; source: ChangeSource }
+    | { kind: "rename"; path: string; oldPath: string; source: ChangeSource }
+    | { kind: "reset"; path: ""; source: ChangeSource };
+
+interface BaseNode {
+    id: number; version: number; name: string; parent: DirectoryNode | null;
+    mode: number; uid: number; gid: number; atime: number; mtime: number; ctime: number;
+}
+interface DirectoryNode extends BaseNode {
+    kind: "directory"; children: Record<string, Node>;
+}
+interface FileNode extends BaseNode { kind: "file"; data: Uint8Array }
+interface SymlinkNode extends BaseNode { kind: "symlink"; target: string }
+type Node = DirectoryNode | FileNode | SymlinkNode;
+interface Fid { node: Node; flags: number }
+interface SharedState {
+    nextNodeId: number;
+    listeners: Set<(change: P9Change) => void>;
+    root?: DirectoryNode;
+}
+export type P9Outcome =
+    | { kind: "reply"; bytes: Uint8Array }
+    | { kind: "suppressed" };
+interface PendingRequest {
+    generation: number;
+    resolve: (outcome: P9Outcome) => void;
+}
+
 class P9Error extends Error {
-    constructor(errno, message) {
+    readonly errno: number;
+    constructor(errno: number, message: string) {
         super(message);
         this.errno = errno;
     }
 }
 
 class Reader {
-    constructor(data) {
+    private readonly data: Uint8Array;
+    private readonly view: DataView;
+    private offset: number;
+    constructor(data: Uint8Array) {
         this.data = data;
         this.view = new DataView(data.buffer, data.byteOffset, data.byteLength);
         this.offset = 0;
     }
 
-    require(size) {
+    require(size: number): void {
         if (!Number.isInteger(size) || size < 0 || this.offset + size > this.data.length) {
             throw new P9Error(EPROTO, "truncated 9p message");
         }
     }
 
-    u8() {
+    u8(): number {
         this.require(1);
-        return this.data[this.offset++];
+        const value = this.data[this.offset];
+        if (value === undefined) throw new P9Error(EPROTO, "truncated 9p message");
+        this.offset += 1;
+        return value;
     }
 
-    u16() {
+    u16(): number {
         this.require(2);
         const value = this.view.getUint16(this.offset, true);
         this.offset += 2;
         return value;
     }
 
-    u32() {
+    u32(): number {
         this.require(4);
         const value = this.view.getUint32(this.offset, true);
         this.offset += 4;
         return value;
     }
 
-    u64() {
+    u64(): number {
         const low = this.u32();
         const high = this.u32();
         if (high !== 0) {
@@ -82,7 +122,7 @@ class Reader {
         return low;
     }
 
-    string() {
+    string(): string {
         const size = this.u16();
         this.require(size);
         let value;
@@ -91,20 +131,21 @@ class Reader {
                 this.data.subarray(this.offset, this.offset + size),
             );
         } catch (error) {
-            throw new P9Error(EPROTO, `invalid UTF-8 in 9p string: ${error.message}`);
+            const message = error instanceof Error ? error.message : String(error);
+            throw new P9Error(EPROTO, `invalid UTF-8 in 9p string: ${message}`);
         }
         this.offset += size;
         return value;
     }
 
-    bytes(size) {
+    bytes(size: number): Uint8Array {
         this.require(size);
         const value = this.data.subarray(this.offset, this.offset + size);
         this.offset += size;
         return value;
     }
 
-    done() {
+    done(): void {
         if (this.offset !== this.data.length) {
             throw new P9Error(EPROTO, "trailing data in 9p message");
         }
@@ -112,7 +153,10 @@ class Reader {
 }
 
 class Writer {
-    constructor(capacity, type, tag) {
+    readonly data: Uint8Array;
+    private readonly view: DataView;
+    offset: number;
+    constructor(capacity: number, type: number, tag: number) {
         if (capacity < 7) {
             throw new P9Error(ENOSPC, "9p reply buffer is too small");
         }
@@ -123,30 +167,30 @@ class Writer {
         this.u16(tag);
     }
 
-    require(size) {
+    require(size: number): void {
         if (this.offset + size > this.data.length) {
             throw new P9Error(ENOSPC, "9p reply exceeds the negotiated buffer");
         }
     }
 
-    u8(value) {
+    u8(value: number): void {
         this.require(1);
         this.data[this.offset++] = value;
     }
 
-    u16(value) {
+    u16(value: number): void {
         this.require(2);
         this.view.setUint16(this.offset, value, true);
         this.offset += 2;
     }
 
-    u32(value) {
+    u32(value: number): void {
         this.require(4);
         this.view.setUint32(this.offset, value, true);
         this.offset += 4;
     }
 
-    u64(value) {
+    u64(value: number): void {
         if (!Number.isInteger(value) || value < 0 || value > 0xffffffff) {
             throw new P9Error(EFBIG, "value exceeds the server's 32-bit limit");
         }
@@ -154,7 +198,7 @@ class Writer {
         this.u32(0);
     }
 
-    string(value) {
+    string(value: string): void {
         const encoded = new TextEncoder().encode(value);
         if (encoded.length > 0xffff) {
             throw new P9Error(EINVAL, "9p string is too long");
@@ -163,29 +207,29 @@ class Writer {
         this.bytes(encoded);
     }
 
-    bytes(value) {
+    bytes(value: Uint8Array): void {
         this.require(value.length);
         this.data.set(value, this.offset);
         this.offset += value.length;
     }
 
-    qid(node) {
+    qid(node: Node): void {
         this.u8(qidType(node));
         this.u32(node.version);
         this.u64(node.id);
     }
 
-    finish() {
+    finish(): Uint8Array {
         this.view.setUint32(0, this.offset, true);
         return this.data.slice(0, this.offset);
     }
 }
 
-function nowSeconds() {
+function nowSeconds(): number {
     return Math.floor(Date.now() / 1000);
 }
 
-function qidType(node) {
+function qidType(node: Node): number {
     if (node.kind === "directory") {
         return QTDIR;
     }
@@ -195,7 +239,7 @@ function qidType(node) {
     return 0;
 }
 
-function nodeMode(node) {
+function nodeMode(node: Node): number {
     if (node.kind === "directory") {
         return S_IFDIR | node.mode;
     }
@@ -205,7 +249,7 @@ function nodeMode(node) {
     return S_IFREG | node.mode;
 }
 
-function nodeSize(node) {
+function nodeSize(node: Node): number {
     if (node.kind === "file") {
         return node.data.length;
     }
@@ -215,13 +259,13 @@ function nodeSize(node) {
     return 0;
 }
 
-function validateName(name) {
+function validateName(name: string): void {
     if (name === "" || name === "." || name === ".." || name.includes("/") || name.includes("\0")) {
         throw new P9Error(EINVAL, `invalid file name ${JSON.stringify(name)}`);
     }
 }
 
-function normalizedParts(path) {
+function normalizedParts(path: string): string[] {
     if (typeof path !== "string" || path.includes("\\") || path.includes("\0")) {
         throw new P9Error(EINVAL, `invalid path ${JSON.stringify(path)}`);
     }
@@ -236,7 +280,7 @@ function normalizedParts(path) {
     return parts;
 }
 
-function copyContent(content) {
+function copyContent(content: FileContent): Uint8Array {
     if (typeof content === "string") {
         return new TextEncoder().encode(content);
     }
@@ -246,17 +290,50 @@ function copyContent(content) {
     throw new TypeError("file content must be a string or Uint8Array");
 }
 
-class Memory9PServer {
-    constructor(tree = {}) {
-        this.nextNodeId = 1;
-        this.listeners = new Set();
+export class ProtocolEngine {
+    private readonly sharedState: SharedState;
+    readonly fids: Map<number, Fid>;
+    private msize: number;
+    constructor(tree: Memory9PTree = {}, sharedState: SharedState | null = null) {
+        this.sharedState = sharedState ?? {
+            nextNodeId: 1,
+            listeners: new Set(),
+        };
         this.fids = new Map();
         this.msize = MAX_MESSAGE_SIZE;
-        this.root = this.createDirectory("", null, 0o755);
-        this.loadTree(tree);
+        if (sharedState === null) {
+            this.root = this.createDirectory("", null, 0o755);
+            this.loadTree(tree);
+        }
     }
 
-    createDirectory(name, parent, mode) {
+    get nextNodeId(): number {
+        return this.sharedState.nextNodeId;
+    }
+
+    set nextNodeId(value: number) {
+        this.sharedState.nextNodeId = value;
+    }
+
+    get listeners(): Set<(change: P9Change) => void> {
+        return this.sharedState.listeners;
+    }
+
+    get root(): DirectoryNode {
+        const root = this.sharedState.root;
+        if (root === undefined) throw new Error("filesystem root is not initialized");
+        return root;
+    }
+
+    set root(value: DirectoryNode) {
+        this.sharedState.root = value;
+    }
+
+    fork(): ProtocolEngine {
+        return new ProtocolEngine({}, this.sharedState);
+    }
+
+    createDirectory(name: string, parent: DirectoryNode | null, mode: number): DirectoryNode {
         const time = nowSeconds();
         return {
             kind: "directory",
@@ -274,7 +351,7 @@ class Memory9PServer {
         };
     }
 
-    createFile(name, parent, content, mode = 0o644) {
+    createFile(name: string, parent: DirectoryNode, content: FileContent, mode = 0o644): FileNode {
         const data = copyContent(content);
         if (data.length > MAX_FILE_SIZE) {
             throw new P9Error(EFBIG, `file ${JSON.stringify(name)} exceeds 16 MiB`);
@@ -296,7 +373,7 @@ class Memory9PServer {
         };
     }
 
-    createSymlink(name, parent, target) {
+    createSymlink(name: string, parent: DirectoryNode, target: string): SymlinkNode {
         const time = nowSeconds();
         return {
             kind: "symlink",
@@ -314,7 +391,7 @@ class Memory9PServer {
         };
     }
 
-    loadTree(tree) {
+    loadTree(tree: Memory9PTree): void {
         if (tree === null || typeof tree !== "object" || tree instanceof Uint8Array) {
             throw new TypeError("the 9p tree root must be an object");
         }
@@ -325,7 +402,7 @@ class Memory9PServer {
         this.emit({ kind: "reset", path: "", source: "host" });
     }
 
-    loadFiles(files) {
+    loadFiles(files: Readonly<Record<string, FileContent>>): void {
         const tree = Object.create(null);
         for (const [path, content] of Object.entries(files)) {
             const parts = normalizedParts(path);
@@ -336,18 +413,23 @@ class Memory9PServer {
             for (const part of parts.slice(0, -1)) {
                 const value = directory[part];
                 if (value === undefined) {
-                    directory[part] = Object.create(null);
+                    const created: Memory9PTree = Object.create(null);
+                    directory[part] = created;
+                    directory = created;
                 } else if (value === null || typeof value !== "object" || value instanceof Uint8Array) {
                     throw new P9Error(EINVAL, `path crosses a file at ${JSON.stringify(part)}`);
+                } else {
+                    directory = value;
                 }
-                directory = directory[part];
             }
-            directory[parts[parts.length - 1]] = content;
+            const name = parts.at(-1);
+            if (name === undefined) throw new P9Error(EINVAL, "a file path may not name the root");
+            directory[name] = content;
         }
         this.loadTree(tree);
     }
 
-    addTree(parent, tree) {
+    addTree(parent: DirectoryNode, tree: Memory9PTree): void {
         for (const [name, value] of Object.entries(tree)) {
             validateName(name);
             let node;
@@ -363,20 +445,20 @@ class Memory9PServer {
         }
     }
 
-    subscribe(listener) {
+    subscribe(listener: (change: P9Change) => void): () => void {
         this.listeners.add(listener);
         return () => {
             this.listeners.delete(listener);
         };
     }
 
-    emit(change) {
+    emit(change: P9Change): void {
         for (const listener of this.listeners) {
             listener(change);
         }
     }
 
-    pathOf(node) {
+    pathOf(node: Node): string {
         const parts = [];
         let current = node;
         while (current !== this.root && current.parent !== null) {
@@ -386,13 +468,13 @@ class Memory9PServer {
         return parts.reverse().join("/");
     }
 
-    lookup(path) {
-        let node = this.root;
+    lookup(path: string): Node {
+        let node: Node = this.root;
         for (const part of normalizedParts(path)) {
             if (node.kind !== "directory") {
                 throw new P9Error(ENOTDIR, "path crosses a non-directory");
             }
-            const child = node.children[part];
+            const child: Node | undefined = node.children[part];
             if (child === undefined) {
                 throw new P9Error(ENOENT, `file not found: ${path}`);
             }
@@ -401,7 +483,7 @@ class Memory9PServer {
         return node;
     }
 
-    ensureParent(path) {
+    ensureParent(path: string): { parent: DirectoryNode; name: string } {
         const parts = normalizedParts(path);
         const name = parts.pop();
         if (name === undefined) {
@@ -423,7 +505,7 @@ class Memory9PServer {
         return { parent, name };
     }
 
-    readFile(path) {
+    readFile(path: string): Uint8Array {
         const node = this.lookup(path);
         if (node.kind !== "file") {
             throw new P9Error(EISDIR, `${path} is not a regular file`);
@@ -431,14 +513,14 @@ class Memory9PServer {
         return node.data.slice();
     }
 
-    writeFile(path, content, source = "host") {
+    writeFile(path: string, content: FileContent, source: ChangeSource = "host"): void {
         const data = copyContent(content);
         if (data.length > MAX_FILE_SIZE) {
             throw new P9Error(EFBIG, `file ${JSON.stringify(path)} exceeds 16 MiB`);
         }
         const { parent, name } = this.ensureParent(path);
         const existing = parent.children[name];
-        let kind = "write";
+        let kind: "write" | "create" = "write";
         if (existing === undefined) {
             parent.children[name] = this.createFile(name, parent, data);
             kind = "create";
@@ -453,7 +535,7 @@ class Memory9PServer {
         this.emit({ kind, path: normalizedParts(path).join("/"), source });
     }
 
-    remove(path, source = "host") {
+    remove(path: string, source: ChangeSource = "host"): void {
         const node = this.lookup(path);
         if (node === this.root || node.parent === null) {
             throw new P9Error(EPERM, "cannot remove the root");
@@ -469,7 +551,7 @@ class Memory9PServer {
         this.emit({ kind: "remove", path: oldPath, source });
     }
 
-    rename(oldPath, newPath, source = "host") {
+    rename(oldPath: string, newPath: string, source: ChangeSource = "host"): void {
         const node = this.lookup(oldPath);
         if (node === this.root || node.parent === null) {
             throw new P9Error(EPERM, "cannot rename the root");
@@ -478,9 +560,9 @@ class Memory9PServer {
         this.moveNode(node.parent, node.name, destination.parent, destination.name, source);
     }
 
-    listFiles() {
-        const result = [];
-        const visit = (directory) => {
+    listFiles(): string[] {
+        const result: string[] = [];
+        const visit = (directory: DirectoryNode): void => {
             for (const node of Object.values(directory.children)) {
                 if (node.kind === "directory") {
                     visit(node);
@@ -493,22 +575,22 @@ class Memory9PServer {
         return result.sort();
     }
 
-    snapshot() {
-        const result = Object.create(null);
+    snapshot(): Record<string, Uint8Array> {
+        const result: Record<string, Uint8Array> = Object.create(null);
         for (const path of this.listFiles()) {
             result[path] = this.readFile(path);
         }
         return result;
     }
 
-    touch(node) {
+    touch(node: Node): void {
         const time = nowSeconds();
         node.version = (node.version + 1) >>> 0;
         node.mtime = time;
         node.ctime = time;
     }
 
-    fid(number) {
+    fid(number: number): Fid {
         const fid = this.fids.get(number);
         if (fid === undefined) {
             throw new P9Error(EBADF, `unknown fid ${number}`);
@@ -516,14 +598,14 @@ class Memory9PServer {
         return fid;
     }
 
-    directory(node) {
+    directory(node: Node): DirectoryNode {
         if (node.kind !== "directory") {
             throw new P9Error(ENOTDIR, "fid does not name a directory");
         }
         return node;
     }
 
-    child(directory, name) {
+    child(directory: DirectoryNode, name: string): Node {
         validateName(name);
         const child = directory.children[name];
         if (child === undefined) {
@@ -532,7 +614,7 @@ class Memory9PServer {
         return child;
     }
 
-    request(request, replyCapacity) {
+    request(request: Uint8Array, replyCapacity: number): Uint8Array {
         let type = 0;
         let tag = NOTAG;
         try {
@@ -561,7 +643,7 @@ class Memory9PServer {
         }
     }
 
-    handle(type, tag, reader, writer) {
+    handle(type: number, tag: number, reader: Reader, writer: Writer): void {
         switch (type) {
             case 8: this.statfs(reader, writer); return;
             case 12: this.lopen(reader, writer); return;
@@ -591,7 +673,7 @@ class Memory9PServer {
         }
     }
 
-    statfs(reader, writer) {
+    statfs(reader: Reader, writer: Writer): void {
         this.fid(reader.u32());
         writer.u32(0x01021997);
         writer.u32(4096);
@@ -604,7 +686,7 @@ class Memory9PServer {
         writer.u32(255);
     }
 
-    lopen(reader, writer) {
+    lopen(reader: Reader, writer: Writer): void {
         const fid = this.fid(reader.u32());
         const flags = reader.u32();
         if ((flags & O_TRUNC) !== 0) {
@@ -620,7 +702,7 @@ class Memory9PServer {
         writer.u32(Math.max(0, this.msize - 24));
     }
 
-    lcreate(reader, writer) {
+    lcreate(reader: Reader, writer: Writer): void {
         const fid = this.fid(reader.u32());
         const directory = this.directory(fid.node);
         const name = reader.string();
@@ -641,7 +723,7 @@ class Memory9PServer {
         writer.u32(Math.max(0, this.msize - 24));
     }
 
-    symlink(reader, writer) {
+    symlink(reader: Reader, writer: Writer): void {
         const directory = this.directory(this.fid(reader.u32()).node);
         const name = reader.string();
         const target = reader.string();
@@ -660,7 +742,7 @@ class Memory9PServer {
         writer.qid(node);
     }
 
-    readlink(reader, writer) {
+    readlink(reader: Reader, writer: Writer): void {
         const node = this.fid(reader.u32()).node;
         if (node.kind !== "symlink") {
             throw new P9Error(EINVAL, "fid does not name a symlink");
@@ -668,7 +750,7 @@ class Memory9PServer {
         writer.string(node.target);
     }
 
-    getattr(reader, writer) {
+    getattr(reader: Reader, writer: Writer): void {
         const node = this.fid(reader.u32()).node;
         const requested = reader.u64();
         writer.u64(requested);
@@ -689,7 +771,7 @@ class Memory9PServer {
         writer.u64(node.version);
     }
 
-    setattr(reader) {
+    setattr(reader: Reader): void {
         const node = this.fid(reader.u32()).node;
         const mask = reader.u32();
         const mode = reader.u32();
@@ -721,7 +803,7 @@ class Memory9PServer {
         node.ctime = time;
     }
 
-    readdir(reader, writer) {
+    readdir(reader: Reader, writer: Writer): void {
         const directory = this.directory(this.fid(reader.u32()).node);
         const offset = reader.u64();
         const count = reader.u32();
@@ -730,6 +812,7 @@ class Memory9PServer {
         payload.offset = 0;
         for (let index = offset; index < entries.length; index += 1) {
             const node = entries[index];
+            if (node === undefined) break;
             const encodedName = new TextEncoder().encode(node.name);
             const entrySize = 13 + 8 + 1 + 2 + encodedName.length;
             if (payload.offset + entrySize > count) break;
@@ -742,18 +825,18 @@ class Memory9PServer {
         writer.bytes(payload.data.subarray(0, payload.offset));
     }
 
-    fsync(reader) {
+    fsync(reader: Reader): void {
         this.fid(reader.u32());
         reader.u32();
     }
 
-    lock(reader, writer) {
+    lock(reader: Reader, writer: Writer): void {
         this.fid(reader.u32());
         reader.u8(); reader.u32(); reader.u64(); reader.u64(); reader.u32(); reader.string();
         writer.u8(0);
     }
 
-    getlock(reader, writer) {
+    getlock(reader: Reader, writer: Writer): void {
         this.fid(reader.u32());
         reader.u8(); reader.u64(); reader.u64(); reader.u32(); reader.string();
         writer.u8(2);
@@ -763,7 +846,7 @@ class Memory9PServer {
         writer.string("");
     }
 
-    mkdir(reader, writer) {
+    mkdir(reader: Reader, writer: Writer): void {
         const directory = this.directory(this.fid(reader.u32()).node);
         const name = reader.string();
         const mode = reader.u32();
@@ -777,7 +860,7 @@ class Memory9PServer {
         writer.qid(node);
     }
 
-    renameat(reader) {
+    renameat(reader: Reader): void {
         const oldDirectory = this.directory(this.fid(reader.u32()).node);
         const oldName = reader.string();
         const newDirectory = this.directory(this.fid(reader.u32()).node);
@@ -785,14 +868,24 @@ class Memory9PServer {
         this.moveNode(oldDirectory, oldName, newDirectory, newName, "guest");
     }
 
-    moveNode(oldDirectory, oldName, newDirectory, newName, source) {
+    moveNode(
+        oldDirectory: DirectoryNode,
+        oldName: string,
+        newDirectory: DirectoryNode,
+        newName: string,
+        source: ChangeSource,
+    ): void {
         validateName(oldName);
         validateName(newName);
         const node = this.child(oldDirectory, oldName);
         if (oldDirectory === newDirectory && oldName === newName) {
             return;
         }
-        for (let ancestor = newDirectory; ancestor !== null; ancestor = ancestor.parent) {
+        for (
+            let ancestor: DirectoryNode | null = newDirectory;
+            ancestor !== null;
+            ancestor = ancestor.parent
+        ) {
             if (ancestor === node) throw new P9Error(EINVAL, "cannot move a directory into itself");
         }
         const replaced = newDirectory.children[newName];
@@ -816,7 +909,7 @@ class Memory9PServer {
         this.emit({ kind: "rename", path: this.pathOf(node), oldPath, source });
     }
 
-    unlinkat(reader) {
+    unlinkat(reader: Reader): void {
         const directory = this.directory(this.fid(reader.u32()).node);
         const name = reader.string();
         const flags = reader.u32();
@@ -835,7 +928,7 @@ class Memory9PServer {
         this.emit({ kind: "remove", path, source: "guest" });
     }
 
-    version(tag, reader, writer) {
+    version(tag: number, reader: Reader, writer: Writer): void {
         if (tag !== NOTAG) throw new P9Error(EPROTO, "Tversion must use NOTAG");
         const requestedSize = reader.u32();
         const version = reader.string();
@@ -846,7 +939,7 @@ class Memory9PServer {
         writer.string(version === "9P2000.L" ? version : "unknown");
     }
 
-    attach(reader, writer) {
+    attach(reader: Reader, writer: Writer): void {
         const fidNumber = reader.u32();
         reader.u32();
         reader.string();
@@ -857,7 +950,7 @@ class Memory9PServer {
         writer.qid(this.root);
     }
 
-    walk(reader, writer) {
+    walk(reader: Reader, writer: Writer): void {
         const fidNumber = reader.u32();
         const newFidNumber = reader.u32();
         const count = reader.u16();
@@ -892,7 +985,7 @@ class Memory9PServer {
         for (const qid of qids) writer.qid(qid);
     }
 
-    read(reader, writer) {
+    read(reader: Reader, writer: Writer): void {
         const node = this.fid(reader.u32()).node;
         const offset = reader.u64();
         const count = reader.u32();
@@ -903,7 +996,7 @@ class Memory9PServer {
         node.atime = nowSeconds();
     }
 
-    write(reader, writer) {
+    write(reader: Reader, writer: Writer): void {
         const fid = this.fid(reader.u32());
         let offset = reader.u64();
         const count = reader.u32();
@@ -922,11 +1015,107 @@ class Memory9PServer {
         writer.u32(count);
     }
 
-    clunk(reader) {
+    clunk(reader: Reader): void {
         const fidNumber = reader.u32();
         this.fid(fidNumber);
         this.fids.delete(fidNumber);
     }
 }
 
-export { MAX_FILE_SIZE, Memory9PServer, P9Error };
+export class P9Session {
+    private readonly protocol: ProtocolEngine;
+    private closed: boolean;
+    private generation: number;
+    private readonly active: Map<number, PendingRequest>;
+    constructor(protocol: ProtocolEngine) {
+        this.protocol = protocol;
+        this.closed = false;
+        this.generation = 1;
+        this.active = new Map();
+    }
+
+    request(request: Uint8Array, replyCapacity: number): Promise<P9Outcome> {
+        if (this.closed) {
+            return Promise.reject(new Error("9p session is closed"));
+        }
+        let type: number;
+        let tag: number;
+        try {
+            const reader = new Reader(request);
+            const size = reader.u32();
+            type = reader.u8();
+            tag = reader.u16();
+            if (size !== request.length || size < 7) {
+                throw new P9Error(EPROTO, "invalid 9p message size");
+            }
+        } catch (error) {
+            return Promise.resolve({
+                kind: "reply",
+                bytes: this.protocol.request(request, replyCapacity),
+            });
+        }
+        if (type === 100) {
+            this.retireActive();
+            this.generation += 1;
+            return Promise.resolve({
+                kind: "reply",
+                bytes: this.protocol.request(request, replyCapacity),
+            });
+        }
+        if (type === 108) {
+            if (request.length === 9) {
+                const oldTag = new DataView(
+                    request.buffer, request.byteOffset, request.byteLength,
+                ).getUint16(7, true);
+                const pending = this.active.get(oldTag);
+                if (pending !== undefined) {
+                    this.active.delete(oldTag);
+                    pending.resolve({ kind: "suppressed" });
+                }
+            }
+            return Promise.resolve({
+                kind: "reply",
+                bytes: this.protocol.request(request, replyCapacity),
+            });
+        }
+        if (this.active.has(tag)) {
+            const writer = new Writer(replyCapacity, RLERROR, tag);
+            writer.u32(EPROTO);
+            return Promise.resolve({ kind: "reply", bytes: writer.finish() });
+        }
+        const generation = this.generation;
+        return new Promise<P9Outcome>((resolve) => {
+            const pending = { generation, resolve };
+            this.active.set(tag, pending);
+            queueMicrotask(() => {
+                if (this.active.get(tag) !== pending || this.generation !== generation) {
+                    return;
+                }
+                this.active.delete(tag);
+                resolve({
+                    kind: "reply",
+                    bytes: this.protocol.request(request, replyCapacity),
+                });
+            });
+        });
+    }
+
+    retireActive(): void {
+        for (const pending of this.active.values()) {
+            pending.resolve({ kind: "suppressed" });
+        }
+        this.active.clear();
+    }
+
+    close(): void {
+        if (this.closed) {
+            return;
+        }
+        this.closed = true;
+        this.generation += 1;
+        this.retireActive();
+        this.protocol.fids.clear();
+    }
+}
+
+export { MAX_FILE_SIZE, P9Error };

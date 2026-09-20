@@ -14,8 +14,8 @@ Files
 *   `drive-HASH/blk.txt` describes the HTTP disk; its
     `blkNNNNNNNNN.bin` files are 256 KiB blocks. The hashes identify source
     content, so assets shared by image generations retain stable URLs.
-*   `p9.js` and its `p9.d.ts` declarations are included when the integration
-    uses the browser-backed 9p server.
+*   `p9/` contains the generated browser-backed 9p server modules and
+    declarations.
 
 Publishing
 ----------
@@ -97,29 +97,15 @@ backend with `driver: "tap"` and `ifname`.
 A browser-backed filesystem uses `js9p: true`. When instantiating the runtime,
 pass a `p9Servers` map. Each registered server creates an independent session
 with asynchronous `request(request, replyCapacity)` and synchronous `close()`
-methods. Until the TypeScript server split is complete, wrap the supplied
-`Memory9PServer` as follows:
+methods. The generated `build/js/p9/index.js` module provides
+`Memory9PServer`:
 
 ```js
-import { Memory9PServer } from "./p9.js";
+import { Memory9PServer } from "./p9/index.js";
 
-const filesystem = new Memory9PServer({
+const server = new Memory9PServer({
     "hello.txt": "shared with the guest\n",
 });
-
-const server = {
-    connect() {
-        return {
-            async request(bytes, replyCapacity) {
-                return {
-                    kind: "reply",
-                    bytes: filesystem.request(bytes, replyCapacity),
-                };
-            },
-            close() {},
-        };
-    },
-};
 
 const runtime = await Riscbox.instantiate(wasmBytes, {
     p9Servers: new Map([["default", server]]),

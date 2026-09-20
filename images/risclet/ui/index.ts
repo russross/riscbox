@@ -11,7 +11,7 @@ import { Compartment, EditorSelection, EditorState } from "@codemirror/state";
 import { EditorView, keymap, ViewUpdate } from "@codemirror/view";
 import { FitAddon, init as initializeGhostty, Terminal } from "ghostty-web";
 import { basicSetup } from "codemirror";
-import { Memory9PServer, P9Change } from "../../../js/p9.js";
+import { Memory9PServer, P9Change } from "../../../js/p9";
 
 interface ExampleDescription {
     readonly id: string;
@@ -50,10 +50,10 @@ interface RiscboxRuntime {
 interface RiscboxOptions {
     readonly p9Servers: ReadonlyMap<string, {
         connect(): {
-            request(bytes: Uint8Array, replyCapacity: number): Promise<{
-                readonly kind: "reply";
-                readonly bytes: Uint8Array;
-            }>;
+            request(bytes: Uint8Array, replyCapacity: number): Promise<
+                | { readonly kind: "reply"; readonly bytes: Uint8Array }
+                | { readonly kind: "suppressed" }
+            >;
             close(): void;
         };
     }>;
@@ -509,15 +509,7 @@ class VmController {
                 throw new Error(`WASM request failed with status ${response.status}`);
             }
             const runtime = await window.Riscbox.instantiate(await response.arrayBuffer(), {
-                p9Servers: new Map([["default", {
-                    connect: () => ({
-                        request: async (bytes: Uint8Array, replyCapacity: number) => ({
-                            kind: "reply" as const,
-                            bytes: target.filesystem.request(bytes, replyCapacity),
-                        }),
-                        close: () => {},
-                    }),
-                }]]),
+                p9Servers: new Map([["default", target.filesystem]]),
                 consoleWrite: (text: string | Uint8Array): void => {
                     if (generation === this.generation) {
                         this.terminal.write(text);

@@ -25,7 +25,7 @@ for required_file in "$image_dir/riscbox.cfg" "$rootfs_image" \
     fi
 done
 
-make -C "$ROOT_DIR" wasm
+make -C "$ROOT_DIR" wasm js
 
 if [ -d "$image_dir/ui" ]; then
     if [ ! -d "$image_dir/ui/node_modules" ] || \
@@ -47,6 +47,10 @@ bios_name=fw_jump.bin-$(sha256sum "$OPENSBI" | cut -c 1-8)
 install -m 644 "$KERNEL_IMAGE" "$stage_dir/$kernel_name"
 install -m 644 "$OPENSBI" "$stage_dir/$bios_name"
 install -m 644 "$ROOT_DIR/js/riscbox.js" "$stage_dir/riscbox.js"
+mkdir -p "$stage_dir/p9"
+for p9_module in "$ROOT_DIR/build/js/p9/"*.js "$ROOT_DIR/build/js/p9/"*.d.ts; do
+    install -m 644 "$p9_module" "$stage_dir/p9/$(basename "$p9_module")"
+done
 install -m 644 "$ROOT_DIR/target/wasm32-unknown-unknown/release/riscbox_wasm.wasm" \
     "$stage_dir/riscbox.wasm"
 install -m 644 "$IMAGES_DIR/DEPLOYMENT.md" "$stage_dir/README.md"
@@ -61,11 +65,6 @@ if [ -f "$image_dir/build/ui/bundle.js" ]; then
 fi
 if [ -d "$image_dir/examples" ]; then
     cp -R "$image_dir/examples" "$stage_dir/examples"
-fi
-if grep -R -q 'p9\.js' "$stage_dir" --include='*.html' --include='*.js' \
-    --exclude='bundle.js'; then
-    install -m 644 "$ROOT_DIR/js/p9.js" "$stage_dir/p9.js"
-    install -m 644 "$ROOT_DIR/js/p9.d.ts" "$stage_dir/p9.d.ts"
 fi
 split_result=$("$ROOT_DIR/tools/splitimg.py" "$rootfs_image" "$stage_dir")
 drive_name=${split_result%% *}

@@ -295,9 +295,8 @@ suppression or original reply before its `Rflush`.
 
 Copy request bytes before releasing host-action storage. A session owns each
 request copy until its promise settles. Copy a reply into WASM only for the
-completion call, and do not retain a WASM view across an await. Treat bytes
-returned by the supplied filesystem's loader as transferred to the filesystem;
-custom servers remain responsible for not mutating a reply after returning it.
+completion call, and do not retain a WASM view across an await. Custom servers
+remain responsible for not mutating a reply after returning it.
 
 Flushing belongs to the server. It tracks old tags, suppresses responses when
 appropriate, handles repeated and invalid flushes, and ensures a flushed
@@ -463,14 +462,23 @@ plugin can inspect a pre-downloaded archive first, use byte ranges as keys, and
 extract a regular file only when asked. Fetching a manifest or archive is a
 preload step owned by the plugin, not a 9p operation or another server type.
 
-Represent regular-file contents as unloaded immutable seed data, a shared
-in-flight load, resident immutable seed bytes, or private mutable bytes. Reads
-of one unloaded inode share a load. The first mutation that needs existing
-content makes a private copy; a whole-file replacement can discard an unloaded
-seed without fetching it. Unlink and rename operate on the already materialized
-namespace and never rediscover seed entries. A mutation bumps the inode content
-revision, causing an older load completion to be discarded rather than
-restoring stale bytes.
+Represent regular-file contents as an unloaded seed reference, a shared
+in-flight load, or ordinary mutable resident bytes. The loader returns a fresh,
+writable `Uint8Array` and transfers its exclusive ownership to the filesystem;
+the filesystem does not make a second copy or retain a special seeded state
+after a successful load. From then on, the inode is identical to a file created
+in memory.
+
+Reads of one unloaded inode share a load. A mutation that needs existing
+content waits for that load and then treats the transferred buffer as ordinary
+mutable resident data. A whole-file replacement of an unloaded inode instead
+installs its new resident buffer immediately and discards the seed reference
+without fetching it. Unlink and rename operate on the already materialized
+namespace and never rediscover seed entries. Replacing or otherwise changing
+an unloaded inode bumps its content revision, causing an older load completion
+to be discarded rather than restoring stale bytes. Copy-on-write describes the
+filesystem's relationship to its seed source, not an immutable resident-data
+layer.
 
 Pin one seed list and loader interpretation for the filesystem's lifetime.
 Refreshing a remote deployment creates a new filesystem/server instance; it

@@ -551,15 +551,12 @@ configuration schema and accept only `{ server, tag }` for browser 9p devices.
 Do not retain configuration aliases or translate the legacy HTTP format in
 Rust. Remove `src/http_9p.rs`, its proprietary command file and password
 plumbing, and all now-unused PBKDF2 support after auditing encrypted HTTP block
-storage. The isolated C reference may retain its raw socket 9p backend; it is
-not part of the browser platform.
+storage. Note: the legacy C implementation is archived for reference only. Do
+not alter it, and do not target compatibility with it. Development of this
+feature set is for Rust and the WASM target only.
 
-Remove `fs_net` construction and dispatch from the isolated C reference as
-well; retain only lower-level HTTP utilities still used by block images or
-configuration loading. The C implementation is not the compatibility owner for
-the new concurrent bridge or TypeScript server. Existing deployments migrate
-by constructing an HTTPS seed plugin before the VM and registering its server
-under the configuration key.
+There is no migration process and no legacy instances using affected features
+to support.
 
 ### Files, staging, and acceptance
 
@@ -623,10 +620,16 @@ Protocol references for implementation review:
 *   [9p version semantics](https://9fans.github.io/plan9port/man/man9/version.html)
     define the protocol-session boundary and its required cleanup.
 
-Next milestone
---------------
+Later milestones (out of scope for now)
+---------------------------------------
 
 Add framebuffer demonstration programs to the image, configure the guest
 display and input devices, and connect the framebuffer callback to a canvas in
 the Risclet page. The current demo intentionally remains terminal-only until
 that guest-to-page path can be validated together.
+
+Revisit networking support for guests.
+
+Benchmark, profile, and explore performance improvements.
+
+Explore bootloader support, compressed kernel support, compressed initrd support, etc.

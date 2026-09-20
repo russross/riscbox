@@ -55,6 +55,7 @@ mkdir -p "$stage_dir/network"
 for network_module in "$ROOT_DIR/build/js/network/"*.js "$ROOT_DIR/build/js/network/"*.d.ts; do
     install -m 644 "$network_module" "$stage_dir/network/$(basename "$network_module")"
 done
+install -m 644 "$ROOT_DIR/js/network/README.md" "$stage_dir/network/README.md"
 install -m 644 "$ROOT_DIR/target/wasm32-unknown-unknown/release/riscbox_wasm.wasm" \
     "$stage_dir/riscbox.wasm"
 install -m 644 "$IMAGES_DIR/DEPLOYMENT.md" "$stage_dir/README.md"

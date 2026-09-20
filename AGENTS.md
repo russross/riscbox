@@ -21,6 +21,13 @@ The supported machine is deliberately narrow:
 *   Browser delivery through raw WebAssembly, a handwritten JavaScript adapter,
     HTTP-backed disks, and host-provided 9P2000.L servers.
 
+The optional TypeScript network adapter carries one Ethernet frame per binary
+WebSocket message to a host-selected origin endpoint. Browser network devices
+use per-VM locally administered MAC addresses, expose carrier through VirtIO
+status and configuration interrupts, and bound pending frames and bytes. The
+repository supplies a local Node protocol stub for real WASM/Chrome tests but
+no production network origin service, native TAP backend, or SLIRP backend.
+
 RV32, multiple harts, vectors, the hypervisor extension, PCIe, AIA, UEFI,
 general device emulation, a native UI, SDL, SLIRP, and native filesystem or
 socket backends are outside the current scope. Networking exists but is not a
@@ -35,6 +42,7 @@ Repository map and terminology
 *   `riscbox-wasm/` supplies the small stable raw WASM export surface. Keep
     unsafe boundary code isolated there; the main crate forbids unsafe code.
 *   `js/riscbox.js` is the dependency-free browser adapter for the raw ABI.
+*   `js/network/` is the typed WebSocket Ethernet frontend and protocol.
 *   `js/p9/` is the authoritative TypeScript 9P2000.L server, shared in-memory
     filesystem, and optional seed plugins. Generated JavaScript and declarations
     go under `build/js/p9/`.

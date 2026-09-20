@@ -92,6 +92,31 @@ callback is supplied. Integrations can also provide `networkWrite`,
 Framebuffer callbacks receive a zero-copy WASM view plus `x`, `y`, `width`,
 `height`, and full-frame `stride`; consume the view synchronously.
 
+For the supplied WebSocket network frontend, import the generated TypeScript
+module and attach it before starting a network-enabled VM:
+
+```js
+import { WebSocketNetwork } from "./network/index.js";
+
+const network = new WebSocketNetwork(
+    new URL("./network", location.href).href.replace(/^http/, "ws"),
+    { onError: (error) => console.error(error) },
+);
+const runtime = await Riscbox.instantiate(await response.arrayBuffer(), {
+    consoleWrite: (text) => terminal.append(document.createTextNode(text)),
+    networkWrite: network.transmit,
+});
+network.attach(runtime);
+network.connect();
+runtime.start(new URL("./riscbox.cfg", location.href).href, 256, "", 0, 0, true);
+```
+
+The endpoint uses the protocol documented in `network/README.md`: each binary
+WebSocket message is one Ethernet frame without a VirtIO header or frame-check
+sequence. Riscbox provides the browser client but no production origin service.
+The origin must supply authentication, isolation, rate limiting, routing,
+filtering, and any required NAT, DNS, or DHCP.
+
 The root Rust crate exposes the CPU, memory, machine, device, configuration,
 storage, and browser-runtime modules for focused testing and custom Rust-side
 integration. It is not published on crates.io, and the stable deployment
@@ -131,7 +156,8 @@ The main options are:
     guest-visible mount tag.
 *   `display0: { device: "simplefb", width, height }` adds a framebuffer, and
     `input_device: "virtio"` adds keyboard and tablet devices. `eth0` adds the
-    single supported network interface when the host supplies a frontend.
+    single supported network interface as `{ driver: "user" }` when the host
+    installs a frontend. Native TAP and SLIRP backends are not supported.
 
 Boot payloads are explicit. Riscbox directly loads raw OpenSBI `fw_jump.bin`, a
 raw uncompressed Linux `Image`, an optional opaque initramfs, or a flat

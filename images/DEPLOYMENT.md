@@ -85,11 +85,16 @@ to `riscbox.cfg` only when the host integration supplies their frontend:
 }
 ```
 
-`display0` needs a `graphic_display` object in the page, and VirtIO input needs
-the page to forward keyboard, pointer, and wheel events. `ethN` needs a browser
-network frontend; setting `net_state = null` deliberately leaves networking
-unavailable. Native Riscbox supports `driver: "user"` directly and also a TAP
-backend with `driver: "tap"` and `ifname`.
+`display0` needs a framebuffer callback in the page, and VirtIO input needs the
+page to forward keyboard, pointer, and wheel events. `eth0` needs a browser
+network frontend. Riscbox has no native user-mode or TAP backend.
+
+The distribution contains `network/index.js` and its declaration file. Create
+a `WebSocketNetwork`, pass its bound `transmit` method as `networkWrite`, attach
+the runtime, connect it, and pass `true` as the final `runtime.start()` argument.
+The endpoint URL belongs to the page integration rather than `riscbox.cfg`.
+See `network/README.md` in the distribution for the binary Ethernet protocol,
+limits, reconnect behavior, and production origin-service requirements.
 
 9p file sharing
 ---------------
@@ -141,8 +146,9 @@ The supplied page loads `riscbox.js`, instantiates `riscbox.wasm`, and calls
 `runtime.start()` with the configuration URL. Custom integrations use the same
 small adapter:
 
-*   Pass `consoleWrite`, `onVmStarted`, `onError`, `networkWrite`, and optional
-    scheduling callbacks to `Riscbox.instantiate()`.
+*   Pass `consoleWrite`, `onVmStarted`, `onError`, and optional scheduling
+    callbacks to `Riscbox.instantiate()`. For networking, also pass the bound
+    `WebSocketNetwork.transmit` method as `networkWrite`.
 *   Pass `framebufferRefresh(bytes, geometry)` to receive a zero-copy view of
     each dirty framebuffer rectangle. `geometry` supplies `x`, `y`, `width`,
     `height`, and the full framebuffer byte stride.

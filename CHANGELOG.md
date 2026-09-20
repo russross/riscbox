@@ -4,6 +4,19 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Completed the browser network path with a dependency-free TypeScript
+    WebSocket adapter and a documented binary Ethernet protocol. The adapter
+    tracks carrier, bounds browser send buffering, validates messages, and
+    reconnects with bounded backoff; distributions include its JavaScript and
+    declarations.
+*   Hardened VirtIO network handling with per-VM locally administered MAC
+    addresses, MAC and status feature negotiation, configuration interrupts,
+    bounded FIFO ingress, reset cleanup, nonfatal packet loss, and validation
+    of unsupported transmit offload headers.
+*   Added focused Rust and TypeScript coverage plus a local Node origin stub
+    that boots a non-PIE network firmware probe in temporary-profile headless
+    Chrome against the real WASM. The probe exercises device-tree discovery,
+    feature negotiation, carrier, and bidirectional Ethernet frames.
 *   Simplified VirtIO 9p to one asynchronous request/completion model after the
     last synchronous Rust backend was removed. Request buffers now move into
     host actions while retained descriptors store only their protocol tags.

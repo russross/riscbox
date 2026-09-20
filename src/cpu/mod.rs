@@ -385,7 +385,6 @@ impl Cpu {
                     self.take_exception(trap);
                 }
             }
-            self.registers[0] = 0;
             cycles += 1;
             self.elapsed_cycles = self.elapsed_cycles.wrapping_add(1);
             self.cycle = self.cycle.wrapping_add(1);

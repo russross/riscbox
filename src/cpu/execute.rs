@@ -203,6 +203,7 @@ impl Cpu {
         Ok(())
     }
 
+    #[inline]
     fn execute_arithmetic(
         &mut self,
         instruction: u32,

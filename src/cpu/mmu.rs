@@ -418,22 +418,69 @@ impl Cpu {
 }
 
 fn read_arena(arena: &[u8], offset: usize, width: AccessWidth) -> Option<u64> {
-    let len = width.bytes();
-    let bytes = arena.get(offset..offset.checked_add(len)?)?;
-    let mut value = [0_u8; 8];
-    value[..len].copy_from_slice(bytes);
-    Some(u64::from_le_bytes(value))
+    match width {
+        AccessWidth::Byte => Some(u64::from(*arena.get(offset)?)),
+        AccessWidth::HalfWord => {
+            let bytes = arena.get(offset..offset.checked_add(2)?)?;
+            Some(u64::from(u16::from_le_bytes(bytes.try_into().ok()?)))
+        }
+        AccessWidth::Word => {
+            let bytes = arena.get(offset..offset.checked_add(4)?)?;
+            Some(u64::from(u32::from_le_bytes(bytes.try_into().ok()?)))
+        }
+        AccessWidth::DoubleWord => {
+            let bytes = arena.get(offset..offset.checked_add(8)?)?;
+            Some(u64::from_le_bytes(bytes.try_into().ok()?))
+        }
+    }
 }
 
 fn write_arena(arena: &mut [u8], offset: usize, width: AccessWidth, value: u64) -> Option<()> {
-    let len = width.bytes();
-    let destination = arena.get_mut(offset..offset.checked_add(len)?)?;
-    destination.copy_from_slice(&value.to_le_bytes()[..len]);
+    let bytes = value.to_le_bytes();
+    match width {
+        AccessWidth::Byte => *arena.get_mut(offset)? = bytes[0],
+        AccessWidth::HalfWord => {
+            let destination = arena.get_mut(offset..offset.checked_add(2)?)?;
+            destination.copy_from_slice(&bytes[..2]);
+        }
+        AccessWidth::Word => {
+            let destination = arena.get_mut(offset..offset.checked_add(4)?)?;
+            destination.copy_from_slice(&bytes[..4]);
+        }
+        AccessWidth::DoubleWord => {
+            let destination = arena.get_mut(offset..offset.checked_add(8)?)?;
+            destination.copy_from_slice(&bytes);
+        }
+    }
     Some(())
 }
 
 impl From<BusError> for TranslationFault {
     fn from(_: BusError) -> Self {
         Self::Access
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AccessWidth, read_arena, write_arena};
+
+    #[test]
+    fn arena_scalar_accesses_cover_widths_and_bounds() {
+        let mut arena = [0_u8; 15];
+        let cases = [
+            (AccessWidth::Byte, 1, 0x88),
+            (AccessWidth::HalfWord, 3, 0x7788),
+            (AccessWidth::Word, 5, 0x5566_7788),
+            (AccessWidth::DoubleWord, 7, 0x1122_3344_5566_7788),
+        ];
+
+        for (width, offset, value) in cases {
+            assert_eq!(write_arena(&mut arena, offset, width, value), Some(()));
+            assert_eq!(read_arena(&arena, offset, width), Some(value));
+            let invalid_offset = arena.len() - width.bytes() + 1;
+            assert_eq!(read_arena(&arena, invalid_offset, width), None);
+            assert_eq!(write_arena(&mut arena, invalid_offset, width, value), None);
+        }
     }
 }

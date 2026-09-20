@@ -4,6 +4,12 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Reduced the prepared xv6 compile workload from 520.185 to 362.416 guest
+    seconds with safe fixed-width RAM fast paths and measured arithmetic
+    dispatch inlining. Generated WASM now uses direct scalar accesses instead
+    of generic copies, retains checked arena bounds, and no longer repairs `x0`
+    after every instruction because all register writes already reject it. A
+    differential test compares TLB-fast execution with the checked bus path.
 *   Added a reproducible Alpine xv6 kernel-only compile image and Node/V8
     profiling harness for comparable Rust Riscbox and archived TinyEMU WASM
     runs. The image uses native guest RISC-V build tools, excludes `fs.img`,

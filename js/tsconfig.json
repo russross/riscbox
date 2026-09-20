@@ -12,5 +12,5 @@
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true
   },
-  "include": ["p9/**/*.ts"]
+  "include": ["network/**/*.ts", "p9/**/*.ts"]
 }

@@ -4,8 +4,8 @@ use riscbox::memory::{AccessWidth, GuestAddress, PhysicalMemory, RamFlags};
 use riscbox::virtio::VirtioTransport;
 use riscbox::virtio_devices::{
     BlockBackend, BlockDevice, ConsoleDevice, DeviceError, EntropyDevice, InputDevice, InputEvent,
-    InputKind, NetworkBackend, NetworkDevice, NinePBackend, NinePDevice, NinePRequestStatus,
-    VirtioMmioDevice,
+    InputKind, NetworkBackend, NetworkDevice, NinePBackend, NinePDevice, NinePGeneration,
+    NinePOutcome, NinePRequestId, NinePRequestStatus, VirtioMmioDevice,
 };
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -387,11 +387,176 @@ fn network_strips_and_adds_the_ten_byte_header() {
 
 struct Echo9p;
 impl NinePBackend for Echo9p {
-    fn transact(&mut self, request: &[u8]) -> Result<NinePRequestStatus, DeviceError> {
+    fn transact(
+        &mut self,
+        _: NinePRequestId,
+        request: &[u8],
+        _: u32,
+    ) -> Result<NinePRequestStatus, DeviceError> {
         let mut r = request.to_vec();
         r[4] = r[4].wrapping_add(1);
         Ok(NinePRequestStatus::Complete(r))
     }
+}
+
+#[derive(Default)]
+struct Pending9p {
+    requests: Vec<(NinePRequestId, Vec<u8>, u32)>,
+}
+
+impl NinePBackend for Pending9p {
+    fn transact(
+        &mut self,
+        request_id: NinePRequestId,
+        request: &[u8],
+        reply_capacity: u32,
+    ) -> Result<NinePRequestStatus, DeviceError> {
+        self.requests
+            .push((request_id, request.to_vec(), reply_capacity));
+        Ok(NinePRequestStatus::Pending)
+    }
+}
+
+fn p9_message(kind: u8, tag: u16) -> [u8; 7] {
+    let [tag_low, tag_high] = tag.to_le_bytes();
+    [7, 0, 0, 0, kind, tag_low, tag_high]
+}
+
+fn pending_p9() -> (
+    PhysicalMemory,
+    VirtioMmioDevice<NinePDevice<Pending9p>>,
+    [u8; 7],
+) {
+    let mut memory = test_memory();
+    let mut p9 = VirtioMmioDevice::new(
+        VirtioTransport::new(9, 1, &[8]),
+        NinePDevice::new(Pending9p::default(), b"root"),
+    );
+    configure(&mut p9, &mut memory, 0);
+    let request = p9_message(100, 0x1111);
+    bytes(&mut memory, DATA, &request);
+    descriptor(&mut memory, 0, DATA, 7, 1, 1);
+    descriptor(&mut memory, 1, DATA + 0x100, 7, 2, 0);
+    available(&mut memory, 0);
+    p9.write(&mut memory, 0x50, 0, AccessWidth::Word).unwrap();
+    (memory, p9, request)
+}
+
+#[test]
+fn ninep_pending_completion_rejects_malformed_mismatched_and_oversized_replies() {
+    for reply in [
+        vec![6, 0, 0, 0, 101, 0x11, 0x11],
+        p9_message(101, 0x2222).to_vec(),
+        [p9_message(101, 0x1111).as_slice(), &[0]].concat(),
+    ] {
+        let (mut memory, mut p9, _) = pending_p9();
+        let generation = p9.device.generation();
+        assert_eq!(
+            p9.device.complete(
+                &mut p9.transport,
+                &mut memory,
+                generation,
+                NinePRequestId(1),
+                NinePOutcome::Reply(reply),
+            ),
+            Err(DeviceError::InvalidRequest)
+        );
+    }
+}
+
+#[test]
+fn ninep_pending_requests_complete_out_of_order_and_reset_retires_generation() {
+    let mut memory = test_memory();
+    let mut p9 = VirtioMmioDevice::new(
+        VirtioTransport::new(9, 1, &[8]),
+        NinePDevice::new(Pending9p::default(), b"root"),
+    );
+    configure(&mut p9, &mut memory, 0);
+
+    let first = p9_message(100, 0x1111);
+    let second = p9_message(108, 0x2222);
+    bytes(&mut memory, DATA, &first);
+    bytes(&mut memory, DATA + 0x200, &second);
+    descriptor(&mut memory, 0, DATA, 7, 1, 1);
+    descriptor(&mut memory, 1, DATA + 0x100, 7, 2, 0);
+    descriptor(&mut memory, 2, DATA + 0x200, 7, 1, 3);
+    descriptor(&mut memory, 3, DATA + 0x300, 7, 2, 0);
+    write(&mut memory, AVAIL + 2, AccessWidth::HalfWord, 2);
+    write(&mut memory, AVAIL + 4, AccessWidth::HalfWord, 0);
+    write(&mut memory, AVAIL + 6, AccessWidth::HalfWord, 2);
+    p9.write(&mut memory, 0x50, 0, AccessWidth::Word).unwrap();
+
+    assert_eq!(
+        p9.device.backend_mut().requests,
+        [
+            (NinePRequestId(1), first.to_vec(), 7),
+            (NinePRequestId(2), second.to_vec(), 7),
+        ]
+    );
+    let generation = p9.device.generation();
+    let mut second_reply = second;
+    second_reply[4] += 1;
+    p9.device
+        .complete(
+            &mut p9.transport,
+            &mut memory,
+            generation,
+            NinePRequestId(2),
+            NinePOutcome::Reply(second_reply.to_vec()),
+        )
+        .unwrap();
+    p9.device
+        .complete(
+            &mut p9.transport,
+            &mut memory,
+            generation,
+            NinePRequestId(1),
+            NinePOutcome::Suppressed,
+        )
+        .unwrap();
+    assert_eq!(
+        memory.read(GuestAddress(USED + 2), AccessWidth::HalfWord),
+        Ok(2)
+    );
+    assert_eq!(
+        memory.read(GuestAddress(USED + 4), AccessWidth::Word),
+        Ok(2)
+    );
+    assert_eq!(
+        memory.read(GuestAddress(USED + 8), AccessWidth::Word),
+        Ok(7)
+    );
+    assert_eq!(
+        memory.read(GuestAddress(USED + 12), AccessWidth::Word),
+        Ok(0)
+    );
+    assert_eq!(
+        memory.read(GuestAddress(USED + 16), AccessWidth::Word),
+        Ok(0)
+    );
+
+    assert_eq!(
+        p9.device.complete(
+            &mut p9.transport,
+            &mut memory,
+            generation,
+            NinePRequestId(1),
+            NinePOutcome::Suppressed,
+        ),
+        Err(DeviceError::Backend)
+    );
+    p9.write(&mut memory, 0x70, 0, AccessWidth::Word).unwrap();
+    assert_eq!(p9.device.generation(), NinePGeneration(2));
+    assert_eq!(
+        p9.device.complete(
+            &mut p9.transport,
+            &mut memory,
+            generation,
+            NinePRequestId(2),
+            NinePOutcome::Suppressed,
+        ),
+        Ok(())
+    );
 }
 
 #[test]

@@ -843,7 +843,9 @@ impl Machine {
             .device
             .backend_mut()
             .complete_request(request, bytes)?;
-        device.device.resume(&mut device.transport, memory)?;
+        device
+            .device
+            .resume_pending(&mut device.transport, memory)?;
         self.bus.update_device_irqs();
         Ok(())
     }

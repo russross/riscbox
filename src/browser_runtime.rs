@@ -14,7 +14,7 @@ use crate::machine::{
     BootImages, FramebufferConfig, FramebufferUpdate, Machine, MachineConfig, MachineError,
 };
 use crate::virtio_devices::{
-    DeviceError, InputKind, NetworkBackend, NinePBackend, NinePRequestStatus,
+    DeviceError, InputKind, NetworkBackend, NinePBackend, NinePRequestId, NinePRequestStatus,
 };
 
 pub type NinePCallback = Rc<RefCell<dyn FnMut(&[u8]) -> Result<Vec<u8>, DeviceError>>>;
@@ -42,7 +42,12 @@ impl CallbackNineP {
 }
 
 impl NinePBackend for CallbackNineP {
-    fn transact(&mut self, request: &[u8]) -> Result<NinePRequestStatus, DeviceError> {
+    fn transact(
+        &mut self,
+        _: NinePRequestId,
+        request: &[u8],
+        _: u32,
+    ) -> Result<NinePRequestStatus, DeviceError> {
         (self.callback.borrow_mut())(request).map(NinePRequestStatus::Complete)
     }
 }

@@ -1,6 +1,7 @@
 //! Synchronous `VirtIO` device protocols used by the browser platform.
 
 use core::fmt;
+use std::collections::BTreeMap;
 
 use crate::entropy::SharedEntropy;
 use crate::memory::{AccessWidth, PhysicalMemory};
@@ -593,7 +594,12 @@ pub trait NinePBackend {
     /// # Errors
     ///
     /// Returns `DeviceError::Backend` when the host server fails.
-    fn transact(&mut self, request: &[u8]) -> Result<NinePRequestStatus, DeviceError>;
+    fn transact(
+        &mut self,
+        request_id: NinePRequestId,
+        request: &[u8],
+        reply_capacity: u32,
+    ) -> Result<NinePRequestStatus, DeviceError>;
 
     fn next_request(&mut self) -> Option<NinePHostRequest> {
         None
@@ -622,8 +628,13 @@ pub enum NinePRequestStatus {
 }
 
 impl<T: NinePBackend + ?Sized> NinePBackend for Box<T> {
-    fn transact(&mut self, request: &[u8]) -> Result<NinePRequestStatus, DeviceError> {
-        (**self).transact(request)
+    fn transact(
+        &mut self,
+        request_id: NinePRequestId,
+        request: &[u8],
+        reply_capacity: u32,
+    ) -> Result<NinePRequestStatus, DeviceError> {
+        (**self).transact(request_id, request, reply_capacity)
     }
 
     fn next_request(&mut self) -> Option<NinePHostRequest> {
@@ -634,22 +645,52 @@ impl<T: NinePBackend + ?Sized> NinePBackend for Box<T> {
         (**self).complete_request(id, data)
     }
 }
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct NinePGeneration(pub u32);
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct NinePRequestId(pub u32);
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum NinePOutcome {
+    Reply(Vec<u8>),
+    Suppressed,
+}
+
+struct PendingNineP {
+    queue: QueueIndex,
+    chain: DescriptorChain,
+    request: Vec<u8>,
+}
+
 pub struct NinePDevice<B> {
     backend: B,
     tag: Vec<u8>,
-    pending: Option<(QueueIndex, DescriptorChain, Vec<u8>)>,
+    generation: NinePGeneration,
+    generation_exhausted: bool,
+    next_request_id: u32,
+    pending: BTreeMap<NinePRequestId, PendingNineP>,
 }
 impl<B> NinePDevice<B> {
     pub fn new(backend: B, tag: &[u8]) -> Self {
         Self {
             backend,
             tag: tag.to_vec(),
-            pending: None,
+            generation: NinePGeneration(1),
+            generation_exhausted: false,
+            next_request_id: 1,
+            pending: BTreeMap::new(),
         }
     }
 
     pub fn backend_mut(&mut self) -> &mut B {
         &mut self.backend
+    }
+
+    #[must_use]
+    pub const fn generation(&self) -> NinePGeneration {
+        self.generation
     }
 }
 impl<B: NinePBackend> VirtioDevice for NinePDevice<B> {
@@ -666,51 +707,131 @@ impl<B: NinePBackend> VirtioDevice for NinePDevice<B> {
         memory: &mut PhysicalMemory,
         queue: QueueIndex,
     ) -> Result<(), DeviceError> {
-        if self.pending.is_some() {
+        if self.generation_exhausted {
+            return Err(DeviceError::Backend);
+        }
+        let pending_limit = transport
+            .queue(queue)
+            .map(|state| usize::from(state.size))
+            .ok_or(DeviceError::InvalidRequest)?;
+        if self.pending.len() >= pending_limit {
             return Ok(());
         }
         while let Some(chain) = transport.next_chain(memory, queue)? {
             let mut req = vec![0; chain.readable as usize];
             transport.read_chain(memory, &chain, 0, &mut req)?;
             validate_9p(&req)?;
-            match self.backend.transact(&req)? {
+            let request_id = self.allocate_request_id()?;
+            match self.backend.transact(request_id, &req, chain.writable)? {
                 NinePRequestStatus::Complete(reply) => {
                     complete_9p(transport, memory, queue, &chain, &req, &reply)?;
                 }
                 NinePRequestStatus::Pending => {
-                    self.pending = Some((queue, chain, req));
-                    break;
+                    self.pending.insert(
+                        request_id,
+                        PendingNineP {
+                            queue,
+                            chain,
+                            request: req,
+                        },
+                    );
                 }
+            }
+            if self.pending.len() >= pending_limit {
+                break;
             }
         }
         Ok(())
     }
+
+    fn reset(&mut self) {
+        self.pending.clear();
+        if let Some(generation) = self.generation.0.checked_add(1) {
+            self.generation = NinePGeneration(generation);
+        } else {
+            self.generation_exhausted = true;
+        }
+        self.next_request_id = 1;
+    }
 }
 
 impl<B: NinePBackend> NinePDevice<B> {
-    /// Retries the retained descriptor after a host request completes.
+    fn allocate_request_id(&mut self) -> Result<NinePRequestId, DeviceError> {
+        let id = NinePRequestId(self.next_request_id);
+        self.next_request_id = self
+            .next_request_id
+            .checked_add(1)
+            .ok_or(DeviceError::Backend)?;
+        Ok(id)
+    }
+
+    /// Completes a retained descriptor from a host-provided outcome.
     ///
     /// # Errors
     ///
     /// Returns an error for a malformed request, response, or descriptor chain.
-    pub fn resume(
+    pub fn complete(
+        &mut self,
+        transport: &mut VirtioTransport,
+        memory: &mut PhysicalMemory,
+        generation: NinePGeneration,
+        request_id: NinePRequestId,
+        outcome: NinePOutcome,
+    ) -> Result<(), DeviceError> {
+        if generation != self.generation {
+            return Ok(());
+        }
+        let pending = self
+            .pending
+            .remove(&request_id)
+            .ok_or(DeviceError::Backend)?;
+        match outcome {
+            NinePOutcome::Reply(reply) => complete_9p(
+                transport,
+                memory,
+                pending.queue,
+                &pending.chain,
+                &pending.request,
+                &reply,
+            ),
+            NinePOutcome::Suppressed => {
+                transport.complete_chain(memory, pending.queue, &pending.chain, 0)?;
+                Ok(())
+            }
+        }
+    }
+
+    /// Retries all retained descriptors after legacy backend state changes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a backend failure, invalid response, or invalid
+    /// retained descriptor chain.
+    pub fn resume_pending(
         &mut self,
         transport: &mut VirtioTransport,
         memory: &mut PhysicalMemory,
     ) -> Result<(), DeviceError> {
-        let Some((queue, chain, request)) = self.pending.take() else {
-            return Ok(());
-        };
-        match self.backend.transact(&request)? {
-            NinePRequestStatus::Complete(reply) => {
-                complete_9p(transport, memory, queue, &chain, &request, &reply)?;
-                self.notify(transport, memory, queue)
-            }
-            NinePRequestStatus::Pending => {
-                self.pending = Some((queue, chain, request));
-                Ok(())
+        let request_ids: Vec<_> = self.pending.keys().copied().collect();
+        for request_id in request_ids {
+            let Some(pending) = self.pending.get(&request_id) else {
+                continue;
+            };
+            match self
+                .backend
+                .transact(request_id, &pending.request, pending.chain.writable)?
+            {
+                NinePRequestStatus::Complete(reply) => self.complete(
+                    transport,
+                    memory,
+                    self.generation,
+                    request_id,
+                    NinePOutcome::Reply(reply),
+                )?,
+                NinePRequestStatus::Pending => {}
             }
         }
+        Ok(())
     }
 }
 

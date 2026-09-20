@@ -194,11 +194,10 @@ Decision log
 Proposed 9p transport and filesystem design
 ------------------------------------------
 
-Status: design complete for review; no implementation or migration is
-authorized by this section. The completed milestones and decision log above
-describe the current implementation. This proposal would replace the
-synchronous browser 9p boundary and remove the platform-owned `fs_net`
-filesystem.
+Status: implementation in progress. Milestone 1, the concurrent Rust transport
+core, is complete. The browser endpoint action/ABI boundary is the next
+milestone. The completed milestones and decision log above describe the
+pre-project implementation where this section has not yet superseded it.
 
 ### Scope and ownership
 
@@ -579,24 +578,30 @@ the Python image tools or shell build scripts. Update Risclet imports,
 distribution packaging, examples, and deployment documentation to consume the
 emitted modules.
 
-1.  Specify and test concurrent transport, suppression, resets, and completion
-    ordering using a controllable fake server. Exercise out-of-order replies,
-    queue saturation, two endpoints, malformed envelopes, mismatched tags,
-    oversized replies, duplicate completions, VirtIO reset, VM restart, and
-    late completions from retired generations.
-2.  Establish the TypeScript build and split shared filesystem state from 9p
+1.  **Complete:** implement the concurrent Rust VirtIO transport core. Retain
+    each descriptor in a bounded map keyed by a typed request ID, drain chains
+    in submission order, accept reply and suppression outcomes out of order,
+    validate response envelopes, and retire the generation on device reset.
+    Focused tests cover malformed, mismatched, oversized, duplicate, suppressed,
+    out-of-order, reset, and stale-generation completions.
+2.  Carry endpoint and generation identity through machine host actions, the
+    raw WASM ABI, and the JavaScript adapter. Test queue saturation, two
+    endpoints, VM restart, endpoint failure, adapter completion ordering, and
+    late promise settlements with a controllable fake server.
+3.  Establish the TypeScript build and split shared filesystem state from 9p
     session state. Route the current memory behavior through the concurrent
     boundary. Validate two sessions reusing the same fid and tag values,
     `Tversion` generations, all flush races, and session close.
-3.  Add inode-backed directories, hard links, open-unlink lifetime, stable
+4.  Add inode-backed directories, hard links, open-unlink lifetime, stable
     directory cookies, quotas, and shared byte-range locks. Test atomic rename,
     append, truncation, quota races, lock release, QID stability, and two Linux
     clients mutating one tree.
-4.  Add typed seeds, the single loader operation, explicit direct-API results,
+5.  Add typed seeds, the single loader operation, explicit direct-API results,
     and HTTPS and tar example plugins. Exercise shared loads, failure and retry,
     whole-file replacement without a load, load/mutation races, loader length
     validation, deletion, hard-linked seeds, and immutable deployment pinning.
-5.  Remove both Rust and C `fs_net` paths and the old configuration forms. Run
+6.  Remove the Rust `fs_net` path and the old configuration forms. Keep the C
+    reference unchanged. Run
     focused native transport and TypeScript tests, strict type checks, WASM
     builds, and headed Chrome guest tests. Boot Linux with two configured tags,
     verify sharing under documented cache modes, restart during outstanding
@@ -618,7 +623,18 @@ Protocol references for implementation review:
 *   [Linux 9p client documentation](https://docs.kernel.org/filesystems/9p.html)
     describes mount tags, attach options, and cache consistency limitations.
 *   [9p version semantics](https://9fans.github.io/plan9port/man/man9/version.html)
-    define the protocol-session boundary and its required cleanup.
+    defines the protocol-session boundary and its required cleanup.
+
+Implementation decisions
+------------------------
+
+*   2026-09-19: Split the original concurrent-boundary stage at the Rust
+    transport boundary. The device owns a `BTreeMap` of retained chains keyed
+    by `NinePRequestId`; its size is bounded by the negotiated virtqueue size.
+    `NinePGeneration` invalidates all retained chains on reset, and stale
+    completions are ignored without accessing guest memory. Current-generation
+    unknown or duplicate completions remain transport failures. Browser
+    endpoint identity and asynchronous host actions form milestone 2.
 
 Later milestones (out of scope for now)
 ---------------------------------------

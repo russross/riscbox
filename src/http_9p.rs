@@ -3,7 +3,9 @@
 use std::collections::{BTreeMap, VecDeque};
 
 use crate::crypto::derive_key;
-use crate::virtio_devices::{DeviceError, NinePBackend, NinePHostRequest, NinePRequestStatus};
+use crate::virtio_devices::{
+    DeviceError, NinePBackend, NinePHostRequest, NinePRequestId, NinePRequestStatus,
+};
 
 const MAX_MESSAGE: usize = 64 * 1024;
 const NOTAG: u16 = u16::MAX;
@@ -784,7 +786,12 @@ impl HttpNineP {
 }
 
 impl NinePBackend for HttpNineP {
-    fn transact(&mut self, request: &[u8]) -> Result<NinePRequestStatus, DeviceError> {
+    fn transact(
+        &mut self,
+        _: NinePRequestId,
+        request: &[u8],
+        _: u32,
+    ) -> Result<NinePRequestStatus, DeviceError> {
         self.process(request)
     }
     fn next_request(&mut self) -> Option<NinePHostRequest> {
@@ -1010,7 +1017,7 @@ fn decode_hex(value: &str) -> Result<Vec<u8>, P9Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::{HttpNineP, NinePBackend, NinePRequestStatus};
+    use super::{HttpNineP, NinePBackend, NinePRequestId, NinePRequestStatus};
 
     fn message(ty: u8, tag: u16, body: &[u8]) -> Vec<u8> {
         let mut result = Vec::from([0, 0, 0, 0, ty]);
@@ -1045,7 +1052,8 @@ mod tests {
         let mut version = Vec::from(65_536_u32.to_le_bytes());
         version.extend(string("9P2000.L"));
         assert!(matches!(
-            fs.transact(&message(100, u16::MAX, &version)).unwrap(),
+            fs.transact(NinePRequestId(1), &message(100, u16::MAX, &version), 4096)
+                .unwrap(),
             NinePRequestStatus::Complete(_)
         ));
         let mut attach = Vec::from(1_u32.to_le_bytes());
@@ -1053,23 +1061,28 @@ mod tests {
         attach.extend(string(""));
         attach.extend(string(""));
         attach.extend_from_slice(&0_u32.to_le_bytes());
-        fs.transact(&message(104, 1, &attach)).unwrap();
+        fs.transact(NinePRequestId(2), &message(104, 1, &attach), 4096)
+            .unwrap();
         let mut walk = Vec::from(1_u32.to_le_bytes());
         walk.extend_from_slice(&2_u32.to_le_bytes());
         walk.extend_from_slice(&1_u16.to_le_bytes());
         walk.extend(string("hello"));
-        fs.transact(&message(110, 2, &walk)).unwrap();
+        fs.transact(NinePRequestId(3), &message(110, 2, &walk), 4096)
+            .unwrap();
         let mut read = Vec::from(2_u32.to_le_bytes());
         read.extend_from_slice(&0_u64.to_le_bytes());
         read.extend_from_slice(&3_u32.to_le_bytes());
         assert_eq!(
-            fs.transact(&message(116, 3, &read)).unwrap(),
+            fs.transact(NinePRequestId(4), &message(116, 3, &read), 4096)
+                .unwrap(),
             NinePRequestStatus::Pending
         );
         let file = fs.next_request().unwrap();
         assert_eq!(file.url, "https://host/root/files/000000000000002b");
         fs.complete_request(file.id, b"abc".to_vec()).unwrap();
-        let NinePRequestStatus::Complete(reply) = fs.transact(&message(116, 3, &read)).unwrap()
+        let NinePRequestStatus::Complete(reply) = fs
+            .transact(NinePRequestId(5), &message(116, 3, &read), 4096)
+            .unwrap()
         else {
             panic!("read remained pending");
         };
@@ -1079,7 +1092,10 @@ mod tests {
             .unwrap();
         assert_eq!(
             fs.command_replies.get(&9).unwrap(),
-            &[0xae, 0x4d, 0x0c, 0x95, 0xaf, 0x6b, 0x46, 0xd3, 0x2d, 0x0a, 0xdf, 0xf9, 0x28, 0xf0, 0x6d, 0xd0]
+            &[
+                0xae, 0x4d, 0x0c, 0x95, 0xaf, 0x6b, 0x46, 0xd3, 0x2d, 0x0a, 0xdf, 0xf9, 0x28, 0xf0,
+                0x6d, 0xd0
+            ]
         );
     }
 }

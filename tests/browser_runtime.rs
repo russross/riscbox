@@ -5,7 +5,7 @@ use riscbox::browser::BrowserController;
 use riscbox::browser_runtime::{
     BrowserRuntime, CallbackNineP, HostAction, RuntimeError, RuntimeStart,
 };
-use riscbox::virtio_devices::{DeviceError, NinePBackend, NinePRequestStatus};
+use riscbox::virtio_devices::{DeviceError, NinePBackend, NinePRequestId, NinePRequestStatus};
 
 fn start() -> RuntimeStart {
     RuntimeStart {
@@ -249,7 +249,9 @@ fn javascript_and_http_9p_backends_are_connected() {
     }));
     let mut backend = CallbackNineP::new(callback.clone());
     let message = [7, 0, 0, 0, 100, 1, 0];
-    let NinePRequestStatus::Complete(reply) = backend.transact(&message).expect("callback reply")
+    let NinePRequestStatus::Complete(reply) = backend
+        .transact(NinePRequestId(1), &message, 4096)
+        .expect("callback reply")
     else {
         panic!("callback reply remained pending");
     };

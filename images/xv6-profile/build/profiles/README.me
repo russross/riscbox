@@ -1,0 +1,21 @@
+xv6 WASM profiles
+=================
+
+The `.cpuprofile` files are V8 CPU profiles. Open Chrome or Chromium
+DevTools, select **Performance**, choose **Load profile**, and select either
+`tinyemu.cpuprofile` or `riscbox.cpuprofile`.
+
+For a standalone flame graph, run:
+
+    npx speedscope tinyemu.cpuprofile
+    npx speedscope riscbox.cpuprofile
+
+Inspect the guest output with:
+
+    less tinyemu.log
+    less riscbox.log
+    rg 'XV6_PROFILE_BUILD_COMPLETE|poweroff|Power off' *.log
+
+To summarize the profile sizes and sample counts:
+
+    node -e 'for (const f of process.argv.slice(1)) { const p = require(`./${f}`); console.log(f, `nodes=${p.nodes.length}`, `samples=${p.samples.length}`); }' *.cpuprofile

@@ -1,9 +1,11 @@
-C reference implementation
-==========================
+C historical reference archive
+==============================
 
-This directory contains the complete reference C implementation of Riscbox.
-It is independent of the Rust implementation and the repository's image build
-pipeline.
+This directory is the historical C fork of TinyEMU preserved as a reference
+archive. It is not the current Riscbox implementation, a development target,
+or a compatibility requirement. Do not add new features or maintain parity
+here; current Riscbox development and compatibility work belongs at the
+repository root and targets Rust running as browser WebAssembly.
 
 Build and test it from this directory:
 

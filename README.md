@@ -1,10 +1,9 @@
 riscbox emulator
 ================
 
-riscbox is a Rust implementation of a small RISC-V virtual platform for use in
-education and specifically in the browser with WASM. It began as a focused fork
-of Fabrice Bellard's [TinyEMU](https://bellard.org/tinyemu/); the complete C
-reference implementation now lives independently under `c/`. Treat the C version as an archived reference, not a compatibility target or in need of ongoing parity.
+riscbox is a small RISC-V virtual platform for use in education and specifically
+in the browser with WASM. It began as a focused fork of Fabrice Bellard's
+[TinyEMU](https://bellard.org/tinyemu/).
 
 riscbox is intended to run small RISC-V Linux systems and student kernels in a
 web page, with native Rust builds for testing. Its platform generally follows
@@ -33,14 +32,10 @@ generic `fw_jump.bin`:
 
     rustup target add wasm32-unknown-unknown
 
-The optional C reference under `c/` additionally requires Clang, Emscripten,
-libcurl, OpenSSL, and SDL 1.2 development files.
-
-
 Getting started
 ---------------
 
-Clone and build the Rust implementation:
+Clone and build riscbox:
 
     git clone https://github.com/russross/riscbox.git
     cd riscbox
@@ -57,10 +52,6 @@ The root build exposes the implementation and core distribution artifacts:
 | `make wasm`    | `target/wasm32-unknown-unknown/release/riscbox_wasm.wasm` | Browser runtime |
 | `make kernel`  | `kernel/linux` | Canonical custom kernel |
 | `make dist`    | WASM and kernel outputs | Core distribution artifacts |
-
-Build the reference implementation by changing into `c/`; its README documents
-the preserved C targets.
-
 
 Build and deploy an image
 -------------------------

@@ -1,26 +1,28 @@
-Riscbox Rust port
-=================
+Riscbox development plan
+=========================
 
 Goal
 ----
 
-Build an independent Rust implementation of the browser Riscbox platform. The
-C implementation remains isolated under `c/` as a behavioral reference, but
-no C source, object code, or build tool is required by Rust or image production.
+Maintain Riscbox as the Rust implementation of the browser platform. The
+historical C fork under `c/` is retained only as a reference archive; it is not
+part of the implementation, compatibility target, parity requirement, or
+validation workflow. No C source, object code, or build tool is required by
+Riscbox or image production.
 
-The production target is `wasm32-unknown-unknown`. The port covers the RV64
+The production target is `wasm32-unknown-unknown`. Riscbox covers the RV64
 CPU, Sv39 memory system, machine, guest-visible devices, configuration loader,
 HTTP block and filesystem storage, JavaScript 9p bridge, and current browser
 entry points. A native Rust emulator, SDL, SLIRP, native storage backends, and
-image-building tools are outside the port.
+image-building tools are outside the emulator.
 
 Architecture
 ------------
 
 The Rust package lives at the repository root with source under `src/`.
 Production code is split into CPU, SoftFP, memory, devices, machine,
-configuration, storage backends, and host integration modules as they are
-ported. Native builds exist to run tests; the deployable library is built
+configuration, storage backends, and host integration modules. Native builds
+exist to run tests; the deployable library is built
 directly for bare WASM.
 
 Guest addresses remain `u64`. RAM and other byte storage occupy a fixed arena
@@ -40,19 +42,19 @@ Validation workflow
 
 Each milestone follows the same order:
 
-1.  Trace the complete affected C path and add focused C behavioral tests.
-2.  Express the same cases as Rust tests, including edge and failure cases.
-3.  Implement Rust until both suites pass on their native test runners.
-4.  Build the Rust WASM target and add deployed-target coverage as its public
+1.  Trace the complete affected Riscbox workflow and add focused Rust tests,
+    including edge and failure cases.
+2.  Implement Riscbox until the native tests pass.
+3.  Build the Rust WASM target and add deployed-target coverage as its public
     test interface becomes available.
-5.  Record the completed behavior and next boundary here, then commit the
+4.  Record the completed behavior and next boundary here, then commit the
     focused milestone.
 
-Specifications define expected architectural behavior. When C differs because
-of a defect, add the specification-derived regression test and correct C
-narrowly instead of reproducing the defect. Full xv6 and Alpine boot tests begin
-after the platform is complete; component tests remain the primary validation
-during the port.
+Specifications define expected architectural behavior. Historical behavior in
+the C archive is not a compatibility requirement; add regression tests for the
+specified Riscbox behavior instead. Full xv6 and Alpine boot tests begin after
+the platform is complete; component tests remain the primary validation during
+development.
 
 Milestones
 ----------
@@ -72,7 +74,7 @@ Milestones
 Current status
 --------------
 
-The planned Rust port is complete through the browser integration boundary.
+Riscbox is complete through the browser integration boundary.
 The runtime loads configuration, boot images, and split HTTP disks through
 explicit request/completion queues; pending VirtIO block descriptors resume
 after their blocks arrive. The raw WASM ABI and dependency-free JavaScript
@@ -93,10 +95,10 @@ in-memory JavaScript 9p service,
 loads either tracked example without RPC, mirrors guest-created and deleted
 files, and updates optional instructions from `doc/doc.md`. Its interface
 retains the deployed CodeGrinder editor, terminal, draggable panes, and sizing
-behavior while removing the RPC and grading workflows. Clean C release,
-sanitizer, and reference WASM builds from `c/` remain compatibility checks;
-the Rust workspace, strict Clippy checks, WASM build, Node adapter tests, and
-the ignored full-guest acceptance tests are the port's validation surfaces.
+behavior while removing the RPC and grading workflows. The Rust workspace,
+strict Clippy checks, WASM build, Node adapter tests, and the ignored full-guest
+acceptance tests are Riscbox's validation surfaces. The C archive is not a
+compatibility check.
 Run the full guests explicitly with:
 
     cargo test --release --test platform_acceptance alpine_reaches_login_and_shuts_down -- --ignored
@@ -105,6 +107,10 @@ Run the full guests explicitly with:
 
 Decision log
 ------------
+
+Entries below are historical records. References to the C fork describe past
+porting decisions only; they do not make the archive a current implementation,
+compatibility target, or validation surface.
 
 *   2026-09-18: Use raw Rust WASM with a handwritten compatibility adapter.
 *   2026-09-18: Preserve the existing C browser boundary, including loaders and
@@ -602,7 +608,7 @@ emitted modules.
     whole-file replacement without a load, load/mutation races, loader length
     validation, deletion, hard-linked seeds, and immutable deployment pinning.
 6.  **Complete:** remove the Rust `fs_net` path and the old configuration
-    forms. Keep the C reference unchanged. Run
+    forms. Leave the historical C archive untouched. Run
     focused native transport and TypeScript tests, strict type checks, WASM
     builds, and headed Chrome guest tests. Boot Linux with two configured tags,
     verify sharing under documented cache modes, restart during outstanding
@@ -707,8 +713,31 @@ display and input devices, and connect the framebuffer callback to a canvas in
 the Risclet page. The current demo intentionally remains terminal-only until
 that guest-to-page path can be validated together.
 
-Revisit networking support for guests.
+Networking follow-up:
+
+*   Generate one locally administered MAC per VM instead of using the current
+    fixed address.
+*   Retain Rust's pending receive-frame behavior, since it covers startup and
+    transient receive-ring gaps, but add a bounded queue and an explicit drop
+    policy so host input cannot grow memory without limit.
+*   For frames that do not fit a posted receive buffer, drop the frame and keep
+    the VM running rather than turning the condition into a runtime/device
+    failure. Keep strict errors for malformed guest descriptors and invalid
+    VirtIO requests.
+*   Preserve the current carrier behavior until a complete carrier-status
+    implementation is justified; investigate VirtIO status updates and
+    configuration-change interrupts separately before exposing them to guests.
+*   Add focused Rust regressions for MAC properties, receive-queue buffering
+    and bounds, oversized-frame handling, descriptor errors, and carrier
+    behavior. Exercise the Rust WASM ABI with the browser adapter, then
+    validate a real guest through DHCP, ARP,
+    and sustained bidirectional traffic.
+*   Exercise startup races, receive-ring exhaustion, VM reset, and multiple
+    simultaneous browser VMs. Use those results to decide whether the bounded
+    queue, MAC lifetime, and carrier semantics need further changes.
 
 Benchmark, profile, and explore performance improvements.
 
 Explore bootloader support, compressed kernel support, compressed initrd support, etc.
+
+Investigate a synchronous fast path for the 9p file system. When a request crosses the virtio boundary and is handed off to the server, let the server do a check and possibly return an immediate result.

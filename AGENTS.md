@@ -5,31 +5,32 @@ This is a focused fork of TinyEMU for small RISC-V teaching and grading VMs in
 a web browser. The implementation stays lean and direct while moving the
 machine and CPU toward current standards.
 
-Active Rust port
-----------------
+Current Riscbox implementation
+-------------------------------
 
-The active development project is a clean Rust implementation parallel to the
-C implementation. Read `PORTING.md` before working on the port; it records the
-architecture, milestone order, validation contract, and current status. Update
-its status and decision log at completed milestones or whenever a durable
-project assumption changes.
+Riscbox is the Rust implementation targeting WebAssembly in the browser. Read
+`PORTING.md` before making architectural changes; it records the architecture,
+milestone order, validation contract, and current status. Update its status and
+decision log at completed milestones or whenever a durable project assumption
+changes. The `c/` directory is the historical TinyEMU-derived C fork,
+preserved only as a reference archive. It is not the target of development,
+compatibility, parity, or new tests.
 
-The port includes the RV64 CPU, memory system, virtual platform, browser
+Riscbox includes the RV64 CPU, memory system, virtual platform, browser
 loaders, and browser backends through the existing WASM integration boundary.
 It does not include a native Rust emulator, SDL, SLIRP, native filesystem and
 socket backends, or image-preparation tools. Native Rust builds are test
-runners only. The C implementation is an executable reference and test subject,
-not a Rust dependency.
+runners only. The archived C tree is not a build dependency or validation
+surface for current work.
 
-Port one bounded subsystem at a time. For each subsystem, first add focused C
-behavioral tests, express the same cases in Rust, and then implement Rust until
-both pass. RISC-V and device specifications take precedence over accidental C
-behavior; retain a regression test and make a narrow C correction when a test
-finds a genuine C defect. Reserve full guest boot validation for the completed
+Implement one bounded subsystem at a time. Start from the relevant RISC-V,
+device, and QEMU `virt` behavior, add focused Rust tests, and implement Riscbox
+until those tests pass. Specifications take precedence over historical behavior
+in the archived C tree. Reserve full guest boot validation for the completed
 platform, while running component and integration tests at every milestone.
 
-Rust port guidelines
---------------------
+Riscbox implementation guidelines
+----------------------------------
 
 *   `wasm32-unknown-unknown` is the production target. Preserve the existing
     browser API with a small handwritten JavaScript adapter; do not introduce
@@ -46,9 +47,10 @@ Rust port guidelines
 *   Use strong types for architectural state and host interfaces. Keep device
     dispatch concrete and ownership explicit; avoid shared ownership and
     interior mutability in the interpreter.
-*   Test native C with sanitizers, native Rust for fast diagnostics, and both C
-    and Rust WASM for deployed behavior. Measure WASM throughput, module size,
-    and memory use during milestones, but correctness is the initial gate.
+*   Test native Rust for fast diagnostics and Rust WASM for deployed behavior.
+    Measure WASM throughput, module size, and memory use during milestones, but
+    correctness is the initial gate. The archived C tree is not part of this
+    validation contract.
 
 Supported scope
 ---------------
@@ -188,14 +190,9 @@ The root build is Rust-focused:
 *   `make wasm` builds the deployed Rust WebAssembly artifact, `make kernel`
     builds the canonical custom kernel, and `make dist` builds both core
     distribution artifacts.
-*   The isolated C reference is built from `c/`. Its `make`, `make debug`,
-    `make wasm`, and `make test` targets preserve the native, sanitizer,
-    Emscripten, and focused behavioral-test surfaces.
-
-For CPU or platform changes, rebuild the Rust checks and WASM target plus the
-relevant C reference profile from clean trees when the milestone is ready.
-Exercise the affected behavior with a guest or focused firmware probe rather
-than relying on compilation alone. Current xv6 is the
+For CPU or platform changes, rebuild the Rust checks and WASM target from a
+clean tree when the milestone is ready. Exercise the affected behavior with a
+guest or focused firmware probe rather than relying on compilation alone. Current xv6 is the
 primary UART and supervisor-mode integration guest. Stock Alpine through OpenSBI
 is the primary Linux/platform compatibility path; U-Boot is useful compatibility
 coverage when its extra boot path is relevant.

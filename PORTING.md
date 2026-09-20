@@ -191,6 +191,430 @@ Decision log
     replacement as the atomic image rollover. Fetch the config with `no-store`
     and revalidate the programmatically loaded WASM runtime at each VM start.
 
+Proposed 9p transport and filesystem design
+------------------------------------------
+
+Status: design complete for review; no implementation or migration is
+authorized by this section. The completed milestones and decision log above
+describe the current implementation. This proposal would replace the
+synchronous browser 9p boundary and remove the platform-owned `fs_net`
+filesystem.
+
+### Scope and ownership
+
+Make 9p-over-VirtIO a generic bridge to host-provided 9P2000.L servers. The
+Rust emulator owns VirtIO descriptor validation, bounded pending descriptors,
+request delivery, response copying, used-ring completion, resets, and
+interrupts. It validates the protocol envelope at the guest-memory boundary:
+one complete message, an exact encoded size, a request direction, a bounded
+reply with a response direction, and a matching reply tag. It does not parse
+operations, negotiate features, track fids, translate errors, or synthesize
+filesystem replies.
+
+The server owns version and size negotiation, tags, fids, attach identities,
+operations, errors, flush ordering, and filesystem state. Linux owns client
+behavior and cache policy. A malformed guest message, malformed server reply,
+duplicate completion, or completion for an unknown live request is a transport
+failure rather than a filesystem error. Ordinary failures are server-generated
+`Rlerror` replies. Stop the affected VM cleanly on a transport failure until a
+tested VirtIO device-failure and recovery path exists.
+
+Supply a reusable TypeScript server consisting of a shared in-memory
+filesystem and independent protocol sessions. It is one server available to
+the bridge, not part of the emulator. A custom server can implement the same
+session interface without using its inode model or preload support. HTTP block
+storage is unchanged by this proposal.
+
+Do not add server-driven cache invalidation, write leases, overlay protocols,
+or proprietary control files. Client and server negotiate standard 9P2000.L;
+deployment chooses Linux mount options appropriate to its sharing model.
+
+### Concurrent request/completion boundary
+
+The existing single `NinePDevice.pending` entry is an implementation shortcut,
+not a restriction of VirtIO, WASM, or 9p. Replace it with a bounded map keyed
+by a transport request ID. Each entry retains the descriptor chain, queue,
+endpoint generation, request tag, and writable capacity. IDs are independent
+of reusable 16-bit 9p tags and are not reused within a live generation.
+Use Rust newtypes for endpoint, generation, and request IDs; retire a generation
+before counters wrap. The raw ABI represents these IDs with explicit integers.
+
+Drain available chains in submission order, dispatch each once, and accept
+completions in server-selected order. A slow file load must not prevent
+delivery of a later request, particularly `Tflush`. Bound pending work by the
+negotiated virtqueue size and validate descriptor and message lengths before
+allocating request copies; do not introduce a smaller serial dispatch gate.
+The server may limit concurrent body loads, but that limit must not delay
+protocol-only requests behind them.
+
+Use host actions and exported completions through the existing adapter loop:
+
+```text
+P9Open(endpoint, generation, server_key)
+P9Request(endpoint, generation, request_id, bytes, reply_capacity)
+P9Close(endpoint, generation)
+
+riscbox_p9_complete(endpoint, generation, request_id, outcome, ptr, len)
+```
+
+The outcome is an explicitly tagged reply, suppressed response, or endpoint
+failure. A reply contains a complete 9p response. Suppression releases a
+descriptor with no protocol response, as required when a server flushes an
+outstanding request. Endpoint failure represents a broken server/connection,
+not a filesystem errno. Never leave a failed request pending or fabricate a
+successful 9p reply.
+
+The TypeScript contract is conceptually:
+
+```text
+interface P9Server {
+    connect(): P9Session;
+}
+
+interface P9Session {
+    request(bytes: Uint8Array, replyCapacity: number): Promise<P9Outcome>;
+    close(): void;
+}
+
+type P9Outcome =
+    | { kind: "reply"; bytes: Uint8Array }
+    | { kind: "suppressed" };
+```
+
+A rejected request promise is an endpoint failure. Filesystem errors must be
+encoded as 9p replies rather than thrown across this boundary.
+
+Register one server per configuration key. Each VirtIO device connection gets
+a fresh session, including when two devices select the same shared filesystem.
+`connect()` is synchronous so missing registrations fail during VM setup;
+requests are always asynchronous. The adapter invokes requests in delivery
+order without awaiting earlier promises. It queues settled outcomes and drains
+them only after the active WASM call returns, so no callback reenters borrowed
+Rust runtime state. Preserve settlement order while batching, especially a
+suppression or original reply before its `Rflush`.
+
+Copy request bytes before releasing host-action storage. A session owns each
+request copy until its promise settles. Copy a reply into WASM only for the
+completion call, and do not retain a WASM view across an await. Treat bytes
+returned by the supplied filesystem's loader as transferred to the filesystem;
+custom servers remain responsible for not mutating a reply after returning it.
+
+Flushing belongs to the server. It tracks old tags, suppresses responses when
+appropriate, handles repeated and invalid flushes, and ensures a flushed
+response cannot follow its `Rflush`. Aborting a loader call is optional resource
+cleanup and does not implement the protocol. A shared load may continue after
+one request is flushed if another waiter still needs it. Suppression must
+reclaim the original descriptor before exposing `Rflush`, permitting safe tag
+and request-buffer reuse. Validate reply-before-flush, suppression-before-flush,
+repeated flush, and tag-reuse races against Linux's VirtIO client.
+
+### Endpoint identity and lifetime
+
+A runtime-scoped endpoint ID plus generation prevents stale asynchronous
+completions from reaching reused guest memory. Advance the transport generation
+on VirtIO device reset, VM restart, and explicit endpoint close. Invalidate
+pending descriptors before closing the old session, then ignore its late
+completions without touching guest memory. A duplicate or unknown request ID
+in the current generation is an adapter error. Closing one session releases
+its fids, locks, and pending operations, not the shared tree or other sessions.
+
+Maintain a second, server-local session generation. A valid `Tversion` starts
+a new protocol session, aborts all outstanding protocol work, releases all
+fids and locks, and prevents earlier continuations from committing mutations
+or producing replies. This is the remount boundary defined by 9p itself.
+Linux's VirtIO transport does not send the device a distinct unmount event, so
+normal unmount is observed only through flushes and clunks; the next mount's
+`Tversion` provides the next reliable generation marker. Do not invent a
+private unmount message. An attach selects a tree within a protocol session; it
+does not create a new TypeScript filesystem.
+
+Filesystem body loads are shared storage work rather than session work. A load
+may populate an unchanged inode after its initiating session closes, but a
+stale session may not commit a protocol mutation. Every continuation checks
+both its session generation and the inode content revision before committing.
+
+Keep the guest-visible mount tag separate from the host server key. Proposed
+configuration is `fsN: { server: "workspace", tag: "shared" }`, with a host
+registry mapping `workspace` to a server. Configuration parsing and validation
+stay in Rust; host actions carry the selected server key. Reject duplicate
+guest mount tags and missing registrations before starting the machine. Linux
+allows only one active mount per VirtIO 9p channel, so two simultaneous mounts
+of the same shared tree in one VM require two configured devices with distinct
+tags and the same server key.
+
+Pass the registry once as
+`Riscbox.instantiate(wasm, { p9Servers: ReadonlyMap<string, P9Server> })`.
+Do not mutate a registry entry behind a live endpoint. Replacing a server takes
+effect only on the next VM start and therefore receives a fresh endpoint
+generation and protocol session.
+
+### Shared filesystem and independent sessions
+
+Split the supplied implementation into these concrete owners:
+
+| Owner | State and responsibility |
+| ----- | ------------------------ |
+| Filesystem | Inodes/QIDs, directory entries, metadata, file contents, quotas, revisions, notifications, and shared byte-range locks |
+| 9p session | Negotiated version and `msize`, fids, attach identities, active tags, cancellation, and per-open state |
+| Seed loader | Immutable namespace entries plus one asynchronous regular-file body loader |
+| Application facade | Synchronous tree operations, explicit loading, and subscriptions over the same filesystem |
+
+The current `Memory9PServer` combines the first and second owners, so registering
+the same instance with two VMs is insufficient: their fid and tag namespaces
+would collide. `connect()` creates separate protocol state over one filesystem.
+`Tversion` resets only its session. Stable inode identity preserves references
+across rename and unlink; storage remains alive while referenced by open fids.
+Do not equate inode identity with a pathname. Never reuse a QID path during a
+filesystem instance's lifetime; increment its version when observable inode
+data or metadata changes. Directory entries refer to inode IDs, which permits
+hard links and correct open-unlink lifetime. Count links accurately and count
+file bytes once per inode.
+
+Use stable directory cookies rather than array indexes for `Treaddir`, so a
+rename or insertion between calls does not silently reinterpret an offset.
+Keep open flags and directory iteration state on fids. Implement shared POSIX
+byte-range locks across sessions, release a session's locks when it closes, and
+return honest `EOPNOTSUPP` errors for unsupported node types or operations.
+In-memory `fsync` may succeed as a documented no-op; authentication, devices,
+FIFOs, sockets, xattrs, ACLs, and persistence are outside the supplied server's
+initial profile.
+
+The initial profile implements version, flush, attach, walk, open/create,
+read/write, clunk/remove, statfs, getattr/setattr, readdir, fsync, symlink and
+readlink, mkdir, link, rename and renameat, unlinkat, lock, and getlock. Keep an
+explicit operation matrix with the protocol tests. `Tauth`, special-node
+creation, and extended attributes return standard unsupported errors; do not
+return success without implementing their semantics. Version negotiation with
+an unknown dialect follows the standard `Rversion("unknown")` behavior.
+
+The supplied server is intended for trusted clients. It stores and reports
+uid, gid, and mode metadata but is not an authentication or isolation boundary;
+`Tauth` is unsupported. Do not claim server-enforced multi-tenant security.
+Deployments that need it must provide a different server implementation.
+
+JavaScript's event loop makes individual synchronous commits atomic, but awaits
+allow operations to interleave. Do not serialize the filesystem behind one
+global promise. After an await, check the session generation and relevant inode
+or directory revision, then either commit atomically or retry/fail according to
+the operation. Quota checks and their mutations occur in the same synchronous
+commit. Append writes select the end offset during that commit.
+
+Keep 64-bit wire values as `bigint` until validation. Convert sizes and offsets
+to JavaScript numbers only after proving they are safe integers and within the
+configured limits. Filesystem construction accepts these optional limits:
+
+*   `maxFileBytes`, default 256 MiB.
+*   `maxTreeBytes`, default 1 GiB, counting logical regular-file sizes once per
+    inode and ignoring metadata overhead.
+*   `maxInodes`, default 2^20, counting directories, regular files, and
+    symlinks; an additional hard link does not consume an inode.
+*   `maxDirectoryEntries`, default 2^20, counting every name so repeated hard
+    links cannot bypass the metadata resource limit.
+
+Reject an invalid initial namespace atomically. Enforce the same limits on
+guest writes, host writes, truncation, links, and loader results. Keep protocol
+`msize`, pending-request count, and concurrent-load count as separate transport
+or server limits rather than conflating them with filesystem capacity.
+
+### Optional seed loader
+
+Construct the complete initial namespace before constructing the filesystem.
+The optional seed is a typed list of directory, symlink, and regular-file
+entries. Regular files have a mandatory logical size and a loader key of a
+caller-chosen generic type; entries may also provide standard mode, ownership,
+and timestamp metadata. A shared regular-file seed inode key can make multiple
+directory entries refer to one initial inode. Parent directories may be
+explicit or may be created with documented defaults. Reject duplicates,
+cycles, dangling hard links, directory hard links, invalid names, inconsistent
+shared-inode metadata, and quota overflow.
+
+Expose the preload boundary as a typed plugin value:
+
+```text
+interface SeedPlugin<Key> {
+    readonly entries: readonly SeedEntry<Key>[];
+    readonly loader: SeedLoader<Key>;
+}
+
+type SeedEntry<Key> = DirectorySeed | SymlinkSeed | FileSeed<Key>;
+```
+
+The concrete entry types carry normalized relative paths and standard
+metadata. `FileSeed` carries its logical size, loader key, and optional shared
+inode key. Provide a `SeedBuilder<Key>` with `addDirectory`, `addSymlink`,
+`addFile`, and `addHardLink` methods so a manifest or archive parser does not
+construct internal inode records. `finish()` validates and freezes the entry
+list before `MemoryFilesystem` is created. The plugin and all seed arguments
+are optional; no plugin means an empty resident filesystem.
+
+The loader has one operation:
+
+```text
+interface SeedLoader<Key> {
+    load(key: Key, signal: AbortSignal): Promise<Uint8Array>;
+}
+```
+
+The server gives the loader the opaque key from the selected seed entry and
+does not interpret URLs, archive offsets, hashes, encryption, or credentials.
+The returned length must equal the declared size. An HTTPS plugin can build the
+namespace from its own manifest and use paths or opaque records as keys. A tar
+plugin can inspect a pre-downloaded archive first, use byte ranges as keys, and
+extract a regular file only when asked. Fetching a manifest or archive is a
+preload step owned by the plugin, not a 9p operation or another server type.
+
+Represent regular-file contents as unloaded immutable seed data, a shared
+in-flight load, resident immutable seed bytes, or private mutable bytes. Reads
+of one unloaded inode share a load. The first mutation that needs existing
+content makes a private copy; a whole-file replacement can discard an unloaded
+seed without fetching it. Unlink and rename operate on the already materialized
+namespace and never rediscover seed entries. A mutation bumps the inode content
+revision, causing an older load completion to be discarded rather than
+restoring stale bytes.
+
+Pin one seed list and loader interpretation for the filesystem's lifetime.
+Refreshing a remote deployment creates a new filesystem/server instance; it
+does not alter unloaded entries underneath live clients. A failed load leaves
+an explicit failed state for direct callers and produces an ordinary `EIO` for
+9p requests. An explicit retry clears that failure; unrelated operations and
+protocol requests remain usable.
+
+### Synchronous application access
+
+Retain a small synchronous application facade for `readFile`, `writeFile`,
+`remove`, `rename`, `listFiles`, and `subscribe`. Return a discriminated result
+rather than throwing for expected outcomes:
+
+```text
+type SyncResult<Value> =
+    | { kind: "ok"; value: Value }
+    | { kind: "not-loaded"; paths: readonly string[] }
+    | { kind: "error"; error: FilesystemError };
+
+interface ApplicationFilesystem {
+    readFile(path: string): SyncResult<Uint8Array>;
+    writeFile(path: string, bytes: Uint8Array): SyncResult<void>;
+    remove(path: string): SyncResult<void>;
+    rename(oldPath: string, newPath: string): SyncResult<void>;
+    listFiles(): SyncResult<readonly string[]>;
+    load(paths: readonly string[], retry?: boolean): Promise<SyncResult<void>>;
+    readFileAsync(path: string, retry?: boolean): Promise<SyncResult<Uint8Array>>;
+    subscribe(listener: (change: FilesystemChange) => void): () => void;
+}
+```
+
+`readFile` returns `not-loaded` for an unloaded body; it never returns empty
+bytes or starts hidden asynchronous work. `writeFile` is a whole-file replace,
+so it may synchronously replace an unloaded file without fetching it. Namespace
+listing, rename, unlink, and metadata access remain synchronous because the
+complete namespace is resident.
+
+Add `load(paths)` and `readFileAsync(path)` for explicit asynchronous access.
+`load` returns a promise and emits a `loaded` or `load-error` subscription event
+when it settles; concurrent calls share the in-flight load. A retry option is
+required for a retained failure. Memory-only trees remain entirely synchronous.
+Both host and 9p operations use the same inode mutations, quota accounting,
+revision checks, and notifications. Change events identify the inode and the
+affected path or paths so hard-linked content changes are not mistaken for
+path identity.
+
+### Multiple clients and deployment cases
+
+The primary use case for shared 9p server trees is simple sharing between VM(s)
+and the host app. The emphasis is on correct 9p2000.L semantics, avoiding
+performance hacks and added complexity in anticipation of naive clients.
+
+Multiple Linux VMs can mount the same live filesystem, and the host app can
+access it through the synchronous facade. Shared inode metadata, hard links,
+open-unlinked files, and locks must behave consistently across sessions. Audit
+the current success stubs before advertising multi-client correctness.
+
+The server does not attempt to repair Linux cache coherence. Use `cache=none`
+when host code or multiple VMs must observe one another's changes promptly.
+`cache=mmap` enables read-ahead and writeback so it permits executable mappings,
+but host or peer changes may remain stale. `cache=loose` is appropriate only
+for an exclusive mount whose tree is not modified behind the client. These are
+deployment choices and do not change server semantics.
+
+### Remove legacy `fs_net`
+
+Remove `file`, `socket`, and `js9p` filesystem backends from the active Rust
+configuration schema and accept only `{ server, tag }` for browser 9p devices.
+Do not retain configuration aliases or translate the legacy HTTP format in
+Rust. Remove `src/http_9p.rs`, its proprietary command file and password
+plumbing, and all now-unused PBKDF2 support after auditing encrypted HTTP block
+storage. The isolated C reference may retain its raw socket 9p backend; it is
+not part of the browser platform.
+
+Remove `fs_net` construction and dispatch from the isolated C reference as
+well; retain only lower-level HTTP utilities still used by block images or
+configuration loading. The C implementation is not the compatibility owner for
+the new concurrent bridge or TypeScript server. Existing deployments migrate
+by constructing an HTTPS seed plugin before the VM and registering its server
+under the configuration key.
+
+### Files, staging, and acceptance
+
+Proposed Rust file boundaries: `src/virtio_devices.rs` owns pending 9p
+descriptors;
+`src/machine.rs`, `src/browser_runtime.rs`, `src/browser_abi.rs`, and
+`riscbox-wasm/src/lib.rs` carry generic endpoint actions/completions;
+`src/config.rs` records server keys and mount tags.
+
+Use `js/riscbox.ts` for endpoint registration and lifecycle,
+`js/p9/filesystem.ts` for inodes and the application facade,
+`js/p9/session.ts` for wire parsing and protocol state, and `js/p9/seed.ts` for
+seed types and loading. Put the HTTPS and tar examples under `js/p9/plugins/`;
+they depend on the seed interface, not the server internals. Export the public
+surface from `js/p9/index.ts`. Make these TypeScript sources authoritative and
+emit browser-consumable JavaScript plus declarations under `build/js/`; do not
+hand-maintain a parallel `p9.d.ts`. Keep the standalone adapter free of runtime
+dependencies. This milestone converts maintained browser integration code, not
+the Python image tools or shell build scripts. Update Risclet imports,
+distribution packaging, examples, and deployment documentation to consume the
+emitted modules.
+
+1.  Specify and test concurrent transport, suppression, resets, and completion
+    ordering using a controllable fake server. Exercise out-of-order replies,
+    queue saturation, two endpoints, malformed envelopes, mismatched tags,
+    oversized replies, duplicate completions, VirtIO reset, VM restart, and
+    late completions from retired generations.
+2.  Establish the TypeScript build and split shared filesystem state from 9p
+    session state. Route the current memory behavior through the concurrent
+    boundary. Validate two sessions reusing the same fid and tag values,
+    `Tversion` generations, all flush races, and session close.
+3.  Add inode-backed directories, hard links, open-unlink lifetime, stable
+    directory cookies, quotas, and shared byte-range locks. Test atomic rename,
+    append, truncation, quota races, lock release, QID stability, and two Linux
+    clients mutating one tree.
+4.  Add typed seeds, the single loader operation, explicit direct-API results,
+    and HTTPS and tar example plugins. Exercise shared loads, failure and retry,
+    whole-file replacement without a load, load/mutation races, loader length
+    validation, deletion, hard-linked seeds, and immutable deployment pinning.
+5.  Remove both Rust and C `fs_net` paths and the old configuration forms. Run
+    focused native transport and TypeScript tests, strict type checks, WASM
+    builds, and headed Chrome guest tests. Boot Linux with two configured tags,
+    verify sharing under documented cache modes, restart during outstanding
+    loads, unmount/remount, and close one client while another continues.
+
+Measure concurrent request latency, request and reply copy volume, resident and
+logical tree sizes, peak load memory, generated JavaScript size, and WASM size.
+Do not introduce a server WASM module or a more elaborate storage layer without
+measurements showing a material benefit.
+
+Protocol references for implementation review:
+
+*   [9p request multiplexing](https://9fans.github.io/plan9port/man/man9/intro.html)
+    defines concurrent tagged requests.
+*   [Flush semantics](https://9fans.github.io/plan9port/man/man9/flush.html)
+    defines response suppression and ordering relative to `Rflush`.
+*   [Linux VirtIO 9p transport](https://github.com/torvalds/linux/blob/master/net/9p/trans_virtio.c)
+    reclaims zero-length used buffers without delivering a protocol reply.
+*   [Linux 9p client documentation](https://docs.kernel.org/filesystems/9p.html)
+    describes mount tags, attach options, and cache consistency limitations.
+*   [9p version semantics](https://9fans.github.io/plan9port/man/man9/version.html)
+    define the protocol-session boundary and its required cleanup.
+
 Next milestone
 --------------
 

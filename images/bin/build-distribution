@@ -51,6 +51,10 @@ mkdir -p "$stage_dir/p9"
 for p9_module in "$ROOT_DIR/build/js/p9/"*.js "$ROOT_DIR/build/js/p9/"*.d.ts; do
     install -m 644 "$p9_module" "$stage_dir/p9/$(basename "$p9_module")"
 done
+mkdir -p "$stage_dir/network"
+for network_module in "$ROOT_DIR/build/js/network/"*.js "$ROOT_DIR/build/js/network/"*.d.ts; do
+    install -m 644 "$network_module" "$stage_dir/network/$(basename "$network_module")"
+done
 install -m 644 "$ROOT_DIR/target/wasm32-unknown-unknown/release/riscbox_wasm.wasm" \
     "$stage_dir/riscbox.wasm"
 install -m 644 "$IMAGES_DIR/DEPLOYMENT.md" "$stage_dir/README.md"

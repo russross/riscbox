@@ -252,3 +252,19 @@ fn instruction_fetch_straddles_pages_and_reports_second_page_faults() {
     assert_eq!(fault_cpu.read_csr(CSR_MEPC), Ok(0x1ffe));
     assert_eq!(fault_cpu.read_csr(CSR_MTVAL), Ok(0x2000));
 }
+
+#[test]
+fn full_width_instruction_at_page_end_refills_before_the_next_fetch() {
+    let mut memory = PhysicalMemory::new();
+    memory
+        .register_ram(GuestAddress(0x1000), 0x2000, RamFlags::default())
+        .expect("test RAM");
+    write_instruction(&mut memory, 0x1ffc, i(1, 0, 0, 1, 0x13));
+    write_instruction(&mut memory, 0x2000, i(2, 1, 0, 1, 0x13));
+    let mut cpu = Cpu::new(0);
+    cpu.set_pc(0x1ffc);
+
+    assert_eq!(cpu.run(&mut memory, 2).cycles, 2);
+    assert_eq!(cpu.register(1), 3);
+    assert_eq!(cpu.pc(), 0x2004);
+}

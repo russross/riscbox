@@ -11,6 +11,9 @@ Unreleased
     aggressively inlines cached memory and common integer/compressed helpers.
     Counter bookkeeping now derives cycle deltas from one remaining-cycle value
     while retaining exact `Cpu::run` budgets and precise SYSTEM visibility.
+    Page refill distinguishes a complete instruction ending at the page
+    boundary from a 32-bit instruction straddling the final halfword,
+    preventing an unchecked fetch beyond the validated page.
 *   Directed LLVM to inline the private instruction dispatcher into its single
     WASM call site while retaining the typed Rust execution interface. The
     prepared xv6 workload completed at a 255.576-second guest timestamp and

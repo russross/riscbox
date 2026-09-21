@@ -144,7 +144,7 @@ impl Cpu {
                     break;
                 };
                 current.arena_cursor = current.arena_cursor.wrapping_add(low_u32(outcome.next_pc));
-                if tail_fetch {
+                if tail_fetch || current.arena_cursor > current.arena_fast_end {
                     pc = current
                         .pc_addend
                         .wrapping_add(u64::from(current.arena_cursor));

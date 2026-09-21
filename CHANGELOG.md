@@ -4,6 +4,12 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Directed LLVM to inline the private instruction dispatcher into its single
+    WASM call site while retaining the typed Rust execution interface. The
+    prepared xv6 workload completed at a 255.576-second guest timestamp and
+    264.566 profile seconds, down 11.6% and 11.3% from the previous 289.095 and
+    298.194-second results. The paired TinyEMU profile completed in 94.597
+    seconds. Generated-code inspection remains a separate follow-up.
 *   Reworked the Rust interpreter around TinyEMU-style page chunks. Sequential
     execution now resolves the execute TLB once per chunk, fetches one aligned
     word with a checked cross-page slow path, keeps PC and counter deltas local,

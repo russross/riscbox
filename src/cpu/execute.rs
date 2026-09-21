@@ -2,11 +2,119 @@ use super::{
     AccessWidth, CSR_MINSTRET, Cpu, CpuBus, CsrError, ENVCFG_CBCFE, ENVCFG_CBIE, ENVCFG_CBZE,
     Exception, InstructionFlow, InstructionOutcome, MSTATUS_MIE, MSTATUS_MPIE, MSTATUS_MPP,
     MSTATUS_MPRV, MSTATUS_SIE, MSTATUS_SPIE, MSTATUS_SPP, MSTATUS_TSR, MSTATUS_TVM, MSTATUS_TW,
-    Privilege, Trap, low_u32, mmu::Access,
+    PAGE_MASK, Privilege, RunOutcome, RunState, Trap, low_u32, mmu::Access, page_offset,
 };
 
 impl Cpu {
-    pub(super) fn execute<B: CpuBus>(
+    pub fn run<B: CpuBus>(&mut self, bus: &mut B, budget: u32) -> RunOutcome {
+        let mut cycles = 0_u32;
+        let mut pending_cycles = 0_u32;
+        let mut pending_retired = 0_u32;
+        let mut pc = self.pc;
+        while cycles < budget && !self.power_down {
+            self.commit_run_state(pc, &mut pending_cycles, &mut pending_retired);
+            if self.mip & self.mie != 0
+                && let Some(interrupt) = self.pending_interrupt()
+            {
+                self.take_interrupt(interrupt);
+                pc = self.pc;
+                cycles += 1;
+                pending_cycles += 1;
+                continue;
+            }
+
+            let mut chunk = match self.execute_chunk(bus, pc) {
+                Ok(chunk) => chunk,
+                Err(trap) => {
+                    self.pc = pc;
+                    self.take_exception(trap);
+                    pc = self.pc;
+                    cycles += 1;
+                    pending_cycles += 1;
+                    continue;
+                }
+            };
+
+            while cycles < budget {
+                let checked_fetch = chunk.is_none();
+                let instruction_pc = chunk.map_or(pc, |current| {
+                    current.virtual_page | u64::from(current.next_offset)
+                });
+                let fetched = match chunk {
+                    Some(current) => self.fetch_chunk(bus, current),
+                    None => self.fetch(bus, instruction_pc),
+                };
+                let (instruction, length) = match fetched {
+                    Ok(value) => value,
+                    Err(trap) => {
+                        self.pc = instruction_pc;
+                        self.take_exception(trap);
+                        pc = self.pc;
+                        cycles += 1;
+                        pending_cycles += 1;
+                        break;
+                    }
+                };
+
+                if instruction & 0x7f == 0x73 {
+                    self.commit_run_state(
+                        instruction_pc,
+                        &mut pending_cycles,
+                        &mut pending_retired,
+                    );
+                    if bus.take_interrupt_state_changed() {
+                        return RunOutcome {
+                            cycles,
+                            state: RunState::Running,
+                        };
+                    }
+                }
+
+                let outcome = match self.execute(bus, instruction_pc, instruction, length) {
+                    Ok(outcome) => outcome,
+                    Err(trap) => {
+                        self.pc = instruction_pc;
+                        self.take_exception(trap);
+                        pc = self.pc;
+                        cycles += 1;
+                        pending_cycles += 1;
+                        break;
+                    }
+                };
+                cycles += 1;
+                pending_cycles += 1;
+                pending_retired += u32::from(outcome.retired);
+                pc = outcome.next_pc;
+                if checked_fetch || outcome.flow == InstructionFlow::Exit {
+                    break;
+                }
+                let Some(current) = chunk.as_mut() else {
+                    break;
+                };
+                if pc & !PAGE_MASK != current.virtual_page {
+                    break;
+                }
+                current.next_offset = page_offset(pc);
+            }
+
+            self.commit_run_state(pc, &mut pending_cycles, &mut pending_retired);
+            if bus.take_interrupt_state_changed() {
+                break;
+            }
+        }
+        self.commit_run_state(pc, &mut pending_cycles, &mut pending_retired);
+        RunOutcome {
+            cycles,
+            state: if self.power_down {
+                RunState::Waiting
+            } else {
+                RunState::Running
+            },
+        }
+    }
+
+    #[cfg_attr(target_arch = "wasm32", inline(always))]
+    fn execute<B: CpuBus>(
         &mut self,
         bus: &mut B,
         pc: u64,

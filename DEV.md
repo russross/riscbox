@@ -36,15 +36,25 @@ The page-chunk interpreter reduced the prepared xv6 compile profile from
 seconds. Riscbox therefore remains 3.18 times slower on the current end-to-end
 CPU workload.
 
-`TRACE-REPORT.md` aligns the optimized WASM with both source trees. Ordinary
-Riscbox instructions still cross an uninlined `Cpu::run -> Cpu::execute` call;
-the callee is about 5.5 KiB and returns a `Result<InstructionOutcome, Trap>`.
-The caller then updates four loop values, checks flow and the virtual page, and
-reconstructs the next page offset. TinyEMU keeps decode, dispatch, cursor
-advance, and accounting in one function. Its calls are predominantly slow
-paths. Riscbox's TLB-hit instruction and aligned data accesses already use
-unchecked fixed-width arena helpers after full-page validation, so additional
-unchecked memory access is not the first optimization target.
+The first compiler-directed flattening experiment retained the typed dispatcher
+interface, moved it to one private call site, and applied WASM-only
+`#[inline(always)]`. The prepared xv6 workload then completed at a
+255.576-second guest timestamp and 264.566 profile seconds; its paired TinyEMU
+run took 94.597 profile seconds. This is an 11.6% guest-time and 11.3%
+profile-time reduction from the previous Riscbox result. WASM instruction
+inspection is still required before concluding which source abstractions LLVM
+eliminated.
+
+`TRACE-REPORT.md` aligns the pre-experiment WASM with both source trees. At that
+point ordinary Riscbox instructions crossed an uninlined
+`Cpu::run -> Cpu::execute` call; the callee was about 5.5 KiB and returned a
+`Result<InstructionOutcome, Trap>`. The caller then updated four loop values,
+checked flow and the virtual page, and reconstructed the next page offset.
+TinyEMU keeps decode, dispatch, cursor advance, and accounting in one function.
+Its calls are predominantly slow paths. Riscbox's TLB-hit instruction and
+aligned data accesses already use unchecked fixed-width arena helpers after
+full-page validation, so additional unchecked memory access is not the first
+optimization target.
 
 The next milestone is structural rather than stylistic: use generated-code and
 profile evidence to remove costs from the Rust WASM hot loop. Readability and

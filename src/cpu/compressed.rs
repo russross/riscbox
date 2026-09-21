@@ -1,10 +1,13 @@
-use super::{AccessWidth, Cpu, CpuBus, Exception, InstructionOutcome, Trap, mmu::Access};
+use super::{
+    AccessWidth, Cpu, CpuBus, Exception, InstructionAddress, InstructionOutcome, Trap, mmu::Access,
+};
 
 impl Cpu {
+    #[cfg_attr(target_arch = "wasm32", inline(always))]
     pub(super) fn execute_compressed<B: CpuBus>(
         &mut self,
         bus: &mut B,
-        pc: u64,
+        pc: InstructionAddress,
         instruction: u16,
     ) -> Result<InstructionOutcome, Trap> {
         let quadrant = instruction & 3;
@@ -45,7 +48,7 @@ impl Cpu {
             (1, 4) => self.execute_compressed_alu(instruction)?,
             (1, 5) => {
                 return Ok(InstructionOutcome::exit(
-                    pc.wrapping_add(cj_immediate(instruction)),
+                    pc.get().wrapping_add(cj_immediate(instruction)),
                     true,
                 ));
             }
@@ -54,7 +57,7 @@ impl Cpu {
                 let condition = self.registers[rs1] == 0;
                 if condition == (funct3 == 6) {
                     return Ok(InstructionOutcome::exit(
-                        pc.wrapping_add(cb_immediate(instruction)),
+                        pc.get().wrapping_add(cb_immediate(instruction)),
                         true,
                     ));
                 }
@@ -69,7 +72,7 @@ impl Cpu {
             (2, 1) => self.execute_compressed_fp_stack_load(bus, instruction)?,
             (2, 2 | 3) => self.execute_compressed_stack_load(bus, instruction, funct3)?,
             (2, 4) => {
-                if let Some(target) = self.execute_compressed_jump(pc, instruction)? {
+                if let Some(target) = self.execute_compressed_jump(pc.get(), instruction)? {
                     return Ok(InstructionOutcome::exit(target, true));
                 }
             }
@@ -77,9 +80,10 @@ impl Cpu {
             (2, 6 | 7) => self.execute_compressed_stack_store(bus, instruction, funct3)?,
             _ => return Err(illegal(instruction)),
         }
-        Ok(InstructionOutcome::sequential(pc.wrapping_add(2)))
+        Ok(InstructionOutcome::sequential(2))
     }
 
+    #[cfg_attr(target_arch = "wasm32", inline(always))]
     fn execute_compressed_memory<B: CpuBus>(
         &mut self,
         bus: &mut B,
@@ -177,6 +181,7 @@ impl Cpu {
         Ok(())
     }
 
+    #[cfg_attr(target_arch = "wasm32", inline(always))]
     fn execute_addi4spn(&mut self, instruction: u16) -> Result<(), Trap> {
         let immediate = bits(instruction, 7, 4) << 6
             | bits(instruction, 11, 2) << 4
@@ -190,6 +195,7 @@ impl Cpu {
         Ok(())
     }
 
+    #[cfg_attr(target_arch = "wasm32", inline(always))]
     fn execute_zcb_memory<B: CpuBus>(&mut self, bus: &mut B, instruction: u16) -> Result<(), Trap> {
         let rd = compact_register(instruction, 2);
         let rs1 = compact_register(instruction, 7);
@@ -219,6 +225,7 @@ impl Cpu {
         Ok(())
     }
 
+    #[cfg_attr(target_arch = "wasm32", inline(always))]
     fn execute_compressed_lui(&mut self, instruction: u16) -> Result<(), Trap> {
         let rd = register(instruction, 7);
         if rd == 2 {
@@ -248,6 +255,7 @@ impl Cpu {
         Ok(())
     }
 
+    #[cfg_attr(target_arch = "wasm32", inline(always))]
     fn execute_compressed_alu(&mut self, instruction: u16) -> Result<(), Trap> {
         let rd = compact_register(instruction, 7);
         match bits(instruction, 10, 2) {
@@ -292,6 +300,7 @@ impl Cpu {
         Ok(())
     }
 
+    #[cfg_attr(target_arch = "wasm32", inline(always))]
     fn execute_compressed_stack_load<B: CpuBus>(
         &mut self,
         bus: &mut B,
@@ -334,6 +343,7 @@ impl Cpu {
         Ok(())
     }
 
+    #[cfg_attr(target_arch = "wasm32", inline(always))]
     fn execute_compressed_stack_store<B: CpuBus>(
         &mut self,
         bus: &mut B,
@@ -362,6 +372,7 @@ impl Cpu {
         Ok(())
     }
 
+    #[cfg_attr(target_arch = "wasm32", inline(always))]
     fn execute_compressed_jump(&mut self, pc: u64, instruction: u16) -> Result<Option<u64>, Trap> {
         let rd = register(instruction, 7);
         let rs2 = register(instruction, 2);

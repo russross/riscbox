@@ -1,25 +1,76 @@
 use super::{
     AccessWidth, CSR_MINSTRET, Cpu, CpuBus, CsrError, ENVCFG_CBCFE, ENVCFG_CBIE, ENVCFG_CBZE,
-    Exception, InstructionFlow, InstructionOutcome, MSTATUS_MIE, MSTATUS_MPIE, MSTATUS_MPP,
-    MSTATUS_MPRV, MSTATUS_SIE, MSTATUS_SPIE, MSTATUS_SPP, MSTATUS_TSR, MSTATUS_TVM, MSTATUS_TW,
-    PAGE_MASK, Privilege, RunOutcome, RunState, Trap, low_u32, mmu::Access, page_offset,
+    Exception, InstructionAddress, InstructionFlow, InstructionOutcome, MSTATUS_MIE, MSTATUS_MPIE,
+    MSTATUS_MPP, MSTATUS_MPRV, MSTATUS_SIE, MSTATUS_SPIE, MSTATUS_SPP, MSTATUS_TSR, MSTATUS_TVM,
+    MSTATUS_TW, Privilege, RunOutcome, RunState, Trap, low_u32, mmu::Access,
 };
+
+struct RunAccounting {
+    budget: u32,
+    remaining: i64,
+    committed_remaining: i64,
+    retired: u32,
+}
+
+impl RunAccounting {
+    fn new(budget: u32) -> Self {
+        let remaining = i64::from(budget);
+        Self {
+            budget,
+            remaining,
+            committed_remaining: remaining,
+            retired: 0,
+        }
+    }
+
+    fn cycles(&self) -> u32 {
+        u32::try_from(i64::from(self.budget) - self.remaining).expect("executed cycles fit u32")
+    }
+
+    fn running_outcome(&self) -> RunOutcome {
+        RunOutcome {
+            cycles: self.cycles(),
+            state: RunState::Running,
+        }
+    }
+
+    fn commit(&mut self, cpu: &mut Cpu, pc: u64) {
+        let cycles =
+            u32::try_from(self.committed_remaining - self.remaining).expect("cycle delta fits u32");
+        cpu.commit_run_state(pc, cycles, &mut self.retired);
+        self.committed_remaining = self.remaining;
+    }
+
+    fn step(&mut self, retired: bool) {
+        self.remaining -= 1;
+        self.retired += u32::from(retired);
+    }
+
+    fn finish(mut self, cpu: &mut Cpu, pc: u64) -> RunOutcome {
+        self.commit(cpu, pc);
+        RunOutcome {
+            cycles: self.cycles(),
+            state: if cpu.power_down {
+                RunState::Waiting
+            } else {
+                RunState::Running
+            },
+        }
+    }
+}
 
 impl Cpu {
     pub fn run<B: CpuBus>(&mut self, bus: &mut B, budget: u32) -> RunOutcome {
-        let mut cycles = 0_u32;
-        let mut pending_cycles = 0_u32;
-        let mut pending_retired = 0_u32;
+        let mut accounting = RunAccounting::new(budget);
         let mut pc = self.pc;
-        while cycles < budget && !self.power_down {
-            self.commit_run_state(pc, &mut pending_cycles, &mut pending_retired);
+        while accounting.remaining > 0 && !self.power_down {
+            accounting.commit(self, pc);
             if self.mip & self.mie != 0
                 && let Some(interrupt) = self.pending_interrupt()
             {
                 self.take_interrupt(interrupt);
                 pc = self.pc;
-                cycles += 1;
-                pending_cycles += 1;
+                accounting.step(false);
                 continue;
             }
 
@@ -29,97 +80,99 @@ impl Cpu {
                     self.pc = pc;
                     self.take_exception(trap);
                     pc = self.pc;
-                    cycles += 1;
-                    pending_cycles += 1;
+                    accounting.step(false);
                     continue;
                 }
             };
 
-            while cycles < budget {
+            while accounting.remaining > 0 {
                 let checked_fetch = chunk.is_none();
-                let instruction_pc = chunk.map_or(pc, |current| {
-                    current.virtual_page | u64::from(current.next_offset)
-                });
+                let tail_fetch =
+                    chunk.is_some_and(|current| current.arena_cursor >= current.arena_fast_end);
+                let instruction_address =
+                    chunk.map_or(InstructionAddress::absolute(pc), |current| {
+                        InstructionAddress {
+                            arena_cursor: current.arena_cursor,
+                            pc_addend: current.pc_addend,
+                        }
+                    });
                 let fetched = match chunk {
-                    Some(current) => self.fetch_chunk(bus, current),
-                    None => self.fetch(bus, instruction_pc),
+                    Some(current) if tail_fetch => self.fetch_chunk_tail(bus, current),
+                    Some(current) => Ok(Self::fetch_chunk(bus, current)),
+                    None => self.fetch(bus, instruction_address.get()),
                 };
                 let (instruction, length) = match fetched {
                     Ok(value) => value,
                     Err(trap) => {
-                        self.pc = instruction_pc;
+                        self.pc = instruction_address.get();
                         self.take_exception(trap);
                         pc = self.pc;
-                        cycles += 1;
-                        pending_cycles += 1;
+                        accounting.step(false);
                         break;
                     }
                 };
 
-                if instruction & 0x7f == 0x73 {
-                    self.commit_run_state(
-                        instruction_pc,
-                        &mut pending_cycles,
-                        &mut pending_retired,
-                    );
-                    if bus.take_interrupt_state_changed() {
-                        return RunOutcome {
-                            cycles,
-                            state: RunState::Running,
-                        };
-                    }
-                }
-
-                let outcome = match self.execute(bus, instruction_pc, instruction, length) {
+                let outcome = match self.execute(
+                    bus,
+                    instruction_address,
+                    instruction,
+                    length,
+                    &mut accounting,
+                ) {
                     Ok(outcome) => outcome,
                     Err(trap) => {
-                        self.pc = instruction_pc;
+                        self.pc = instruction_address.get();
                         self.take_exception(trap);
                         pc = self.pc;
-                        cycles += 1;
-                        pending_cycles += 1;
+                        accounting.step(false);
                         break;
                     }
                 };
-                cycles += 1;
-                pending_cycles += 1;
-                pending_retired += u32::from(outcome.retired);
-                pc = outcome.next_pc;
+                if outcome.flow == InstructionFlow::HostExit {
+                    return accounting.running_outcome();
+                }
+                accounting.step(outcome.retired);
                 if checked_fetch || outcome.flow == InstructionFlow::Exit {
+                    pc = if outcome.flow == InstructionFlow::Sequential {
+                        instruction_address.get().wrapping_add(outcome.next_pc)
+                    } else {
+                        outcome.next_pc
+                    };
                     break;
                 }
                 let Some(current) = chunk.as_mut() else {
                     break;
                 };
-                if pc & !PAGE_MASK != current.virtual_page {
+                current.arena_cursor = current.arena_cursor.wrapping_add(low_u32(outcome.next_pc));
+                if tail_fetch {
+                    pc = current
+                        .pc_addend
+                        .wrapping_add(u64::from(current.arena_cursor));
                     break;
                 }
-                current.next_offset = page_offset(pc);
+                if accounting.remaining == 0 {
+                    pc = current
+                        .pc_addend
+                        .wrapping_add(u64::from(current.arena_cursor));
+                }
             }
 
-            self.commit_run_state(pc, &mut pending_cycles, &mut pending_retired);
+            accounting.commit(self, pc);
             if bus.take_interrupt_state_changed() {
                 break;
             }
         }
-        self.commit_run_state(pc, &mut pending_cycles, &mut pending_retired);
-        RunOutcome {
-            cycles,
-            state: if self.power_down {
-                RunState::Waiting
-            } else {
-                RunState::Running
-            },
-        }
+        accounting.finish(self, pc)
     }
 
     #[cfg_attr(target_arch = "wasm32", inline(always))]
     fn execute<B: CpuBus>(
         &mut self,
         bus: &mut B,
-        pc: u64,
+        pc: InstructionAddress,
         instruction: u32,
         length: u64,
+        accounting: &mut RunAccounting,
     ) -> Result<InstructionOutcome, Trap> {
         if length == 2 {
             return self.execute_compressed(
@@ -133,7 +186,7 @@ impl Cpu {
         let funct3 = (instruction >> 12) & 7;
         let rs1 = register_index(instruction, 15);
         let rs2 = register_index(instruction, 20);
-        let mut next_pc = pc.wrapping_add(4);
+        let mut next_pc = 4;
         let mut retired = true;
         let mut flow = InstructionFlow::Sequential;
 
@@ -141,12 +194,13 @@ impl Cpu {
             0x37 => self.write_register(rd, sign_extend(u64::from(instruction & 0xffff_f000), 32)),
             0x17 => self.write_register(
                 rd,
-                pc.wrapping_add(sign_extend(u64::from(instruction & 0xffff_f000), 32)),
+                pc.get()
+                    .wrapping_add(sign_extend(u64::from(instruction & 0xffff_f000), 32)),
             ),
             0x6f => {
                 let immediate = decode_j_immediate(instruction);
-                let target = checked_target(pc.wrapping_add(immediate), instruction)?;
-                self.write_register(rd, next_pc);
+                let target = checked_target(pc.get().wrapping_add(immediate), instruction)?;
+                self.write_register(rd, pc.get().wrapping_add(4));
                 next_pc = target;
                 flow = InstructionFlow::Exit;
             }
@@ -155,7 +209,7 @@ impl Cpu {
                     .wrapping_add(sign_extend(u64::from(instruction >> 20), 12))
                     & !1;
                 let target = checked_target(target, instruction)?;
-                self.write_register(rd, next_pc);
+                self.write_register(rd, pc.get().wrapping_add(4));
                 next_pc = target;
                 flow = InstructionFlow::Exit;
             }
@@ -173,7 +227,7 @@ impl Cpu {
                 };
                 if taken {
                     next_pc = checked_target(
-                        pc.wrapping_add(decode_b_immediate(instruction)),
+                        pc.get().wrapping_add(decode_b_immediate(instruction)),
                         instruction,
                     )?;
                     flow = InstructionFlow::Exit;
@@ -195,7 +249,23 @@ impl Cpu {
                 _ => return Err(illegal(instruction)),
             },
             0x73 => {
-                (next_pc, retired) = self.execute_system(pc, instruction, rd, rs1, funct3)?;
+                let instruction_pc = pc.get();
+                self.commit_run_state(
+                    instruction_pc,
+                    u32::try_from(accounting.committed_remaining - accounting.remaining)
+                        .expect("cycle delta fits u32"),
+                    &mut accounting.retired,
+                );
+                accounting.committed_remaining = accounting.remaining;
+                if bus.take_interrupt_state_changed() {
+                    return Ok(InstructionOutcome {
+                        next_pc: instruction_pc,
+                        retired: false,
+                        flow: InstructionFlow::HostExit,
+                    });
+                }
+                (next_pc, retired) =
+                    self.execute_system(instruction_pc, instruction, rd, rs1, funct3)?;
                 flow = InstructionFlow::Exit;
             }
             _ => return Err(illegal(instruction)),
@@ -207,6 +277,7 @@ impl Cpu {
         })
     }
 
+    #[cfg_attr(target_arch = "wasm32", inline(always))]
     fn execute_atomic<B: CpuBus>(
         &mut self,
         bus: &mut B,
@@ -275,6 +346,7 @@ impl Cpu {
         Ok(())
     }
 
+    #[cfg_attr(target_arch = "wasm32", inline(always))]
     fn execute_memory<B: CpuBus>(
         &mut self,
         bus: &mut B,
@@ -320,7 +392,7 @@ impl Cpu {
         Ok(())
     }
 
-    #[inline]
+    #[cfg_attr(target_arch = "wasm32", inline(always))]
     fn execute_arithmetic(
         &mut self,
         instruction: u32,
@@ -595,6 +667,7 @@ fn unsigned32(value: i32) -> u32 {
     u32::from_ne_bytes(value.to_ne_bytes())
 }
 
+#[cfg_attr(target_arch = "wasm32", inline(always))]
 fn execute_immediate(instruction: u32, funct3: u32, left: u64) -> Result<u64, Trap> {
     let immediate = sign_extend(u64::from(instruction >> 20), 12);
     let encoded = instruction >> 20;
@@ -633,6 +706,7 @@ fn execute_immediate(instruction: u32, funct3: u32, left: u64) -> Result<u64, Tr
     Ok(value)
 }
 
+#[cfg_attr(target_arch = "wasm32", inline(always))]
 fn execute_word_immediate(instruction: u32, funct3: u32, left: u32) -> Result<u32, Trap> {
     let encoded = instruction >> 20;
     let value = match funct3 {
@@ -649,6 +723,7 @@ fn execute_word_immediate(instruction: u32, funct3: u32, left: u32) -> Result<u3
     Ok(value)
 }
 
+#[cfg_attr(target_arch = "wasm32", inline(always))]
 fn execute_register(instruction: u32, funct3: u32, left: u64, right: u64) -> Result<u64, Trap> {
     let funct7 = instruction >> 25;
     if funct7 == 1 {
@@ -710,6 +785,7 @@ fn execute_register(instruction: u32, funct3: u32, left: u64, right: u64) -> Res
     Ok(value)
 }
 
+#[cfg_attr(target_arch = "wasm32", inline(always))]
 fn execute_word_register(
     instruction: u32,
     funct3: u32,

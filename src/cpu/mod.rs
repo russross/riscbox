@@ -114,7 +114,6 @@ const CSR_INSTRET: u16 = 0xc02;
 const TLB_SIZE: usize = 256;
 const PAGE_SHIFT: u32 = 12;
 const PAGE_SIZE: u64 = 1 << PAGE_SHIFT;
-const PAGE_SIZE_USIZE: usize = 1 << PAGE_SHIFT;
 const PAGE_MASK: u64 = PAGE_SIZE - 1;
 
 fn low_u32(value: u64) -> u32 {
@@ -250,10 +249,12 @@ struct Trap {
 enum InstructionFlow {
     Sequential,
     Exit,
+    HostExit,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct InstructionOutcome {
+    /// Sequential byte advance, or the absolute target for an exit.
     next_pc: u64,
     retired: bool,
     flow: InstructionFlow,
@@ -285,9 +286,30 @@ struct TlbEntry {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ExecuteChunk {
-    virtual_page: u64,
-    arena_page: ArenaOffset,
-    next_offset: u16,
+    arena_cursor: u32,
+    arena_fast_end: u32,
+    pc_addend: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct InstructionAddress {
+    arena_cursor: u32,
+    pc_addend: u64,
+}
+
+impl InstructionAddress {
+    #[inline]
+    const fn absolute(pc: u64) -> Self {
+        Self {
+            arena_cursor: 0,
+            pc_addend: pc,
+        }
+    }
+
+    #[inline]
+    const fn get(self) -> u64 {
+        self.pc_addend.wrapping_add(self.arena_cursor as u64)
+    }
 }
 
 impl Default for TlbEntry {
@@ -396,12 +418,11 @@ impl Cpu {
         }
     }
 
-    fn commit_run_state(&mut self, pc: u64, pending_cycles: &mut u32, pending_retired: &mut u32) {
+    fn commit_run_state(&mut self, pc: u64, cycles: u32, pending_retired: &mut u32) {
         self.pc = pc;
-        self.elapsed_cycles = self.elapsed_cycles.wrapping_add(u64::from(*pending_cycles));
-        self.cycle = self.cycle.wrapping_add(u64::from(*pending_cycles));
+        self.elapsed_cycles = self.elapsed_cycles.wrapping_add(u64::from(cycles));
+        self.cycle = self.cycle.wrapping_add(u64::from(cycles));
         self.instret = self.instret.wrapping_add(u64::from(*pending_retired));
-        *pending_cycles = 0;
         *pending_retired = 0;
     }
 
@@ -426,37 +447,44 @@ impl Cpu {
             return Ok(None);
         }
         Ok(Some(ExecuteChunk {
-            virtual_page,
-            arena_page: entry.arena_page,
-            next_offset: page_offset(pc),
+            arena_cursor: entry.arena_page.0 + u32::from(page_offset(pc)),
+            arena_fast_end: entry.arena_page.0 + 4096 - 2,
+            pc_addend: pc.wrapping_sub(u64::from(entry.arena_page.0 + u32::from(page_offset(pc)))),
         }))
     }
 
-    fn fetch_chunk<B: CpuBus>(
+    #[cfg_attr(target_arch = "wasm32", inline(always))]
+    fn fetch_chunk<B: CpuBus>(bus: &B, chunk: ExecuteChunk) -> (u32, u64) {
+        let arena_offset = chunk.arena_cursor as usize;
+        let instruction = read_u32(bus.arena(), arena_offset);
+        if instruction & 3 == 3 {
+            (instruction, 4)
+        } else {
+            (instruction & 0xffff, 2)
+        }
+    }
+
+    fn fetch_chunk_tail<B: CpuBus>(
         &mut self,
         bus: &mut B,
         chunk: ExecuteChunk,
     ) -> Result<(u32, u64), Trap> {
-        let page_offset = usize::from(chunk.next_offset);
-        let arena_offset = chunk.arena_page.0 as usize + page_offset;
-        if page_offset <= PAGE_SIZE_USIZE - 4 {
-            let instruction = read_u32(bus.arena(), arena_offset);
-            return Ok(if instruction & 3 == 3 {
-                (instruction, 4)
-            } else {
-                (instruction & 0xffff, 2)
-            });
-        }
+        let arena_offset = chunk.arena_cursor as usize;
         let low = read_u16(bus.arena(), arena_offset);
         if low & 3 != 3 {
             return Ok((u32::from(low), 2));
         }
-        let high = u16::try_from(self.load(
-            bus,
-            (chunk.virtual_page | u64::from(chunk.next_offset)).wrapping_add(2),
-            AccessWidth::HalfWord,
-            mmu::Access::Execute,
-        )?)
+        let high = u16::try_from(
+            self.load(
+                bus,
+                chunk
+                    .pc_addend
+                    .wrapping_add(u64::from(chunk.arena_cursor))
+                    .wrapping_add(2),
+                AccessWidth::HalfWord,
+                mmu::Access::Execute,
+            )?,
+        )
         .expect("a halfword load fits u16");
         Ok((u32::from(low) | u32::from(high) << 16, 4))
     }
@@ -492,7 +520,9 @@ impl Cpu {
     }
 
     fn write_register(&mut self, index: usize, value: u64) {
-        self.set_register(index, value);
+        if index != 0 {
+            self.registers[index] = value;
+        }
     }
 
     #[must_use]

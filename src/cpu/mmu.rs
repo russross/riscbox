@@ -32,6 +32,7 @@ enum TranslationFault {
 }
 
 impl Cpu {
+    #[cfg_attr(target_arch = "wasm32", inline(always))]
     pub(super) fn load<B: CpuBus>(
         &mut self,
         bus: &mut B,
@@ -41,16 +42,7 @@ impl Cpu {
     ) -> Result<u64, Trap> {
         let len = width.bytes();
         if address & (len as u64 - 1) != 0 {
-            let mut value = 0;
-            for index in 0..len {
-                value |= self.load(
-                    bus,
-                    address.wrapping_add(index as u64),
-                    AccessWidth::Byte,
-                    access,
-                )? << (index * 8);
-            }
-            return Ok(value);
+            return self.load_misaligned(bus, address, width, access);
         }
 
         let virtual_page = address & !PAGE_MASK;
@@ -65,6 +57,38 @@ impl Cpu {
             return Ok(read_width(bus.arena(), offset, width));
         }
 
+        self.load_slow(bus, address, width, access, virtual_page, index)
+    }
+
+    fn load_misaligned<B: CpuBus>(
+        &mut self,
+        bus: &mut B,
+        address: u64,
+        width: AccessWidth,
+        access: Access,
+    ) -> Result<u64, Trap> {
+        let mut value = 0;
+        for index in 0..width.bytes() {
+            value |= self.load(
+                bus,
+                address.wrapping_add(index as u64),
+                AccessWidth::Byte,
+                access,
+            )? << (index * 8);
+        }
+        Ok(value)
+    }
+
+    fn load_slow<B: CpuBus>(
+        &mut self,
+        bus: &mut B,
+        address: u64,
+        width: AccessWidth,
+        access: Access,
+        virtual_page: u64,
+        index: usize,
+    ) -> Result<u64, Trap> {
+        let len = width.bytes();
         let physical = self
             .translate(bus, address, len, access)
             .map_err(|fault| Self::translation_trap(access, address, fault))?;
@@ -75,6 +99,7 @@ impl Cpu {
         Ok(result)
     }
 
+    #[cfg_attr(target_arch = "wasm32", inline(always))]
     pub(super) fn store<B: CpuBus>(
         &mut self,
         bus: &mut B,
@@ -84,15 +109,7 @@ impl Cpu {
     ) -> Result<(), Trap> {
         let len = width.bytes();
         if address & (len as u64 - 1) != 0 {
-            for index in 0..len {
-                self.store(
-                    bus,
-                    address.wrapping_add(index as u64),
-                    AccessWidth::Byte,
-                    value >> (index * 8),
-                )?;
-            }
-            return Ok(());
+            return self.store_misaligned(bus, address, width, value);
         }
 
         let virtual_page = address & !PAGE_MASK;
@@ -104,6 +121,37 @@ impl Cpu {
             return Ok(());
         }
 
+        self.store_slow(bus, address, width, value, virtual_page, index)
+    }
+
+    fn store_misaligned<B: CpuBus>(
+        &mut self,
+        bus: &mut B,
+        address: u64,
+        width: AccessWidth,
+        value: u64,
+    ) -> Result<(), Trap> {
+        for index in 0..width.bytes() {
+            self.store(
+                bus,
+                address.wrapping_add(index as u64),
+                AccessWidth::Byte,
+                value >> (index * 8),
+            )?;
+        }
+        Ok(())
+    }
+
+    fn store_slow<B: CpuBus>(
+        &mut self,
+        bus: &mut B,
+        address: u64,
+        width: AccessWidth,
+        value: u64,
+        virtual_page: u64,
+        index: usize,
+    ) -> Result<(), Trap> {
+        let len = width.bytes();
         let physical = self
             .translate(bus, address, len, Access::Write)
             .map_err(|fault| Self::translation_trap(Access::Write, address, fault))?;

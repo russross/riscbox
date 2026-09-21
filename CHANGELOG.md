@@ -4,6 +4,13 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Flattened the remaining common interpreter hot paths toward TinyEMU's loop:
+    validated instruction and data accesses now use one unaligned scalar arena
+    operation, page chunks advance a linear arena cursor without repeated page
+    masking, architectural PCs are reconstructed only where demanded, and WASM
+    aggressively inlines cached memory and common integer/compressed helpers.
+    Counter bookkeeping now derives cycle deltas from one remaining-cycle value
+    while retaining exact `Cpu::run` budgets and precise SYSTEM visibility.
 *   Directed LLVM to inline the private instruction dispatcher into its single
     WASM call site while retaining the typed Rust execution interface. The
     prepared xv6 workload completed at a 255.576-second guest timestamp and

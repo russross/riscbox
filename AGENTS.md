@@ -73,11 +73,12 @@ wait-on-reservation. It is moving toward RVA23 where that is useful, but it is
 not RVA23 compliant because vectors and several other required extensions are
 intentionally absent. Advertise only implemented behavior.
 
-The interpreter executes sequential instructions in validated executable-page
-chunks. It resolves the execute TLB, checks interrupts and host-visible device
-state, and commits PC and counter deltas at chunk boundaries. Aligned RAM TLB
-hits use fixed-width unchecked arena helpers only after complete-page
-validation; all slow paths remain checked.
+The interpreter executes sequential instructions with a linear arena cursor in
+validated executable-page chunks. It reconstructs architectural PCs only when
+an instruction or cold exit needs one, checks interrupts and host-visible
+device state at explicit boundaries, and commits counters in deltas. Aligned
+RAM TLB hits use single scalar fixed-width unchecked arena operations only
+after complete-page validation; all slow paths remain checked.
 
 The generated device tree follows standard libfdt layout and QEMU `virt`
 bindings. The platform boots current xv6 over UART and VirtIO block and boots a

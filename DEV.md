@@ -42,8 +42,9 @@ interface, moved it to one private call site, and applied WASM-only
 255.576-second guest timestamp and 264.566 profile seconds; its paired TinyEMU
 run took 94.597 profile seconds. This is an 11.6% guest-time and 11.3%
 profile-time reduction from the previous Riscbox result. WASM instruction
-inspection is still required before concluding which source abstractions LLVM
-eliminated.
+inspection confirms that LLVM eliminated the dispatcher call and material
+`Result<InstructionOutcome, Trap>` transfer. The typed source structure is not
+a remaining cost and should be retained.
 
 `TRACE-REPORT.md` aligns the pre-experiment WASM with both source trees. At that
 point ordinary Riscbox instructions crossed an uninlined
@@ -53,8 +54,16 @@ checked flow and the virtual page, and reconstructed the next page offset.
 TinyEMU keeps decode, dispatch, cursor advance, and accounting in one function.
 Its calls are predominantly slow paths. Riscbox's TLB-hit instruction and
 aligned data accesses already use unchecked fixed-width arena helpers after
-full-page validation, so additional unchecked memory access is not the first
-optimization target.
+full-page validation. The current helpers nevertheless compile to byte-wise
+loads and stores rather than scalar WASM memory operations.
+
+The fresh post-inlining trace ranks scalar arena access and guest-memory call
+boundaries first among remaining differences. Ordinary instruction fetch uses
+four `i32.load8_u` operations where TinyEMU uses one `i32.load`; aligned cached
+data accesses are also byte-oriented. `Cpu::load` and `Cpu::store` remain calls
+and account for 17.8% of non-idle samples in the milestone profile. PC and page
+cursor work, fetch-tail and budget branches, selected integer helpers, and the
+SYSTEM precheck remain plausible later costs, in that order.
 
 The next milestone is structural rather than stylistic: use generated-code and
 profile evidence to remove costs from the Rust WASM hot loop. Readability and
@@ -116,54 +125,45 @@ justify `read_u16` and `read_u32`; no raw pointer or arena borrow may survive a
 call that can mutate the bus. Reconstruct a `u64` PC from `virtual_page` and
 `page_offset` only for PC-relative instructions and cold exits.
 
-First preserve the existing execution decomposition and test whether LLVM can
-erase it. Move `Cpu::run`, `execute_slow`, and `execute` into the same module so
-the dispatcher can be private rather than `pub(super)`. Reshape the fetch flow
-so page-local and uncommon checked fetches reach one lexical `execute` call
-site, with the checked path forcing a block exit after that instruction. Mark
-the dispatcher `#[inline(always)]`; apply the annotation to a subordinate
-helper only when its own call is visible in the measured ordinary path. Keep
-the typed `Result<InstructionOutcome, Trap>` source interface during this
-experiment and let optimization eliminate it where possible.
-
-Only if the inlined code retains measured abstraction overhead should the
-source contract become more C-shaped. The next step would replace the
-per-instruction outcome with direct updates to page-local scalar cursors and a
-small private `HotLoopExit` used only for actual block exits. Lexically merging
-decode into `Cpu::run`, duplicating dispatch, or introducing unsafe state
-access are later options that require evidence that inlining and a better safe
-interface were insufficient.
+Retain the private, typed dispatcher interface: it compiles to lexical dispatch
+inside `Cpu::run` without a material outcome. Optimize the remaining paths one
+measured mechanism at a time. Prefer typed unaligned scalar access inside the
+existing narrow unsafe memory module, safe cursor restructuring, and selective
+compiler-directed inlining. Lexically merging more source, duplicating
+dispatch, or broadening unsafe state access require new evidence that these
+approaches were insufficient.
 
 ### Milestones
 
-1.  Test compiler-directed flattening. Co-locate the run loop and dispatcher,
-    make the dispatcher module-private, arrange one lexical call site shared by
-    page-local and checked fetches, and add `#[inline(always)]`. Build optimized
-    WASM and disassemble `Cpu::run`. Verify directly that the dispatcher call is
-    absent and determine whether LLVM also scalarized `InstructionOutcome`,
-    folded normal `Result` handling, and simplified the sequential path. Then
-    run the paired xv6 workload. Keep function size only as a possible
-    instruction-cache explanation if throughput regresses.
+1.  Replace byte-wise unchecked arena copies with typed unaligned
+    little-endian scalar operations in `src/memory/unchecked.rs`. Preserve the
+    existing full-page, fixed-arena, width, and aliasing proofs. Verify that
+    instruction fetch and aligned cached data access emit scalar WASM loads and
+    stores, then measure before changing any call boundary.
 
-2.  Remove only residual measured overhead. If inlining succeeds and the
-    typed result disappears, retain the structured Rust source. If result-tag,
-    PC, flow, or page bookkeeping remains in the ordinary path, change the
-    private execution interface so sequential 32-bit integer instructions
-    update local cursors directly and only real exits construct
-    `HotLoopExit`. Keep memory, atomic, floating-point, and other substantial
-    opcode bodies as helpers unless their calls become measured bottlenecks.
-    Lexically merge dispatch into the loop only if the compiler still cannot
-    flatten this interface. Measure each form before expanding more helpers,
-    since instruction-cache growth can erase dispatch gains.
+2.  Test compiler-directed inlining of `Cpu::load` and `Cpu::store`, or split a
+    small page-hit helper from their checked slow paths if whole-function
+    inlining grows the loop or regresses throughput. Keep translation, PMP,
+    MMIO, misalignment, and TLB fill checked and out of the ordinary cached
+    path. Treat the existing 17.8% non-idle samples as the baseline.
 
-3.  Integrate compressed dispatch and cursor fetch. Give compressed sequential
-    instructions the same direct cursor contract instead of returning an
-    outcome. Split the normal four-byte fetch region from the final page
-    halfword so the common path has no per-instruction tail test. A 32-bit
-    instruction at the final halfword continues through the checked execute
-    load and reports a precise second-page fault.
+3.  Replace repeated PC reconstruction and page masking with page-local scalar
+    cursors while retaining the typed execution result that already compiles
+    away. Measure generated dependent operations as well as end-to-end time;
+    do not lexically duplicate dispatch unless LLVM introduces a new material
+    boundary.
 
-4.  Consolidate accounting and cold boundaries. Use one local remaining-cycle
+4.  Split the normal four-byte fetch region from the final page halfword so the
+    common path has no per-instruction tail test. A 32-bit instruction at the
+    final halfword continues through the checked execute load and reports a
+    precise second-page fault.
+
+5.  Selectively inline common integer and compressed helpers that remain in
+    the profile and disassembly. Test them independently because expanding the
+    already large dispatch body may increase instruction-cache pressure. Keep
+    floating-point, SYSTEM, trap, and uncommon operations as cold calls.
+
+6.  Consolidate accounting and cold boundaries. Use one local remaining-cycle
     value and one retired delta, committing architectural PC, cycle, elapsed,
     and `instret` only at exits. Move the generic SYSTEM opcode precheck into
     system dispatch while preserving the requirement to materialize counters
@@ -171,24 +171,13 @@ interface were insufficient.
     changes. Verify `minstret` writes, non-retiring traps, WFI, and interrupt
     priority explicitly.
 
-5.  Evaluate block-granular budgets independently. First retain exact budget
+7.  Evaluate block-granular budgets independently. First retain exact budget
     checks so the flattened-loop gain is measured without a semantic change.
     Then benchmark a TinyEMU-style signed remaining count checked only at page
     or control-flow boundaries. If retained, document that `Cpu::run` may
     overshoot by at most one page-local block, update `RunOutcome` and browser
     scheduling tests, and verify timer and device-event latency. Do not combine
-    this contract change with dispatch flattening.
-
-6.  Reprofile before adding unsafe code. Inspect the final Rust WASM for calls,
-    spills, bounds checks, indirect dispatch, and oversized functions. Add a
-    narrower unsafe helper or raw arena pointer only when a specific remaining
-    instruction in the generated hot path and a paired benchmark justify it.
-    Keep each unsafe block in `src/memory/unchecked.rs` with explicit page,
-    width, arena-stability, and aliasing invariants. Do not translate C pointer
-    patterns mechanically into pervasive Rust `unsafe`: keep ownership,
-    architectural state, control-flow exits, and slow-path interfaces typed and
-    safe, and use unsafe only at the narrow memory operations whose proofs
-    cannot be expressed without it.
+    this contract change with the other loop experiments.
 
 Candidate work
 --------------

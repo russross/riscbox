@@ -4,6 +4,12 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Moved production CPU instruction execution, CSR/VM/TLB handling, SoftFP,
+    and physical RAM into a freestanding TinyEMU C core. Rust retains machine
+    setup and devices and enters C for coarse timeslices, crossing back for
+    MMIO. Clang builds the C core directly for native tests and raw WASM;
+    Rust's allocator backs C allocations without Emscripten or libc imports.
+    Alpine boot through login and shutdown and xv6 full usertests pass.
 *   A fresh production-WASM trace and xv6 compile profile found the flattened
     interpreter at 203.275 profile seconds against TinyEMU's 98.558 seconds.
     This is a 23.2% reduction from the previous Riscbox result and moves the

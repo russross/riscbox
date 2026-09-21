@@ -2,7 +2,7 @@
 
 use core::fmt;
 
-use crate::memory::{AccessWidth, GuestAddress, MemoryError, PhysicalMemory};
+use crate::memory::{AccessWidth, GuestAddress, MemoryAccess, MemoryError};
 
 pub const MMIO_SIZE: u64 = 0x1000;
 pub const MAX_QUEUES: usize = 8;
@@ -238,7 +238,7 @@ impl VirtioTransport {
     /// Returns an error for an invalid queue or malformed guest descriptor chain.
     pub fn next_chain(
         &mut self,
-        memory: &mut PhysicalMemory,
+        memory: &mut dyn MemoryAccess,
         index: QueueIndex,
     ) -> Result<Option<DescriptorChain>, QueueError> {
         let queue = self.queue_checked(index)?;
@@ -268,7 +268,7 @@ impl VirtioTransport {
     /// Returns an error when the range exceeds the chain or guest RAM is invalid.
     pub fn read_chain(
         &self,
-        memory: &mut PhysicalMemory,
+        memory: &mut dyn MemoryAccess,
         chain: &DescriptorChain,
         offset: u32,
         destination: &mut [u8],
@@ -283,7 +283,7 @@ impl VirtioTransport {
     /// Returns an error when the range exceeds the chain or guest RAM is invalid.
     pub fn write_chain(
         &self,
-        memory: &mut PhysicalMemory,
+        memory: &mut dyn MemoryAccess,
         chain: &DescriptorChain,
         offset: u32,
         source: &[u8],
@@ -298,7 +298,7 @@ impl VirtioTransport {
     /// Returns an error for an invalid queue, length, or used-ring address.
     pub fn complete_chain(
         &mut self,
-        memory: &mut PhysicalMemory,
+        memory: &mut dyn MemoryAccess,
         index: QueueIndex,
         chain: &DescriptorChain,
         written: u32,
@@ -341,7 +341,7 @@ impl VirtioTransport {
 }
 
 fn read_chain(
-    memory: &mut PhysicalMemory,
+    memory: &mut dyn MemoryAccess,
     queue: &VirtQueue,
     head: DescriptorIndex,
 ) -> Result<DescriptorChain, QueueError> {
@@ -376,7 +376,7 @@ fn read_chain(
         if len != 0 {
             checked_add(data_address, u64::from(len))?;
             let length = usize::try_from(len).map_err(|_| QueueError::Overflow)?;
-            memory.ram_range(GuestAddress(data_address), length, is_writable)?;
+            memory.validate_ram(GuestAddress(data_address), length, is_writable)?;
         }
         segments.push(Segment {
             address: data_address,
@@ -397,7 +397,7 @@ fn read_chain(
 }
 
 fn copy_chain(
-    memory: &mut PhysicalMemory,
+    memory: &mut dyn MemoryAccess,
     chain: &DescriptorChain,
     writable: bool,
     offset: u32,
@@ -426,12 +426,10 @@ fn copy_chain(
         let available = usize::try_from(segment.len - skip).map_err(|_| QueueError::Overflow)?;
         let length = available.min(bytes.len() - copied);
         let address = checked_add(segment.address, u64::from(skip))?;
-        let arena = memory.ram_range(GuestAddress(address), length, writable)?.0 as usize;
         if writable {
-            memory.arena_mut()[arena..arena + length]
-                .copy_from_slice(&bytes[copied..copied + length]);
+            memory.write_bytes(GuestAddress(address), &bytes[copied..copied + length])?;
         } else {
-            bytes[copied..copied + length].copy_from_slice(&memory.arena()[arena..arena + length]);
+            memory.read_bytes(GuestAddress(address), &mut bytes[copied..copied + length])?;
         }
         copied += length;
         skip = 0;
@@ -460,7 +458,7 @@ fn validate_queue(queue: &VirtQueue) -> Result<(), QueueError> {
 }
 
 fn write_chain_bytes(
-    memory: &mut PhysicalMemory,
+    memory: &mut dyn MemoryAccess,
     chain: &DescriptorChain,
     offset: u32,
     bytes: &[u8],
@@ -479,8 +477,7 @@ fn write_chain_bytes(
         let available = usize::try_from(segment.len - skip).map_err(|_| QueueError::Overflow)?;
         let length = available.min(bytes.len() - copied);
         let address = checked_add(segment.address, u64::from(skip))?;
-        let arena = memory.ram_range(GuestAddress(address), length, true)?.0 as usize;
-        memory.arena_mut()[arena..arena + length].copy_from_slice(&bytes[copied..copied + length]);
+        memory.write_bytes(GuestAddress(address), &bytes[copied..copied + length])?;
         copied += length;
         skip = 0;
         if copied == bytes.len() {
@@ -494,25 +491,25 @@ fn write_chain_bytes(
     }
 }
 
-fn read_u16(memory: &mut PhysicalMemory, address: u64) -> Result<u16, QueueError> {
+fn read_u16(memory: &mut dyn MemoryAccess, address: u64) -> Result<u16, QueueError> {
     Ok(
         u16::try_from(memory.read(GuestAddress(address), AccessWidth::HalfWord)?)
             .expect("a half-word memory read fits in u16"),
     )
 }
 
-fn read_u32(memory: &mut PhysicalMemory, address: u64) -> Result<u32, QueueError> {
+fn read_u32(memory: &mut dyn MemoryAccess, address: u64) -> Result<u32, QueueError> {
     Ok(
         u32::try_from(memory.read(GuestAddress(address), AccessWidth::Word)?)
             .expect("a word memory read fits in u32"),
     )
 }
 
-fn read_u64(memory: &mut PhysicalMemory, address: u64) -> Result<u64, QueueError> {
+fn read_u64(memory: &mut dyn MemoryAccess, address: u64) -> Result<u64, QueueError> {
     Ok(memory.read(GuestAddress(address), AccessWidth::DoubleWord)?)
 }
 
-fn write_u16(memory: &mut PhysicalMemory, address: u64, value: u16) -> Result<(), QueueError> {
+fn write_u16(memory: &mut dyn MemoryAccess, address: u64, value: u16) -> Result<(), QueueError> {
     memory.write(
         GuestAddress(address),
         AccessWidth::HalfWord,
@@ -521,7 +518,7 @@ fn write_u16(memory: &mut PhysicalMemory, address: u64, value: u16) -> Result<()
     Ok(())
 }
 
-fn write_u32(memory: &mut PhysicalMemory, address: u64, value: u32) -> Result<(), QueueError> {
+fn write_u32(memory: &mut dyn MemoryAccess, address: u64, value: u32) -> Result<(), QueueError> {
     memory.write(GuestAddress(address), AccessWidth::Word, u64::from(value))?;
     Ok(())
 }

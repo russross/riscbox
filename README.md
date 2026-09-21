@@ -2,8 +2,9 @@ Riscbox
 ========
 
 Riscbox is a small RV64 virtual platform for teaching, grading, and running
-purpose-built Linux systems in a web page. The emulator is written in Rust,
-compiled directly to WebAssembly, and integrated with a dependency-free
+purpose-built Linux systems in a web page. The platform is written in Rust
+around a TinyEMU C CPU and memory core, compiled directly to WebAssembly,
+and integrated with a dependency-free
 JavaScript adapter. It is designed for static hosting and controlled guest
 images rather than broad hardware compatibility.
 
@@ -25,7 +26,7 @@ deployment target.
 Quick start
 -----------
 
-The root build requires Rust, GNU Make, `uv`, Node.js, and the
+The root build requires Rust, Clang, `ar`, GNU Make, `uv`, Node.js, and the
 `wasm32-unknown-unknown` Rust target. Building the supplied Linux images also
 requires a RISC-V cross compiler, QEMU, ext4 tools, `curl`, and OpenSBI:
 
@@ -316,9 +317,8 @@ Riscbox began as a focused fork of Fabrice Bellard's
 notices. The repository preserves the former C fork under `c/` for historical
 reference.
 
-The current emulator is a separate Rust implementation with a raw WebAssembly
-target, a handwritten browser adapter, a one-hart RV64/Sv39 scope, a modernized
-QEMU `virt` platform, current RISC-V extensions, reproducible image tooling, and
-a generic concurrent 9P2000.L host boundary. It does not aim for source parity
-with TinyEMU, and the archived C implementation is not built or tested as part
-of Riscbox. Project history is recorded in [CHANGELOG.md](CHANGELOG.md).
+The active `tinyemu-core/` contains a freestanding subset of the archived C
+CPU, SoftFP, and physical memory implementation. Rust owns the platform,
+devices, browser requests, and C allocations. A timeslice enters C once and
+calls Rust for device accesses. The historical `c/` tree is not built.
+Project history is recorded in [CHANGELOG.md](CHANGELOG.md).

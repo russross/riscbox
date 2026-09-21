@@ -4,7 +4,7 @@ use core::fmt;
 use std::collections::{BTreeMap, VecDeque};
 
 use crate::entropy::SharedEntropy;
-use crate::memory::{AccessWidth, PhysicalMemory};
+use crate::memory::{AccessWidth, MemoryAccess};
 use crate::virtio::{DescriptorChain, QueueError, QueueIndex, VirtioTransport};
 
 const CONFIG_BASE: u32 = 0x100;
@@ -48,7 +48,7 @@ pub trait VirtioDevice {
     fn notify(
         &mut self,
         transport: &mut VirtioTransport,
-        memory: &mut PhysicalMemory,
+        memory: &mut dyn MemoryAccess,
         queue: QueueIndex,
     ) -> Result<(), DeviceError>;
 }
@@ -79,7 +79,7 @@ impl<D: VirtioDevice> VirtioMmioDevice<D> {
     /// Returns an error when a queue notification cannot be serviced.
     pub fn write(
         &mut self,
-        memory: &mut PhysicalMemory,
+        memory: &mut dyn MemoryAccess,
         offset: u32,
         value: u32,
         width: AccessWidth,
@@ -208,7 +208,7 @@ impl VirtioDevice for EntropyDevice {
     fn notify(
         &mut self,
         transport: &mut VirtioTransport,
-        memory: &mut PhysicalMemory,
+        memory: &mut dyn MemoryAccess,
         queue: QueueIndex,
     ) -> Result<(), DeviceError> {
         if queue != QueueIndex(0) {
@@ -271,7 +271,7 @@ impl<B: BlockBackend> VirtioDevice for BlockDevice<B> {
     fn notify(
         &mut self,
         transport: &mut VirtioTransport,
-        memory: &mut PhysicalMemory,
+        memory: &mut dyn MemoryAccess,
         queue: QueueIndex,
     ) -> Result<(), DeviceError> {
         if self.pending.is_some() {
@@ -296,7 +296,7 @@ impl<B: BlockBackend> BlockDevice<B> {
     pub fn resume(
         &mut self,
         transport: &mut VirtioTransport,
-        memory: &mut PhysicalMemory,
+        memory: &mut dyn MemoryAccess,
     ) -> Result<(), DeviceError> {
         let Some((queue, chain)) = self.pending.take() else {
             return Ok(());
@@ -311,7 +311,7 @@ impl<B: BlockBackend> BlockDevice<B> {
     fn request(
         &mut self,
         transport: &mut VirtioTransport,
-        memory: &mut PhysicalMemory,
+        memory: &mut dyn MemoryAccess,
         queue: QueueIndex,
         chain: &DescriptorChain,
     ) -> Result<BlockRequestStatus, DeviceError> {
@@ -408,7 +408,7 @@ impl ConsoleDevice {
     pub fn receive(
         &mut self,
         transport: &mut VirtioTransport,
-        memory: &mut PhysicalMemory,
+        memory: &mut dyn MemoryAccess,
         bytes: &[u8],
     ) -> Result<(), DeviceError> {
         self.push_input(bytes);
@@ -426,7 +426,7 @@ impl ConsoleDevice {
     fn drain_input(
         &mut self,
         transport: &mut VirtioTransport,
-        memory: &mut PhysicalMemory,
+        memory: &mut dyn MemoryAccess,
     ) -> Result<(), DeviceError> {
         while !self.input.is_empty() {
             let Some(chain) = transport.next_chain(memory, QueueIndex(0))? else {
@@ -458,7 +458,7 @@ impl VirtioDevice for ConsoleDevice {
     fn notify(
         &mut self,
         transport: &mut VirtioTransport,
-        memory: &mut PhysicalMemory,
+        memory: &mut dyn MemoryAccess,
         queue: QueueIndex,
     ) -> Result<(), DeviceError> {
         if queue.0 == 0 {
@@ -541,7 +541,7 @@ impl<B> NetworkDevice<B> {
     pub fn receive_packet(
         &mut self,
         transport: &mut VirtioTransport,
-        memory: &mut PhysicalMemory,
+        memory: &mut dyn MemoryAccess,
         packet: Vec<u8>,
     ) -> Result<NetworkIngress, DeviceError>
     where
@@ -583,7 +583,7 @@ impl<B: NetworkBackend> NetworkDevice<B> {
     fn drain_receive(
         &mut self,
         transport: &mut VirtioTransport,
-        memory: &mut PhysicalMemory,
+        memory: &mut dyn MemoryAccess,
     ) -> Result<(), DeviceError> {
         while !self.receive.is_empty() {
             let Some(chain) = transport.next_chain(memory, QueueIndex(0))? else {
@@ -626,7 +626,7 @@ impl<B: NetworkBackend> VirtioDevice for NetworkDevice<B> {
     fn notify(
         &mut self,
         transport: &mut VirtioTransport,
-        memory: &mut PhysicalMemory,
+        memory: &mut dyn MemoryAccess,
         queue: QueueIndex,
     ) -> Result<(), DeviceError> {
         if queue.0 == 0 {
@@ -760,7 +760,7 @@ impl<B: NinePBackend> VirtioDevice for NinePDevice<B> {
     fn notify(
         &mut self,
         transport: &mut VirtioTransport,
-        memory: &mut PhysicalMemory,
+        memory: &mut dyn MemoryAccess,
         queue: QueueIndex,
     ) -> Result<(), DeviceError> {
         if self.generation_exhausted {
@@ -820,7 +820,7 @@ impl<B: NinePBackend> NinePDevice<B> {
     pub fn complete(
         &mut self,
         transport: &mut VirtioTransport,
-        memory: &mut PhysicalMemory,
+        memory: &mut dyn MemoryAccess,
         generation: NinePGeneration,
         request_id: NinePRequestId,
         outcome: NinePOutcome,
@@ -852,7 +852,7 @@ impl<B: NinePBackend> NinePDevice<B> {
 
 fn complete_9p(
     transport: &mut VirtioTransport,
-    memory: &mut PhysicalMemory,
+    memory: &mut dyn MemoryAccess,
     queue: QueueIndex,
     chain: &DescriptorChain,
     request_tag: [u8; 2],
@@ -910,7 +910,7 @@ impl InputDevice {
     pub fn send_key(
         &mut self,
         transport: &mut VirtioTransport,
-        memory: &mut PhysicalMemory,
+        memory: &mut dyn MemoryAccess,
         code: u16,
         down: bool,
     ) -> Result<(), DeviceError> {
@@ -944,7 +944,7 @@ impl InputDevice {
     pub fn send_pointer(
         &mut self,
         transport: &mut VirtioTransport,
-        memory: &mut PhysicalMemory,
+        memory: &mut dyn MemoryAccess,
         position: (i32, i32),
         wheel: i32,
         buttons: u32,
@@ -997,7 +997,7 @@ impl InputDevice {
     fn drain_events(
         &mut self,
         transport: &mut VirtioTransport,
-        memory: &mut PhysicalMemory,
+        memory: &mut dyn MemoryAccess,
     ) -> Result<(), DeviceError> {
         while !self.events.is_empty() {
             let Some(chain) = transport.next_chain(memory, QueueIndex(0))? else {
@@ -1053,7 +1053,7 @@ impl VirtioDevice for InputDevice {
     fn notify(
         &mut self,
         transport: &mut VirtioTransport,
-        memory: &mut PhysicalMemory,
+        memory: &mut dyn MemoryAccess,
         queue: QueueIndex,
     ) -> Result<(), DeviceError> {
         if queue.0 == 0 {

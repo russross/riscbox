@@ -38,7 +38,7 @@ impl AccessWidth {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RegionId(usize);
+pub struct RegionId(pub(crate) usize);
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct RamFlags(u8);
@@ -57,8 +57,12 @@ impl RamFlags {
         Self(self.0 | other.0)
     }
 
-    const fn contains(self, bit: u8) -> bool {
+    pub(crate) const fn contains(self, bit: u8) -> bool {
         self.0 & bit != 0
+    }
+
+    pub(crate) const fn bits(self) -> u8 {
+        self.0
     }
 }
 
@@ -74,6 +78,50 @@ impl DeviceWidths {
     pub const fn union(self, other: Self) -> Self {
         Self(self.0 | other.0)
     }
+
+    pub(crate) const fn bits(self) -> u8 {
+        self.0
+    }
+}
+
+pub trait MemoryAccess {
+    /// Reads a guest value.
+    ///
+    /// # Errors
+    /// Returns an error for an inaccessible range.
+    fn read(&mut self, address: GuestAddress, width: AccessWidth) -> Result<u64, MemoryError>;
+    /// Writes a guest value.
+    ///
+    /// # Errors
+    /// Returns an error for an inaccessible or read-only range.
+    fn write(
+        &mut self,
+        address: GuestAddress,
+        width: AccessWidth,
+        value: u64,
+    ) -> Result<(), MemoryError>;
+    /// Checks a complete guest RAM range.
+    ///
+    /// # Errors
+    /// Returns an error when the range is not suitable RAM.
+    fn validate_ram(
+        &mut self,
+        address: GuestAddress,
+        len: usize,
+        write: bool,
+    ) -> Result<(), MemoryError>;
+    /// Copies bytes out of guest RAM.
+    ///
+    /// # Errors
+    /// Returns an error for an inaccessible range.
+    fn read_bytes(&mut self, address: GuestAddress, bytes: &mut [u8])
+        -> Result<(), MemoryError>;
+    /// Copies bytes into guest RAM.
+    ///
+    /// # Errors
+    /// Returns an error for an inaccessible or read-only range.
+    fn write_bytes(&mut self, address: GuestAddress, bytes: &[u8])
+        -> Result<(), MemoryError>;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -565,4 +613,44 @@ fn ram_invalidation(region: &Region) -> Result<Option<Invalidation>, MemoryError
         arena_offset,
         len: u32::try_from(region.original_len).map_err(|_| MemoryError::ArenaTooLarge)?,
     }))
+}
+
+impl MemoryAccess for PhysicalMemory {
+    fn read(&mut self, address: GuestAddress, width: AccessWidth) -> Result<u64, MemoryError> {
+        Self::read(self, address, width)
+    }
+
+    fn write(
+        &mut self,
+        address: GuestAddress,
+        width: AccessWidth,
+        value: u64,
+    ) -> Result<(), MemoryError> {
+        Self::write(self, address, width, value)
+    }
+
+    fn validate_ram(
+        &mut self,
+        address: GuestAddress,
+        len: usize,
+        write: bool,
+    ) -> Result<(), MemoryError> {
+        self.ram_range(address, len, write).map(|_| ())
+    }
+
+    fn read_bytes(
+        &mut self,
+        address: GuestAddress,
+        bytes: &mut [u8],
+    ) -> Result<(), MemoryError> {
+        let offset = self.ram_range(address, bytes.len(), false)?.0 as usize;
+        bytes.copy_from_slice(&self.arena[offset..offset + bytes.len()]);
+        Ok(())
+    }
+
+    fn write_bytes(&mut self, address: GuestAddress, bytes: &[u8]) -> Result<(), MemoryError> {
+        let offset = self.ram_range(address, bytes.len(), true)?.0 as usize;
+        self.arena[offset..offset + bytes.len()].copy_from_slice(bytes);
+        Ok(())
+    }
 }

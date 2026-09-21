@@ -1,5 +1,4 @@
 use riscbox::browser_storage::HttpBlockStore;
-use riscbox::cpu::CpuBus;
 use riscbox::entropy::{EntropyError, EntropySource};
 use riscbox::machine::{
     BootImages, FRAMEBUFFER_BASE, FramebufferConfig, Machine, MachineConfig, RAM_BASE, RTC_BASE,
@@ -66,6 +65,28 @@ fn virtio_slots_route_mmio_and_appear_in_the_device_tree() {
         .expect("FDT RAM");
     let node = b"virtio@10001000";
     assert!(tree.windows(node.len()).any(|window| window == node));
+}
+
+#[test]
+fn cpu_reads_virtio_config_bytes_through_the_c_device_aperture() {
+    let mut machine = machine(false);
+    machine.add_console_device(80, 25).expect("console slot");
+    let mut firmware = Vec::new();
+    for instruction in [0x1000_1137_u32, 0x1001_4283, 0x1050_0073] {
+        firmware.extend_from_slice(&instruction.to_le_bytes());
+    }
+    machine
+        .load_boot(BootImages {
+            firmware: &firmware,
+            kernel: None,
+            initrd: None,
+            command_line: "",
+        })
+        .expect("boot image");
+
+    machine.run(30);
+
+    assert_eq!(machine.cpu().register(5), 80);
 }
 
 #[test]

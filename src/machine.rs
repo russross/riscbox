@@ -3,13 +3,16 @@
 use core::fmt;
 
 use crate::browser_storage::{HttpBlockStore, HttpRequest, StorageError};
-use crate::cpu::{BusError, Cpu, CpuBus, MIP_MEIP, MIP_MSIP, MIP_MTIP, MIP_SEIP, RunOutcome};
+use crate::cpu::{BusError, MIP_MSIP, MIP_MTIP, RunOutcome, RunState};
 use crate::entropy::{EntropyError, SharedEntropy, SystemEntropy};
 use crate::fdt::{FdtConfig, FramebufferDescription, build as build_fdt};
+use crate::guest_memory::GuestMemory;
 use crate::memory::{
-    AccessWidth, ArenaOffset, GuestAddress, MemoryError, PhysicalMemory, RamFlags, RegionId,
+    AccessWidth, ArenaOffset, DeviceWidths, GuestAddress, MemoryAccess, MemoryError, RamFlags,
+    RegionId,
 };
 use crate::platform::{Clint, FinishStatus, Finisher, GoldfishRtc, Plic, Uart16550};
+use crate::tinyemu_core::{Core, HostCallbacks};
 use crate::virtio::{MMIO_SIZE, VirtioTransport};
 use crate::virtio_devices::{
     BlockBackend, BlockDevice, ConsoleDevice, DeviceError, EntropyDevice, InputDevice, InputKind,
@@ -79,6 +82,7 @@ pub struct FramebufferUpdate {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum MachineError {
     Memory(MemoryError),
+    CoreAllocation,
     InvalidRamSize(u64),
     InvalidFramebuffer,
     FirmwareTooLarge,
@@ -98,6 +102,7 @@ impl fmt::Display for MachineError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Memory(error) => error.fmt(formatter),
+            Self::CoreAllocation => formatter.write_str("could not allocate TinyEMU core"),
             Self::InvalidRamSize(size) => write!(formatter, "invalid platform RAM size {size:#x}"),
             Self::InvalidFramebuffer => formatter.write_str("invalid framebuffer dimensions"),
             Self::FirmwareTooLarge => formatter.write_str("firmware does not fit in RAM"),
@@ -184,7 +189,7 @@ impl VirtioSlot {
 
     fn write(
         &mut self,
-        memory: &mut PhysicalMemory,
+        memory: &mut dyn MemoryAccess,
         offset: u32,
         value: u32,
         width: AccessWidth,
@@ -214,7 +219,7 @@ impl VirtioSlot {
 }
 
 pub struct PlatformBus {
-    memory: PhysicalMemory,
+    memory: GuestMemory,
     clint: Clint,
     plic: Plic,
     uart: Uart16550,
@@ -224,15 +229,14 @@ pub struct PlatformBus {
     virtio: Vec<VirtioSlot>,
     timer_ticks: u64,
     host_nanoseconds: u64,
-    interrupt_state_changed: bool,
 }
 
 impl PlatformBus {
-    fn new(config: MachineConfig) -> Result<Self, MachineError> {
+    fn new(config: MachineConfig, core: &Core) -> Result<Self, MachineError> {
         if config.ram_size == 0 || !config.ram_size.is_multiple_of(4096) {
             return Err(MachineError::InvalidRamSize(config.ram_size));
         }
-        let mut memory = PhysicalMemory::new();
+        let mut memory = GuestMemory::new(core);
         memory.register_ram(GuestAddress(RAM_BASE), config.ram_size, RamFlags::default())?;
         memory.register_ram(GuestAddress(0), RESET_RAM_SIZE, RamFlags::default())?;
         let framebuffer = config
@@ -267,6 +271,22 @@ impl PlatformBus {
                 })
             })
             .transpose()?;
+        memory.register_device(
+            GuestAddress(FINISHER_BASE),
+            0x1000,
+            DeviceWidths::U32,
+        )?;
+        memory.register_device(GuestAddress(RTC_BASE), 0x1000, DeviceWidths::U32)?;
+        memory.register_device(GuestAddress(CLINT_BASE), 0x1_0000, DeviceWidths::U32)?;
+        memory.register_device(GuestAddress(PLIC_BASE), 0x400_0000, DeviceWidths::U32)?;
+        memory.register_device(GuestAddress(UART_BASE), 0x100, DeviceWidths::U8)?;
+        memory.register_device(
+            GuestAddress(VIRTIO_BASE),
+            MMIO_SIZE * 31,
+            DeviceWidths::U8
+                .union(DeviceWidths::U16)
+                .union(DeviceWidths::U32),
+        )?;
         Ok(Self {
             memory,
             clint: Clint::default(),
@@ -278,7 +298,6 @@ impl PlatformBus {
             virtio: Vec::new(),
             timer_ticks: 0,
             host_nanoseconds: 0,
-            interrupt_state_changed: false,
         })
     }
 
@@ -323,7 +342,6 @@ impl PlatformBus {
             return Err(BusError::AccessFault);
         };
         self.update_device_irqs();
-        self.interrupt_state_changed = true;
         Ok(value)
     }
 
@@ -360,20 +378,27 @@ impl PlatformBus {
             return Err(BusError::AccessFault);
         }
         self.update_device_irqs();
-        self.interrupt_state_changed = true;
         Ok(())
     }
 }
 
-impl CpuBus for PlatformBus {
-    fn read(&mut self, address: GuestAddress, width: AccessWidth) -> Result<u64, BusError> {
+impl PlatformBus {
+    /// Reads a physical RAM or device address.
+    ///
+    /// # Errors
+    /// Returns an access fault for an unsupported address or width.
+    pub fn read(&mut self, address: GuestAddress, width: AccessWidth) -> Result<u64, BusError> {
         self.memory
             .read(address, width)
             .map_err(|_| BusError::AccessFault)
             .or_else(|_| self.read_mmio(address.0, width))
     }
 
-    fn write(
+    /// Writes a physical RAM or device address.
+    ///
+    /// # Errors
+    /// Returns an access fault for an unsupported address or width.
+    pub fn write(
         &mut self,
         address: GuestAddress,
         width: AccessWidth,
@@ -385,33 +410,42 @@ impl CpuBus for PlatformBus {
             .or_else(|_| self.write_mmio(address.0, width, value))
     }
 
-    fn ram_range(
-        &mut self,
-        address: GuestAddress,
-        len: usize,
-        write: bool,
-    ) -> Result<ArenaOffset, BusError> {
-        self.memory
-            .ram_range(address, len, write)
-            .map_err(|_| BusError::AccessFault)
+    fn interrupt_mask(&self) -> u32 {
+        let external = self.plic.cpu_interrupts();
+        let mut direct = 0;
+        if self.clint.software_interrupt() {
+            direct |= MIP_MSIP;
+        }
+        if self.clint.timer_interrupt(self.timer_ticks) {
+            direct |= MIP_MTIP;
+        }
+        direct | external
+    }
+}
+
+impl HostCallbacks for PlatformBus {
+    fn read(&mut self, address: u64, width: u32) -> Result<u32, BusError> {
+        let width = callback_width(width).ok_or(BusError::AccessFault)?;
+        let value = self.read_mmio(address, width)?;
+        u32::try_from(value).map_err(|_| BusError::AccessFault)
     }
 
-    fn arena(&self) -> &[u8] {
-        self.memory.arena()
+    fn write(&mut self, address: u64, width: u32, value: u32) -> Result<(), BusError> {
+        self.write_mmio(
+            address,
+            callback_width(width).ok_or(BusError::AccessFault)?,
+            u64::from(value),
+        )
     }
 
-    fn arena_mut(&mut self) -> &mut [u8] {
-        self.memory.arena_mut()
-    }
-
-    fn take_interrupt_state_changed(&mut self) -> bool {
-        core::mem::take(&mut self.interrupt_state_changed)
+    fn interrupts(&self) -> u32 {
+        self.interrupt_mask()
     }
 }
 
 pub struct Machine {
-    cpu: Cpu,
     bus: PlatformBus,
+    cpu: Core,
     config: MachineConfig,
     entropy: SharedEntropy,
 }
@@ -436,9 +470,11 @@ impl Machine {
         config: MachineConfig,
         entropy: SharedEntropy,
     ) -> Result<Self, MachineError> {
+        let cpu = Core::new().ok_or(MachineError::CoreAllocation)?;
+        let bus = PlatformBus::new(config, &cpu)?;
         Ok(Self {
-            cpu: Cpu::new(0),
-            bus: PlatformBus::new(config)?,
+            bus,
+            cpu,
             config,
             entropy,
         })
@@ -657,12 +693,10 @@ impl Machine {
     }
 
     fn copy_to_ram(&mut self, address: u64, bytes: &[u8]) -> Result<(), MachineError> {
-        let arena = self
-            .bus
+        self.bus
             .memory
             .ram_range(GuestAddress(address), bytes.len(), true)?
-            .0 as usize;
-        self.bus.memory.arena_mut()[arena..arena + bytes.len()].copy_from_slice(bytes);
+            .copy_from_slice(bytes);
         Ok(())
     }
 
@@ -694,24 +728,20 @@ impl Machine {
 
     pub fn run(&mut self, cycles: u32) -> RunOutcome {
         self.sync_interrupts();
-        self.bus.take_interrupt_state_changed();
-        let outcome = self.cpu.run(&mut self.bus, cycles);
+        let result = self.cpu.run_host(cycles, &mut self.bus);
         self.sync_interrupts();
-        outcome
+        RunOutcome {
+            cycles: result.cycles,
+            state: if result.waiting != 0 {
+                RunState::Waiting
+            } else {
+                RunState::Running
+            },
+        }
     }
 
     fn sync_interrupts(&mut self) {
-        let external = self.bus.plic.cpu_interrupts();
-        let mut direct = 0;
-        if self.bus.clint.software_interrupt() {
-            direct |= MIP_MSIP;
-        }
-        if self.bus.clint.timer_interrupt(self.bus.timer_ticks) {
-            direct |= MIP_MTIP;
-        }
-        let mask = MIP_MSIP | MIP_MTIP | MIP_MEIP | MIP_SEIP;
-        self.cpu.clear_interrupts(mask);
-        self.cpu.set_interrupts(direct | external);
+        self.cpu.set_interrupts(self.bus.interrupt_mask());
     }
 
     pub fn receive_console(&mut self, bytes: &[u8]) -> usize {
@@ -998,16 +1028,11 @@ impl Machine {
     ///
     /// Returns an error when the requested range is not RAM.
     pub fn read_ram(&mut self, address: u64, len: usize) -> Result<&[u8], MachineError> {
-        let offset = self
-            .bus
-            .memory
-            .ram_range(GuestAddress(address), len, false)?
-            .0 as usize;
-        Ok(&self.bus.memory.arena()[offset..offset + len])
+        Ok(self.bus.memory.ram_view(GuestAddress(address), len)?)
     }
 
     #[must_use]
-    pub const fn cpu(&self) -> &Cpu {
+    pub fn cpu(&self) -> &Core {
         &self.cpu
     }
 
@@ -1030,10 +1055,6 @@ impl Machine {
             return Ok(Vec::new());
         };
         let snapshot = self.bus.memory.take_dirty_pages(framebuffer.region)?;
-        if let Some(invalidation) = snapshot.invalidation {
-            self.cpu
-                .invalidate_write_range(invalidation.arena_offset, invalidation.len);
-        }
         let mut result: Vec<RedrawSpan> = Vec::new();
         for (word_index, word) in snapshot.words.iter().copied().enumerate() {
             for bit in 0..32 {
@@ -1089,11 +1110,21 @@ impl Machine {
             .height
             .checked_mul(framebuffer.stride)
             .ok_or(MachineError::InvalidFramebuffer)?;
-        let arena_offset = self.bus.memory.ram_range(
+        let bytes = self.bus.memory.ram_range(
             GuestAddress(FRAMEBUFFER_BASE + u64::from(byte_offset)),
             len as usize,
             false,
         )?;
+        #[cfg(target_arch = "wasm32")]
+        let arena_offset = ArenaOffset(
+            u32::try_from(bytes.as_ptr() as usize)
+                .map_err(|_| MachineError::InvalidFramebuffer)?,
+        );
+        #[cfg(not(target_arch = "wasm32"))]
+        let arena_offset = {
+            let _ = bytes;
+            ArenaOffset(0)
+        };
         Ok(Some(FramebufferUpdate {
             arena_offset,
             x: 0,
@@ -1107,13 +1138,26 @@ impl Machine {
     #[must_use]
     pub fn framebuffer_bytes(&self, update: FramebufferUpdate) -> Option<&[u8]> {
         let len = update.height.checked_mul(update.stride)? as usize;
-        let start = update.arena_offset.0 as usize;
-        self.bus.memory.arena().get(start..start.checked_add(len)?)
+        let offset = update.y.checked_mul(update.stride)?;
+        self.bus
+            .memory
+            .ram_view(GuestAddress(FRAMEBUFFER_BASE + u64::from(offset)), len)
+            .ok()
     }
 }
 
 fn offset(address: u64, base: u64) -> Result<u32, BusError> {
     u32::try_from(address - base).map_err(|_| BusError::AccessFault)
+}
+
+fn callback_width(width: u32) -> Option<AccessWidth> {
+    match width {
+        1 => Some(AccessWidth::Byte),
+        2 => Some(AccessWidth::HalfWord),
+        4 => Some(AccessWidth::Word),
+        8 => Some(AccessWidth::DoubleWord),
+        _ => None,
+    }
 }
 
 fn virtio_location(address: u64) -> Option<(usize, u32)> {

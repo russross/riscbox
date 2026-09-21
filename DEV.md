@@ -21,27 +21,18 @@ Development priorities
 4.  Improve image preparation only when a small loader or boot feature removes
     material deployment friction. Prepared raw kernels and initrds remain the
     baseline.
-5.  Bring the Rust interpreter hot loop near TinyEMU throughput before pursuing
-    non-CPU optimization. Measure generated WASM and end-to-end guest work at
-    every stage; preserve checked slow paths while allowing narrowly proved
-    unsafe operations where they remove measured overhead.
+5.  Measure the TinyEMU core on the prepared browser xv6 compile profile and
+    compare guest completion, V8 profile duration, and artifact size with the
+    recorded Rust interpreter and archived TinyEMU results.
 
-CPU hot-loop validation
------------------------
+CPU core validation
+-------------------
 
-The current `TRACE-REPORT.md` compares the flattened hot loop with TinyEMU.
-Generated WASM confirms scalar instruction/data accesses, inline cached RAM
-paths, a linear page cursor, lazy PC reconstruction, and inlined common
-integer and compressed helpers. Cursor continuation, page-tail selection, and
-budget granularity remain the principal differences to investigate.
-
-Run the prepared xv6 compile profile before recording a performance result.
-Compare the guest completion timestamp, V8 profile duration, artifact size,
-and ordinary-path disassembly with the current 194.394-second guest and
-203.275-second profile baseline. Run three interleaved Riscbox/TinyEMU trials
-for a final comparison. Separately evaluate TinyEMU-style block-granular budget
-checks; retain exact `Cpu::run` budgets unless measured benefit justifies the
-scheduling, timer, and device-event latency contract change.
+The standalone Rust CPU, memory, and SoftFP modules still provide reference
+tests while production `Machine` execution uses `tinyemu-core/`. Migrate focused
+architectural coverage to the C core before removing the reference modules.
+Compare browser xv6 compile measurements with the recorded 203.275-second Rust
+profile and 98.558-second archived TinyEMU profile using the existing harness.
 
 Candidate work
 --------------

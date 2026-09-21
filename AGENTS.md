@@ -37,11 +37,15 @@ a concrete need.
 Repository map and terminology
 ------------------------------
 
-*   `src/` is the authoritative emulator library: CPU, SoftFP, memory, machine,
-    devices, configuration, storage, and browser runtime.
+*   `src/` owns the Rust machine, devices, configuration, storage, browser
+    runtime, and the typed boundary to the C core. Standalone Rust CPU,
+    memory, and SoftFP modules remain as reference test surfaces.
+*   `tinyemu-core/` is the active freestanding TinyEMU CPU, SoftFP, and physical
+    memory implementation. `build.rs` compiles it with Clang for native and
+    raw WASM targets.
 *   `riscbox-wasm/` supplies the small stable raw WASM export surface. Keep
-    unsafe ABI code isolated there; the main crate permits unsafe only in its
-    fixed-arena access module.
+    unsafe ABI code isolated there. Main-crate unsafe code is confined to the
+    fixed-arena access and TinyEMU FFI modules.
 *   `js/riscbox.js` is the dependency-free browser adapter for the raw ABI.
 *   `js/network/` is the typed WebSocket Ethernet frontend and protocol.
 *   `js/p9/` is the authoritative TypeScript 9P2000.L server, shared in-memory
@@ -73,12 +77,11 @@ wait-on-reservation. It is moving toward RVA23 where that is useful, but it is
 not RVA23 compliant because vectors and several other required extensions are
 intentionally absent. Advertise only implemented behavior.
 
-The interpreter executes sequential instructions with a linear arena cursor in
-validated executable-page chunks. It reconstructs architectural PCs only when
-an instruction or cold exit needs one, checks interrupts and host-visible
-device state at explicit boundaries, and commits counters in deltas. Aligned
-RAM TLB hits use single scalar fixed-width unchecked arena operations only
-after complete-page validation; all slow paths remain checked.
+Production timeslices enter the TinyEMU C instruction loop. C owns CPU state,
+TLB, physical mappings, and RAM; its setup and teardown allocations use the
+Rust global allocator. Rust owns platform devices and handles MMIO callbacks.
+The C core is compiled without a C runtime, Emscripten, or WASI. The standalone
+Rust interpreter remains for focused reference tests, not machine execution.
 
 The generated device tree follows standard libfdt layout and QEMU `virt`
 bindings. The platform boots current xv6 over UART and VirtIO block and boots a
@@ -101,21 +104,19 @@ Architecture rules
 *   Specifications are authoritative. Use the relevant RISC-V specification
     first and QEMU `virt` behavior second. Historical C behavior is evidence
     only when investigating lineage.
-*   Keep guest virtual and physical addresses as `u64`. Store validated `u32`
-    offsets into the fixed WASM memory arena. Keep allocation, JavaScript calls,
-    and uncommon checks out of cached CPU and RAM paths.
-*   Keep unsafe Rust confined to the internal fixed-arena access module. Its
-    safe wrappers may use unchecked indexing only after a TLB fill has proved a
-    complete page lies in the arena; document page bounds, arena stability, and
-    mutable aliasing invariants at each unsafe block.
+*   Keep guest virtual and physical addresses as `u64`. Keep allocation,
+    JavaScript calls, and uncommon checks out of cached C CPU and RAM paths.
+*   Keep unsafe Rust confined to the fixed-arena access and TinyEMU FFI
+    modules. Document ownership, arena stability, and mutable aliasing
+    invariants at each unsafe block.
 *   Keep architectural state and host interfaces strongly typed. Favor concrete
     device ownership, shallow control flow, explicit dependencies, and immutable
-    values. Avoid shared ownership and interior mutability in the interpreter.
+    values. Keep the C timeslice borrow exclusive of Rust device memory access.
 *   Keep the raw WASM ABI and adapter small. Do not add Emscripten, WASI,
     `wasm-bindgen`, an async Rust runtime, or adapter runtime dependencies.
 *   Keep dependencies exceptional. Inspect the complete resolved graph before
-    adding one. Prefer direct implementations for the interpreter, memory,
-    SoftFP, and configuration parser. The narrowly configured RustCrypto crates
+    adding one. Prefer direct implementations for the configuration parser.
+    The narrowly configured RustCrypto crates
     remain only for encrypted split HTTP block images.
 *   Keep browser I/O explicit through request/completion and event queues.
     Never retain a JavaScript view across an await or reenter borrowed Rust

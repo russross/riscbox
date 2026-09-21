@@ -77,11 +77,11 @@ fn alpine_reaches_login_and_shuts_down() {
         let output = machine.take_console_output();
         trace_guest_output(&output);
         transcript.extend(output);
-        transcript.extend(
-            machine
-                .take_virtio_console_output(console)
-                .expect("VirtIO console output"),
-        );
+        let virtio_output = machine
+            .take_virtio_console_output(console)
+            .expect("VirtIO console output");
+        trace_guest_output(&virtio_output);
+        transcript.extend(virtio_output);
         let text = String::from_utf8_lossy(&transcript);
         if !logged_in && text.contains("login:") {
             machine

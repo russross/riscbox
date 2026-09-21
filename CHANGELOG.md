@@ -4,6 +4,11 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   A fresh production-WASM trace and xv6 compile profile found the flattened
+    interpreter at 203.275 profile seconds against TinyEMU's 98.558 seconds.
+    This is a 23.2% reduction from the previous Riscbox result and moves the
+    ratio from 2.80 to 2.06. The remaining likely hot-loop costs are cursor/PC
+    continuation, page-tail selection, and exact per-instruction budgets.
 *   Flattened the remaining common interpreter hot paths toward TinyEMU's loop:
     validated instruction and data accesses now use one unaligned scalar arena
     operation, page chunks advance a linear arena cursor without repeated page

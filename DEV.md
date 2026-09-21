@@ -29,16 +29,16 @@ Development priorities
 CPU hot-loop validation
 -----------------------
 
-The `TRACE-REPORT.md` structural recommendations are implemented. Generated
-WASM inspection confirms scalar instruction/data accesses, inline cached RAM
-paths with calls only to checked slow paths, a linear page cursor, lazy PC
-reconstruction, SYSTEM-local synchronization, and inlined common integer and
-compressed helpers.
+The current `TRACE-REPORT.md` compares the flattened hot loop with TinyEMU.
+Generated WASM confirms scalar instruction/data accesses, inline cached RAM
+paths, a linear page cursor, lazy PC reconstruction, and inlined common
+integer and compressed helpers. Cursor continuation, page-tail selection, and
+budget granularity remain the principal differences to investigate.
 
 Run the prepared xv6 compile profile before recording a performance result.
 Compare the guest completion timestamp, V8 profile duration, artifact size,
-and ordinary-path disassembly with the previous 255.576-second guest and
-264.566-second profile baseline. Run three interleaved Riscbox/TinyEMU trials
+and ordinary-path disassembly with the current 194.394-second guest and
+203.275-second profile baseline. Run three interleaved Riscbox/TinyEMU trials
 for a final comparison. Separately evaluate TinyEMU-style block-granular budget
 checks; retain exact `Cpu::run` budgets unless measured benefit justifies the
 scheduling, timer, and device-event latency contract change.

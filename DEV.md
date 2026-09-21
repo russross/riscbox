@@ -66,7 +66,10 @@ language as a separate project decision.
 
 Use `tools/profile-xv6` and the prepared image for every performance decision.
 Record the optimized WASM size, guest completion timestamp, V8 profile time,
-hot function sizes, and whether the ordinary instruction path contains calls.
+and disassembly of the ordinary instruction path. Function sizes and symbol
+boundaries are diagnostic context, not acceptance proxies. Inspect whether the
+specific call, result transfer, PC reconstruction, page comparison, fetch-tail
+test, and budget check identified by the trace remain in generated code.
 Run three interleaved Riscbox/TinyEMU measurements for the final Rust candidate
 and compare medians; earlier stages may use one paired run to reject a
 regression. Use the profile and generated WASM after each stage to decide
@@ -103,42 +106,45 @@ justify `read_u16` and `read_u32`; no raw pointer or arena borrow may survive a
 call that can mutate the bus. Reconstruct a `u64` PC from `virtual_page` and
 `page_offset` only for PC-relative instructions and cold exits.
 
-Put the ordinary opcode match lexically in the page-local loop, likely by
-moving `Cpu::run` into `src/cpu/execute.rs` beside its private execution
-helpers. Sequential arms update the cursor directly and do not construct an
-outcome. Taken control flow, traps, system instructions, host-visible events,
-and page-tail fetches leave through a small private `HotLoopExit` enum or a
-dedicated cold helper. This enum exists only at block exits; it must not be a
-per-instruction return value. Keep a one-instruction checked executor for
-non-RAM mappings and tests, even if limited dispatch is duplicated to keep the
-RAM loop flat.
+First preserve the existing execution decomposition and test whether LLVM can
+erase it. Move `Cpu::run`, `execute_slow`, and `execute` into the same module so
+the dispatcher can be private rather than `pub(super)`. Reshape the fetch flow
+so page-local and uncommon checked fetches reach one lexical `execute` call
+site, with the checked path forcing a block exit after that instruction. Mark
+the dispatcher `#[inline(always)]`; apply the annotation to a subordinate
+helper only when its own call is visible in the measured ordinary path. Keep
+the typed `Result<InstructionOutcome, Trap>` source interface during this
+experiment and let optimization eliminate it where possible.
 
-The intended private boundary is equivalent to
-`run_page_chunk<B: CpuBus>(&mut self, bus: &mut B, pc: u64,
-remaining_cycles: i64, retired_delta: u32) -> HotLoopExit`. `HotLoopExit`
-carries the next architectural PC, consumed cycles and retired delta, plus one
-of sequential-page-end, control-flow, trap, system/event, or budget reasons.
-If passing those values prevents LLVM from retaining them in locals, fold this
-boundary into `Cpu::run`; the generated-code requirement takes precedence over
-the helper signature. The existing checked `execute` signature remains for
-the uncommon non-RAM path until measurements justify removing it.
+Only if the inlined code retains measured abstraction overhead should the
+source contract become more C-shaped. The next step would replace the
+per-instruction outcome with direct updates to page-local scalar cursors and a
+small private `HotLoopExit` used only for actual block exits. Lexically merging
+decode into `Cpu::run`, duplicating dispatch, or introducing unsafe state
+access are later options that require evidence that inlining and a better safe
+interface were insufficient.
 
 ### Milestones
 
-1.  Establish the generated-code gate. Add a reproducible inspection command
-    or script that builds release WASM, reports the relevant function sizes,
-    and fails or clearly reports if the ordinary page-local path still calls a
-    full instruction dispatcher. Preserve the current profile artifacts as the
-    comparison point; do not treat WASM size alone as a performance result.
+1.  Test compiler-directed flattening. Co-locate the run loop and dispatcher,
+    make the dispatcher module-private, arrange one lexical call site shared by
+    page-local and checked fetches, and add `#[inline(always)]`. Build optimized
+    WASM and disassemble `Cpu::run`. Verify directly that the dispatcher call is
+    absent and determine whether LLVM also scalarized `InstructionOutcome`,
+    folded normal `Result` handling, and simplified the sequential path. Then
+    run the paired xv6 workload. Keep function size only as a possible
+    instruction-cache explanation if throughput regresses.
 
-2.  Flatten 32-bit integer dispatch into the page-local loop. Remove
-    `InstructionOutcome` construction and the `Cpu::execute` call from the
-    ordinary RV64 integer path. Keep memory, atomic, floating-point, and other
-    substantial opcode bodies as helpers where measurements show their calls
-    are not dominant. Sequential instructions advance scalar cursors; taken
-    branches and exceptional results use cold exits. Measure before expanding
-    more helpers inline, since instruction-cache growth can erase dispatch
-    gains.
+2.  Remove only residual measured overhead. If inlining succeeds and the
+    typed result disappears, retain the structured Rust source. If result-tag,
+    PC, flow, or page bookkeeping remains in the ordinary path, change the
+    private execution interface so sequential 32-bit integer instructions
+    update local cursors directly and only real exits construct
+    `HotLoopExit`. Keep memory, atomic, floating-point, and other substantial
+    opcode bodies as helpers unless their calls become measured bottlenecks.
+    Lexically merge dispatch into the loop only if the compiler still cannot
+    flatten this interface. Measure each form before expanding more helpers,
+    since instruction-cache growth can erase dispatch gains.
 
 3.  Integrate compressed dispatch and cursor fetch. Give compressed sequential
     instructions the same direct cursor contract instead of returning an

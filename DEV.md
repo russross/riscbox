@@ -46,11 +46,12 @@ paths. Riscbox's TLB-hit instruction and aligned data accesses already use
 unchecked fixed-width arena helpers after full-page validation, so additional
 unchecked memory access is not the first optimization target.
 
-The next milestone is structural rather than stylistic: make the Rust WASM hot
-loop match TinyEMU's generated control flow closely enough to determine whether
-Rust itself imposes a material remaining cost. Readability and type boundaries
-may yield inside this one measured subsystem. The platform, MMU misses, MMIO,
-traps, system operations, and browser ABI remain explicit Rust code.
+The next milestone is structural rather than stylistic: use generated-code and
+profile evidence to remove costs from the Rust WASM hot loop. Readability and
+type boundaries may yield inside this one measured subsystem when a benchmark
+justifies the trade, but the implementation should remain idiomatic Rust where
+the abstractions compile away. The platform, MMU misses, MMIO, traps, system
+operations, and browser ABI remain explicit Rust code.
 
 ### Scope and acceptance
 
@@ -59,17 +60,18 @@ and block-local accounting. Preserve the existing architectural state, helper
 implementations, `CpuBus` interface, fixed arena, TLB representation, and raw
 WASM ABI. Do not optimize floating point, page walks, devices, storage, or the
 JavaScript adapter unless a new profile identifies them after the loop work.
-Do not import the archived C implementation piecemeal during the Rust stages.
+Do not import the archived C implementation piecemeal. Take the Rust design as
+far as measurements support before considering a different implementation
+language as a separate project decision.
 
 Use `tools/profile-xv6` and the prepared image for every performance decision.
 Record the optimized WASM size, guest completion timestamp, V8 profile time,
 hot function sizes, and whether the ordinary instruction path contains calls.
 Run three interleaved Riscbox/TinyEMU measurements for the final Rust candidate
 and compare medians; earlier stages may use one paired run to reject a
-regression. The primary goal is at most 1.25 times TinyEMU's end-to-end profile
-time. A result above 1.50 times after the stages below triggers design of the C
-hot-loop fallback. Between those thresholds, use the profile and generated
-WASM to decide whether another bounded Rust change has credible leverage.
+regression. Use the profile and generated WASM after each stage to decide
+whether another bounded Rust change has credible leverage. Performance targets
+and any decision to replace the loop with C remain outside this design.
 
 Every landed stage must pass focused CPU fast-path and architectural tests,
 `make check`, a clean `make wasm`, the xv6 profiling workload through poweroff,
@@ -166,27 +168,11 @@ the uncommon non-RAM path until measurements justify removing it.
     narrower unsafe helper or raw arena pointer only when a specific remaining
     instruction in the generated hot path and a paired benchmark justify it.
     Keep each unsafe block in `src/memory/unchecked.rs` with explicit page,
-    width, arena-stability, and aliasing invariants.
-
-### C fallback decision
-
-If the validated Rust candidate remains more than 1.50 times TinyEMU, design a
-single C/Rust boundary around the page-local interpreter rather than replacing
-the platform. The C core would own only register/CSR hot state, TLB entries,
-validated arena offsets, decode, and the instruction loop. It would return
-typed exits for MMU misses, MMIO, traps, system/privilege transitions, device
-polls, and unsupported instructions; Rust would service the exit and resume.
-Rust would remain authoritative for the machine, memory map, devices, browser
-runtime, configuration, and slow architectural paths.
-
-Before implementing that boundary, prototype and measure its exit cost, define
-a `#[repr(C)]` state layout with compile-time size/offset checks, enumerate
-which CSR and TLB mutations require synchronization, and differential-test it
-against the all-Rust executor. Reusing TinyEMU code is contingent on adapting
-current Riscbox ISA, counter, PMP, MMU, and invalidation semantics rather than
-treating the archived core as authoritative. Build-system and source-language
-complexity are acceptable only after the threshold demonstrates that the
-flatter Rust loop is insufficient.
+    width, arena-stability, and aliasing invariants. Do not translate C pointer
+    patterns mechanically into pervasive Rust `unsafe`: keep ownership,
+    architectural state, control-flow exits, and slow-path interfaces typed and
+    safe, and use unsafe only at the narrow memory operations whose proofs
+    cannot be expressed without it.
 
 Candidate work
 --------------

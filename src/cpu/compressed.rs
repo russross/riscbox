@@ -1,12 +1,12 @@
-use super::{AccessWidth, Cpu, CpuBus, Exception, Trap, mmu::Access};
+use super::{AccessWidth, Cpu, CpuBus, Exception, InstructionOutcome, Trap, mmu::Access};
 
 impl Cpu {
     pub(super) fn execute_compressed<B: CpuBus>(
         &mut self,
         bus: &mut B,
+        pc: u64,
         instruction: u16,
-    ) -> Result<bool, Trap> {
-        let pc = self.pc;
+    ) -> Result<InstructionOutcome, Trap> {
         let quadrant = instruction & 3;
         let funct3 = instruction >> 13;
         match (quadrant, funct3) {
@@ -44,15 +44,19 @@ impl Cpu {
             (1, 3) => self.execute_compressed_lui(instruction)?,
             (1, 4) => self.execute_compressed_alu(instruction)?,
             (1, 5) => {
-                self.pc = pc.wrapping_add(cj_immediate(instruction));
-                return Ok(true);
+                return Ok(InstructionOutcome::exit(
+                    pc.wrapping_add(cj_immediate(instruction)),
+                    true,
+                ));
             }
             (1, 6 | 7) => {
                 let rs1 = compact_register(instruction, 7);
                 let condition = self.registers[rs1] == 0;
                 if condition == (funct3 == 6) {
-                    self.pc = pc.wrapping_add(cb_immediate(instruction));
-                    return Ok(true);
+                    return Ok(InstructionOutcome::exit(
+                        pc.wrapping_add(cb_immediate(instruction)),
+                        true,
+                    ));
                 }
             }
             (2, 0) => {
@@ -65,18 +69,15 @@ impl Cpu {
             (2, 1) => self.execute_compressed_fp_stack_load(bus, instruction)?,
             (2, 2 | 3) => self.execute_compressed_stack_load(bus, instruction, funct3)?,
             (2, 4) => {
-                if self.execute_compressed_jump(instruction)? {
-                    return Ok(true);
+                if let Some(target) = self.execute_compressed_jump(pc, instruction)? {
+                    return Ok(InstructionOutcome::exit(target, true));
                 }
             }
             (2, 5) => self.execute_compressed_fp_stack_store(bus, instruction)?,
             (2, 6 | 7) => self.execute_compressed_stack_store(bus, instruction, funct3)?,
             _ => return Err(illegal(instruction)),
         }
-        if self.pc == pc {
-            self.pc = pc.wrapping_add(2);
-        }
-        Ok(true)
+        Ok(InstructionOutcome::sequential(pc.wrapping_add(2)))
     }
 
     fn execute_compressed_memory<B: CpuBus>(
@@ -361,7 +362,7 @@ impl Cpu {
         Ok(())
     }
 
-    fn execute_compressed_jump(&mut self, instruction: u16) -> Result<bool, Trap> {
+    fn execute_compressed_jump(&mut self, pc: u64, instruction: u16) -> Result<Option<u64>, Trap> {
         let rd = register(instruction, 7);
         let rs2 = register(instruction, 2);
         let high = instruction & (1 << 12) != 0;
@@ -369,8 +370,7 @@ impl Cpu {
             if rd == 0 {
                 return Err(illegal(instruction));
             }
-            self.pc = self.registers[rd] & !1;
-            return Ok(true);
+            return Ok(Some(self.registers[rd] & !1));
         }
         if high && rs2 == 0 {
             if rd == 0 {
@@ -380,9 +380,8 @@ impl Cpu {
                 });
             }
             let target = self.registers[rd] & !1;
-            self.write_register(1, self.pc.wrapping_add(2));
-            self.pc = target;
-            return Ok(true);
+            self.write_register(1, pc.wrapping_add(2));
+            return Ok(Some(target));
         }
         if rd != 0 {
             self.write_register(
@@ -394,7 +393,7 @@ impl Cpu {
                 },
             );
         }
-        Ok(false)
+        Ok(None)
     }
 }
 

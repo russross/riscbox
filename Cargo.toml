@@ -15,7 +15,7 @@ pbkdf2 = { version = "0.13.0", default-features = false, features = ["hmac"] }
 sha2 = { version = "0.11.0", default-features = false }
 
 [lints.rust]
-unsafe_code = "forbid"
+unsafe_code = "deny"
 
 [lints.clippy]
 all = "deny"

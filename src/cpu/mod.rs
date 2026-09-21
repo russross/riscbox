@@ -5,7 +5,9 @@ mod execute;
 mod floating;
 mod mmu;
 
-use crate::memory::{AccessWidth, ArenaOffset, GuestAddress, MemoryError, PhysicalMemory};
+use crate::memory::{
+    AccessWidth, ArenaOffset, GuestAddress, MemoryError, PhysicalMemory, read_u16, read_u32,
+};
 
 pub const MIP_SSIP: u32 = 1 << 1;
 pub const MIP_MSIP: u32 = 1 << 3;
@@ -112,6 +114,7 @@ const CSR_INSTRET: u16 = 0xc02;
 const TLB_SIZE: usize = 256;
 const PAGE_SHIFT: u32 = 12;
 const PAGE_SIZE: u64 = 1 << PAGE_SHIFT;
+const PAGE_SIZE_USIZE: usize = 1 << PAGE_SHIFT;
 const PAGE_MASK: u64 = PAGE_SIZE - 1;
 
 fn low_u32(value: u64) -> u32 {
@@ -167,6 +170,8 @@ pub trait CpuBus {
     /// # Errors
     ///
     /// Returns [`BusError::AccessFault`] when the range is not suitable RAM.
+    /// A successful full-page lookup must identify bytes present in `arena()`
+    /// and remain valid until the current [`Cpu::run`] call returns.
     fn ram_range(
         &mut self,
         address: GuestAddress,
@@ -241,10 +246,48 @@ struct Trap {
     value: u64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum InstructionFlow {
+    Sequential,
+    Exit,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct InstructionOutcome {
+    next_pc: u64,
+    retired: bool,
+    flow: InstructionFlow,
+}
+
+impl InstructionOutcome {
+    const fn sequential(next_pc: u64) -> Self {
+        Self {
+            next_pc,
+            retired: true,
+            flow: InstructionFlow::Sequential,
+        }
+    }
+
+    const fn exit(next_pc: u64, retired: bool) -> Self {
+        Self {
+            next_pc,
+            retired,
+            flow: InstructionFlow::Exit,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 struct TlbEntry {
     virtual_page: u64,
     arena_page: ArenaOffset,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ExecuteChunk {
+    virtual_page: u64,
+    arena_page: ArenaOffset,
+    next_offset: u16,
 }
 
 impl Default for TlbEntry {
@@ -354,44 +397,101 @@ impl Cpu {
     }
 
     pub fn run<B: CpuBus>(&mut self, bus: &mut B, budget: u32) -> RunOutcome {
-        let mut cycles = 0;
+        let mut cycles = 0_u32;
+        let mut pending_cycles = 0_u32;
+        let mut pending_retired = 0_u32;
+        let mut pc = self.pc;
         while cycles < budget && !self.power_down {
-            if let Some(interrupt) = self.pending_interrupt() {
+            self.commit_run_state(pc, &mut pending_cycles, &mut pending_retired);
+            if self.mip & self.mie != 0
+                && let Some(interrupt) = self.pending_interrupt()
+            {
                 self.take_interrupt(interrupt);
+                pc = self.pc;
                 cycles += 1;
-                self.elapsed_cycles = self.elapsed_cycles.wrapping_add(1);
-                self.cycle = self.cycle.wrapping_add(1);
+                pending_cycles += 1;
                 continue;
             }
-            let (instruction, length) = match self.fetch(bus) {
-                Ok(instruction) => instruction,
-                Err(trap) => {
-                    self.take_exception(trap);
+
+            let mut chunk = match self.execute_chunk(bus, pc) {
+                Ok(Some(chunk)) => chunk,
+                Ok(None) => {
+                    let (next_pc, retired) = self.execute_slow(bus, pc);
+                    pc = next_pc;
+                    pending_retired += u32::from(retired);
                     cycles += 1;
-                    self.elapsed_cycles = self.elapsed_cycles.wrapping_add(1);
-                    self.cycle = self.cycle.wrapping_add(1);
+                    pending_cycles += 1;
+                    self.commit_run_state(pc, &mut pending_cycles, &mut pending_retired);
+                    if bus.take_interrupt_state_changed() {
+                        break;
+                    }
+                    continue;
+                }
+                Err(trap) => {
+                    self.pc = pc;
+                    self.take_exception(trap);
+                    pc = self.pc;
+                    cycles += 1;
+                    pending_cycles += 1;
                     continue;
                 }
             };
-            let instruction_pc = self.pc;
-            match self.execute(bus, instruction, length) {
-                Ok(retired) => {
-                    if retired {
-                        self.instret = self.instret.wrapping_add(1);
+
+            while cycles < budget {
+                let instruction_pc = chunk.virtual_page | u64::from(chunk.next_offset);
+                let (instruction, length) = match self.fetch_chunk(bus, chunk) {
+                    Ok(value) => value,
+                    Err(trap) => {
+                        self.pc = instruction_pc;
+                        self.take_exception(trap);
+                        pc = self.pc;
+                        cycles += 1;
+                        pending_cycles += 1;
+                        break;
+                    }
+                };
+
+                if instruction & 0x7f == 0x73 {
+                    self.commit_run_state(
+                        instruction_pc,
+                        &mut pending_cycles,
+                        &mut pending_retired,
+                    );
+                    if bus.take_interrupt_state_changed() {
+                        return RunOutcome {
+                            cycles,
+                            state: RunState::Running,
+                        };
                     }
                 }
-                Err(trap) => {
-                    self.pc = instruction_pc;
-                    self.take_exception(trap);
+
+                let outcome = match self.execute(bus, instruction_pc, instruction, length) {
+                    Ok(outcome) => outcome,
+                    Err(trap) => {
+                        self.pc = instruction_pc;
+                        self.take_exception(trap);
+                        pc = self.pc;
+                        cycles += 1;
+                        pending_cycles += 1;
+                        break;
+                    }
+                };
+                cycles += 1;
+                pending_cycles += 1;
+                pending_retired += u32::from(outcome.retired);
+                pc = outcome.next_pc;
+                if outcome.flow == InstructionFlow::Exit || pc & !PAGE_MASK != chunk.virtual_page {
+                    break;
                 }
+                chunk.next_offset = page_offset(pc);
             }
-            cycles += 1;
-            self.elapsed_cycles = self.elapsed_cycles.wrapping_add(1);
-            self.cycle = self.cycle.wrapping_add(1);
+
+            self.commit_run_state(pc, &mut pending_cycles, &mut pending_retired);
             if bus.take_interrupt_state_changed() {
                 break;
             }
         }
+        self.commit_run_state(pc, &mut pending_cycles, &mut pending_retired);
         RunOutcome {
             cycles,
             state: if self.power_down {
@@ -400,6 +500,85 @@ impl Cpu {
                 RunState::Running
             },
         }
+    }
+
+    fn execute_slow<B: CpuBus>(&mut self, bus: &mut B, pc: u64) -> (u64, bool) {
+        let result = self
+            .fetch(bus, pc)
+            .and_then(|(instruction, length)| self.execute(bus, pc, instruction, length));
+        match result {
+            Ok(outcome) => (outcome.next_pc, outcome.retired),
+            Err(trap) => {
+                self.pc = pc;
+                self.take_exception(trap);
+                (self.pc, false)
+            }
+        }
+    }
+
+    fn commit_run_state(&mut self, pc: u64, pending_cycles: &mut u32, pending_retired: &mut u32) {
+        self.pc = pc;
+        self.elapsed_cycles = self.elapsed_cycles.wrapping_add(u64::from(*pending_cycles));
+        self.cycle = self.cycle.wrapping_add(u64::from(*pending_cycles));
+        self.instret = self.instret.wrapping_add(u64::from(*pending_retired));
+        *pending_cycles = 0;
+        *pending_retired = 0;
+    }
+
+    fn execute_chunk<B: CpuBus>(
+        &mut self,
+        bus: &mut B,
+        pc: u64,
+    ) -> Result<Option<ExecuteChunk>, Trap> {
+        if pc & 1 != 0 {
+            return Err(Trap {
+                exception: Exception::InstructionAddressMisaligned,
+                value: pc,
+            });
+        }
+        let virtual_page = pc & !PAGE_MASK;
+        let index = ((pc >> PAGE_SHIFT) as usize) & (TLB_SIZE - 1);
+        if self.tlb_execute[index].virtual_page != virtual_page {
+            self.load(bus, pc, AccessWidth::HalfWord, mmu::Access::Execute)?;
+        }
+        let entry = self.tlb_execute[index];
+        if entry.virtual_page != virtual_page {
+            return Ok(None);
+        }
+        Ok(Some(ExecuteChunk {
+            virtual_page,
+            arena_page: entry.arena_page,
+            next_offset: page_offset(pc),
+        }))
+    }
+
+    fn fetch_chunk<B: CpuBus>(
+        &mut self,
+        bus: &mut B,
+        chunk: ExecuteChunk,
+    ) -> Result<(u32, u64), Trap> {
+        let page_offset = usize::from(chunk.next_offset);
+        let arena_offset = chunk.arena_page.0 as usize + page_offset;
+        if page_offset <= PAGE_SIZE_USIZE - 4 {
+            let instruction = read_u32(bus.arena(), arena_offset);
+            return Ok(if instruction & 3 == 3 {
+                (instruction, 4)
+            } else {
+                (instruction & 0xffff, 2)
+            });
+        }
+        let low = read_u16(bus.arena(), arena_offset);
+        if low & 3 != 3 {
+            return Ok((u32::from(low), 2));
+        }
+        let high = u16::try_from(self.load(
+            bus,
+            (chunk.virtual_page | u64::from(chunk.next_offset)).wrapping_add(2),
+            AccessWidth::HalfWord,
+            mmu::Access::Execute,
+        )?)
+        .expect("a halfword load fits u16");
+        Ok((u32::from(low) | u32::from(high) << 16, 4))
     }
 
     #[must_use]
@@ -498,22 +677,21 @@ impl Cpu {
         Ok(())
     }
 
-    fn fetch<B: CpuBus>(&mut self, bus: &mut B) -> Result<(u32, u64), Trap> {
-        if self.pc & 1 != 0 {
+    fn fetch<B: CpuBus>(&mut self, bus: &mut B, pc: u64) -> Result<(u32, u64), Trap> {
+        if pc & 1 != 0 {
             return Err(Trap {
                 exception: Exception::InstructionAddressMisaligned,
-                value: self.pc,
+                value: pc,
             });
         }
-        let low =
-            u32::try_from(self.load(bus, self.pc, AccessWidth::HalfWord, mmu::Access::Execute)?)
-                .expect("a halfword load fits u32");
+        let low = u32::try_from(self.load(bus, pc, AccessWidth::HalfWord, mmu::Access::Execute)?)
+            .expect("a halfword load fits u32");
         if low & 3 != 3 {
             return Ok((low, 2));
         }
         let high = u32::try_from(self.load(
             bus,
-            self.pc.wrapping_add(2),
+            pc.wrapping_add(2),
             AccessWidth::HalfWord,
             mmu::Access::Execute,
         )?)
@@ -836,6 +1014,11 @@ impl Cpu {
             self.flush_tlb();
         }
     }
+}
+
+fn page_offset(address: u64) -> u16 {
+    let bytes = (address & PAGE_MASK).to_le_bytes();
+    u16::from_le_bytes([bytes[0], bytes[1]])
 }
 
 impl From<MemoryError> for BusError {

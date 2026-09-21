@@ -40,7 +40,8 @@ Repository map and terminology
 *   `src/` is the authoritative emulator library: CPU, SoftFP, memory, machine,
     devices, configuration, storage, and browser runtime.
 *   `riscbox-wasm/` supplies the small stable raw WASM export surface. Keep
-    unsafe boundary code isolated there; the main crate forbids unsafe code.
+    unsafe ABI code isolated there; the main crate permits unsafe only in its
+    fixed-arena access module.
 *   `js/riscbox.js` is the dependency-free browser adapter for the raw ABI.
 *   `js/network/` is the typed WebSocket Ethernet frontend and protocol.
 *   `js/p9/` is the authoritative TypeScript 9P2000.L server, shared in-memory
@@ -72,6 +73,12 @@ wait-on-reservation. It is moving toward RVA23 where that is useful, but it is
 not RVA23 compliant because vectors and several other required extensions are
 intentionally absent. Advertise only implemented behavior.
 
+The interpreter executes sequential instructions in validated executable-page
+chunks. It resolves the execute TLB, checks interrupts and host-visible device
+state, and commits PC and counter deltas at chunk boundaries. Aligned RAM TLB
+hits use fixed-width unchecked arena helpers only after complete-page
+validation; all slow paths remain checked.
+
 The generated device tree follows standard libfdt layout and QEMU `virt`
 bindings. The platform boots current xv6 over UART and VirtIO block and boots a
 prepared Alpine system through OpenSBI to login and clean shutdown. The browser
@@ -96,8 +103,10 @@ Architecture rules
 *   Keep guest virtual and physical addresses as `u64`. Store validated `u32`
     offsets into the fixed WASM memory arena. Keep allocation, JavaScript calls,
     and uncommon checks out of cached CPU and RAM paths.
-*   Start with safe Rust. Add a small unsafe fast path only after a WASM
-    benchmark shows a material benefit, and document its invariants.
+*   Keep unsafe Rust confined to the internal fixed-arena access module. Its
+    safe wrappers may use unchecked indexing only after a TLB fill has proved a
+    complete page lies in the arena; document page bounds, arena stability, and
+    mutable aliasing invariants at each unsafe block.
 *   Keep architectural state and host interfaces strongly typed. Favor concrete
     device ownership, shallow control flow, explicit dependencies, and immutable
     values. Avoid shared ownership and interior mutability in the interpreter.

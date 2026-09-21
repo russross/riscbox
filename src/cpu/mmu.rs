@@ -5,6 +5,7 @@ use super::{
     TlbEntry, Trap,
 };
 use crate::memory::AccessWidth;
+use crate::memory::{read_width, write_width};
 
 const SATP_MODE_SV39: u64 = 8;
 const PTE_VALID: u64 = 1 << 0;
@@ -61,8 +62,7 @@ impl Cpu {
         };
         if cached.virtual_page == virtual_page {
             let offset = cached.arena_page.0 as usize + (address & PAGE_MASK) as usize;
-            return read_arena(bus.arena(), offset, width)
-                .ok_or_else(|| Self::access_trap(access, address));
+            return Ok(read_width(bus.arena(), offset, width));
         }
 
         let physical = self
@@ -100,8 +100,8 @@ impl Cpu {
         let cached = self.tlb_write[index];
         if cached.virtual_page == virtual_page {
             let offset = cached.arena_page.0 as usize + (address & PAGE_MASK) as usize;
-            return write_arena(bus.arena_mut(), offset, width, value)
-                .ok_or_else(|| Self::access_trap(Access::Write, address));
+            write_width(bus.arena_mut(), offset, width, value);
+            return Ok(());
         }
 
         let physical = self
@@ -193,13 +193,21 @@ impl Cpu {
         if !self.pmp_access_ok(physical_page, PAGE_SIZE, access, privilege) {
             return;
         }
+        let page_size = usize::try_from(PAGE_SIZE).expect("page size fits usize");
         let Ok(arena_page) = bus.ram_range(
             GuestAddress(physical_page),
-            usize::try_from(PAGE_SIZE).expect("page size fits usize"),
+            page_size,
             access == Access::Write,
         ) else {
             return;
         };
+        let arena_start = arena_page.0 as usize;
+        let Some(arena_end) = arena_start.checked_add(page_size) else {
+            return;
+        };
+        if arena_end > bus.arena().len() {
+            return;
+        }
         let entry = TlbEntry {
             virtual_page,
             arena_page,
@@ -417,44 +425,6 @@ impl Cpu {
     }
 }
 
-fn read_arena(arena: &[u8], offset: usize, width: AccessWidth) -> Option<u64> {
-    match width {
-        AccessWidth::Byte => Some(u64::from(*arena.get(offset)?)),
-        AccessWidth::HalfWord => {
-            let bytes = arena.get(offset..offset.checked_add(2)?)?;
-            Some(u64::from(u16::from_le_bytes(bytes.try_into().ok()?)))
-        }
-        AccessWidth::Word => {
-            let bytes = arena.get(offset..offset.checked_add(4)?)?;
-            Some(u64::from(u32::from_le_bytes(bytes.try_into().ok()?)))
-        }
-        AccessWidth::DoubleWord => {
-            let bytes = arena.get(offset..offset.checked_add(8)?)?;
-            Some(u64::from_le_bytes(bytes.try_into().ok()?))
-        }
-    }
-}
-
-fn write_arena(arena: &mut [u8], offset: usize, width: AccessWidth, value: u64) -> Option<()> {
-    let bytes = value.to_le_bytes();
-    match width {
-        AccessWidth::Byte => *arena.get_mut(offset)? = bytes[0],
-        AccessWidth::HalfWord => {
-            let destination = arena.get_mut(offset..offset.checked_add(2)?)?;
-            destination.copy_from_slice(&bytes[..2]);
-        }
-        AccessWidth::Word => {
-            let destination = arena.get_mut(offset..offset.checked_add(4)?)?;
-            destination.copy_from_slice(&bytes[..4]);
-        }
-        AccessWidth::DoubleWord => {
-            let destination = arena.get_mut(offset..offset.checked_add(8)?)?;
-            destination.copy_from_slice(&bytes);
-        }
-    }
-    Some(())
-}
-
 impl From<BusError> for TranslationFault {
     fn from(_: BusError) -> Self {
         Self::Access
@@ -463,24 +433,27 @@ impl From<BusError> for TranslationFault {
 
 #[cfg(test)]
 mod tests {
-    use super::{AccessWidth, read_arena, write_arena};
+    use super::{AccessWidth, read_width, write_width};
+
+    const PAGE_BYTES: usize = 4096;
 
     #[test]
-    fn arena_scalar_accesses_cover_widths_and_bounds() {
-        let mut arena = [0_u8; 15];
+    fn validated_page_accesses_cover_widths_and_page_end() {
+        let mut arena = vec![0_u8; PAGE_BYTES];
         let cases = [
-            (AccessWidth::Byte, 1, 0x88),
-            (AccessWidth::HalfWord, 3, 0x7788),
-            (AccessWidth::Word, 5, 0x5566_7788),
-            (AccessWidth::DoubleWord, 7, 0x1122_3344_5566_7788),
+            (AccessWidth::Byte, PAGE_BYTES - 1, 0x88),
+            (AccessWidth::HalfWord, PAGE_BYTES - 2, 0x7788),
+            (AccessWidth::Word, PAGE_BYTES - 4, 0x5566_7788),
+            (
+                AccessWidth::DoubleWord,
+                PAGE_BYTES - 8,
+                0x1122_3344_5566_7788,
+            ),
         ];
 
         for (width, offset, value) in cases {
-            assert_eq!(write_arena(&mut arena, offset, width, value), Some(()));
-            assert_eq!(read_arena(&arena, offset, width), Some(value));
-            let invalid_offset = arena.len() - width.bytes() + 1;
-            assert_eq!(read_arena(&arena, invalid_offset, width), None);
-            assert_eq!(write_arena(&mut arena, invalid_offset, width, value), None);
+            write_width(&mut arena, offset, width, value);
+            assert_eq!(read_width(&arena, offset, width), value);
         }
     }
 }

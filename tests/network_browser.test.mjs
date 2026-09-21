@@ -112,6 +112,10 @@ test("real WASM exchanges Ethernet frames through Chrome and a local origin", as
         ["/network-probe.bin", [probePath, "application/octet-stream"]],
     ]);
     let transmitted = false;
+    let transmitResolve;
+    const transmitPromise = new Promise((resolveTransmit) => {
+        transmitResolve = resolveTransmit;
+    });
     const connections = new Set();
     const requests = [];
     let resultResolve;
@@ -173,8 +177,10 @@ test("real WASM exchanges Ethernet frames through Chrome and a local origin", as
             const decoded = decodeFrames(pending);
             pending = Buffer.from(decoded.remaining);
             for (const frame of decoded.frames) {
-                if (frame.opcode === 2 && Buffer.from(expectedTransmit).equals(frame.payload))
+                if (frame.opcode === 2 && Buffer.from(expectedTransmit).equals(frame.payload)) {
                     transmitted = true;
+                    transmitResolve();
+                }
             }
         });
     });
@@ -197,6 +203,14 @@ test("real WASM exchanges Ethernet frames through Chrome and a local origin", as
             "pass",
             `${chromeError}\nrequests: ${requests.join(", ")}\ntransmitted: ${transmitted}`,
         );
+        let transmitTimeout;
+        await Promise.race([
+            transmitPromise,
+            new Promise((resolveTransmit) => {
+                transmitTimeout = globalThis.setTimeout(resolveTransmit, 1_000);
+            }),
+        ]);
+        globalThis.clearTimeout(transmitTimeout);
         assert.equal(transmitted, true);
     } finally {
         globalThis.clearTimeout(timeout);

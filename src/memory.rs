@@ -2,6 +2,11 @@
 
 use core::fmt;
 
+#[allow(unsafe_code)]
+mod unchecked;
+
+pub(crate) use unchecked::{read_u16, read_u32, read_width, write_width};
+
 pub const PAGE_SIZE: u64 = 4096;
 const PAGE_SIZE_U32: u32 = 4096;
 pub const MAX_REGIONS: usize = 32;

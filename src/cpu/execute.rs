@@ -1,23 +1,25 @@
 use super::{
     AccessWidth, CSR_MINSTRET, Cpu, CpuBus, CsrError, ENVCFG_CBCFE, ENVCFG_CBIE, ENVCFG_CBZE,
-    Exception, MSTATUS_MIE, MSTATUS_MPIE, MSTATUS_MPP, MSTATUS_MPRV, MSTATUS_SIE, MSTATUS_SPIE,
-    MSTATUS_SPP, MSTATUS_TSR, MSTATUS_TVM, MSTATUS_TW, Privilege, Trap, low_u32, mmu::Access,
+    Exception, InstructionFlow, InstructionOutcome, MSTATUS_MIE, MSTATUS_MPIE, MSTATUS_MPP,
+    MSTATUS_MPRV, MSTATUS_SIE, MSTATUS_SPIE, MSTATUS_SPP, MSTATUS_TSR, MSTATUS_TVM, MSTATUS_TW,
+    Privilege, Trap, low_u32, mmu::Access,
 };
 
 impl Cpu {
     pub(super) fn execute<B: CpuBus>(
         &mut self,
         bus: &mut B,
+        pc: u64,
         instruction: u32,
         length: u64,
-    ) -> Result<bool, Trap> {
+    ) -> Result<InstructionOutcome, Trap> {
         if length == 2 {
             return self.execute_compressed(
                 bus,
+                pc,
                 u16::try_from(instruction).expect("a compressed instruction fits u16"),
             );
         }
-        let pc = self.pc;
         let opcode = instruction & 0x7f;
         let rd = register_index(instruction, 7);
         let funct3 = (instruction >> 12) & 7;
@@ -25,6 +27,7 @@ impl Cpu {
         let rs2 = register_index(instruction, 20);
         let mut next_pc = pc.wrapping_add(4);
         let mut retired = true;
+        let mut flow = InstructionFlow::Sequential;
 
         match opcode {
             0x37 => self.write_register(rd, sign_extend(u64::from(instruction & 0xffff_f000), 32)),
@@ -37,6 +40,7 @@ impl Cpu {
                 let target = checked_target(pc.wrapping_add(immediate), instruction)?;
                 self.write_register(rd, next_pc);
                 next_pc = target;
+                flow = InstructionFlow::Exit;
             }
             0x67 if funct3 == 0 => {
                 let target = self.registers[rs1]
@@ -45,6 +49,7 @@ impl Cpu {
                 let target = checked_target(target, instruction)?;
                 self.write_register(rd, next_pc);
                 next_pc = target;
+                flow = InstructionFlow::Exit;
             }
             0x63 => {
                 let left = self.registers[rs1];
@@ -63,6 +68,7 @@ impl Cpu {
                         pc.wrapping_add(decode_b_immediate(instruction)),
                         instruction,
                     )?;
+                    flow = InstructionFlow::Exit;
                 }
             }
             0x03 | 0x23 => self.execute_memory(bus, instruction, opcode)?,
@@ -81,13 +87,16 @@ impl Cpu {
                 _ => return Err(illegal(instruction)),
             },
             0x73 => {
-                retired = self.execute_system(instruction, rd, rs1, funct3)?;
-                next_pc = self.pc;
+                (next_pc, retired) = self.execute_system(pc, instruction, rd, rs1, funct3)?;
+                flow = InstructionFlow::Exit;
             }
             _ => return Err(illegal(instruction)),
         }
-        self.pc = next_pc;
-        Ok(retired)
+        Ok(InstructionOutcome {
+            next_pc,
+            retired,
+            flow,
+        })
     }
 
     fn execute_atomic<B: CpuBus>(
@@ -276,17 +285,17 @@ impl Cpu {
 
     fn execute_system(
         &mut self,
+        pc: u64,
         instruction: u32,
         rd: usize,
         rs1: usize,
         funct3: u32,
-    ) -> Result<bool, Trap> {
+    ) -> Result<(u64, bool), Trap> {
         if funct3 == 4 {
             if instruction & 0xb3c0_707f == 0x81c0_4073 || instruction & 0xb200_707f == 0x8200_4073
             {
                 self.write_register(rd, 0);
-                self.pc = self.pc.wrapping_add(4);
-                return Ok(true);
+                return Ok((pc.wrapping_add(4), true));
             }
             return Err(illegal(instruction));
         }
@@ -308,23 +317,21 @@ impl Cpu {
                         value: 0,
                     });
                 }
-                0x1020_0073 => self.return_from_supervisor(instruction)?,
-                0x3020_0073 => self.return_from_machine(instruction)?,
+                0x1020_0073 => return Ok((self.return_from_supervisor(instruction)?, true)),
+                0x3020_0073 => return Ok((self.return_from_machine(instruction)?, true)),
                 0x1050_0073 => {
                     if self.privilege < Privilege::Machine && self.mstatus & MSTATUS_TW != 0 {
                         return Err(illegal(instruction));
                     }
-                    self.pc = self.pc.wrapping_add(4);
                     if self.mip & self.mie == 0 {
                         self.power_down = true;
                     }
                 }
-                0x00d0_0073 | 0x01d0_0073 => self.pc = self.pc.wrapping_add(4),
+                0x00d0_0073 | 0x01d0_0073 => {}
                 0x1800_0073 | 0x1810_0073 => {
                     if self.privilege == Privilege::User {
                         return Err(illegal(instruction));
                     }
-                    self.pc = self.pc.wrapping_add(4);
                 }
                 _ if instruction & 0xfe00_7fff == 0x1200_0073
                     || instruction & 0xfe00_7fff == 0x1600_0073 =>
@@ -336,11 +343,10 @@ impl Cpu {
                         return Err(illegal(instruction));
                     }
                     self.flush_tlb();
-                    self.pc = self.pc.wrapping_add(4);
                 }
                 _ => return Err(illegal(instruction)),
             }
-            return Ok(true);
+            return Ok((pc.wrapping_add(4), true));
         }
 
         let csr = u16::try_from(instruction >> 20).expect("a CSR field is 12 bits");
@@ -369,11 +375,10 @@ impl Cpu {
                 .map_err(|CsrError::IllegalAccess| illegal(instruction))?;
         }
         self.write_register(rd, old);
-        self.pc = self.pc.wrapping_add(4);
-        Ok(!(will_write && csr == CSR_MINSTRET))
+        Ok((pc.wrapping_add(4), !(will_write && csr == CSR_MINSTRET)))
     }
 
-    fn return_from_supervisor(&mut self, instruction: u32) -> Result<(), Trap> {
+    fn return_from_supervisor(&mut self, instruction: u32) -> Result<u64, Trap> {
         if self.privilege < Privilege::Supervisor
             || self.privilege == Privilege::Supervisor && self.mstatus & MSTATUS_TSR != 0
         {
@@ -393,11 +398,10 @@ impl Cpu {
         self.mstatus |= MSTATUS_SPIE;
         self.mstatus &= !(MSTATUS_SPP | MSTATUS_MPRV);
         self.set_privilege(privilege);
-        self.pc = self.sepc;
-        Ok(())
+        Ok(self.sepc)
     }
 
-    fn return_from_machine(&mut self, instruction: u32) -> Result<(), Trap> {
+    fn return_from_machine(&mut self, instruction: u32) -> Result<u64, Trap> {
         if self.privilege != Privilege::Machine {
             return Err(illegal(instruction));
         }
@@ -420,8 +424,7 @@ impl Cpu {
             self.mstatus &= !MSTATUS_MPRV;
         }
         self.set_privilege(privilege);
-        self.pc = self.mepc;
-        Ok(())
+        Ok(self.mepc)
     }
 }
 

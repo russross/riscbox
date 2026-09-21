@@ -4,6 +4,18 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Reworked the Rust interpreter around TinyEMU-style page chunks. Sequential
+    execution now resolves the execute TLB once per chunk, fetches one aligned
+    word with a checked cross-page slow path, keeps PC and counter deltas local,
+    and samples interrupts and device events only at explicit boundaries.
+    Aligned TLB-hit RAM accesses use isolated unchecked fixed-width helpers
+    after complete-page validation; misses, MMIO, page walks, misalignment, and
+    mapping changes remain checked.
+*   Reduced the prepared xv6 compile workload from the previous 362.416-second
+    guest timestamp and 371.725-second V8 profile to 289.095 and 298.194
+    seconds, respectively, a further reduction of about 20%. The paired
+    TinyEMU run completed at 93.728 profile seconds. The optimized WASM artifact
+    is 320,895 bytes.
 *   Reduced the prepared xv6 compile workload from 520.185 to 362.416 guest
     seconds with safe fixed-width RAM fast paths and measured arithmetic
     dispatch inlining. Generated WASM now uses direct scalar accesses instead

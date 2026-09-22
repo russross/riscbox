@@ -4,33 +4,62 @@ set -eu
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ROOT_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 DEPLOYMENT_DIR="$ROOT_DIR/images/xv6-profile/dist"
-OUTPUT_DIR=${1:-"$ROOT_DIR/images/xv6-profile/build/profiles"}
+IMAGE_DIR="$ROOT_DIR/images/xv6-profile"
+OUTPUT_DIR="$ROOT_DIR/images/xv6-profile/build/profiles"
 TIMEOUT_SECONDS=${PROFILE_TIMEOUT_SECONDS:-1800}
+RUN_TINYEMU=false
 
-if [ ! -f "$DEPLOYMENT_DIR/riscbox.cfg" ]; then
-    echo "missing profiling image; run images/xv6-profile/build.sh first" >&2
-    exit 1
+if [ "${1:-}" = "--tinyemu" ]; then
+    RUN_TINYEMU=true
+    shift
+fi
+if [ "$#" -gt 1 ]; then
+    echo "usage: tools/profile-xv6 [--tinyemu] [OUTPUT_DIR]" >&2
+    exit 2
+fi
+if [ "$#" -eq 1 ]; then
+    OUTPUT_DIR=$1
+fi
+
+IMAGE_CONFIG="$DEPLOYMENT_DIR/riscbox.cfg"
+if [ ! -f "$IMAGE_CONFIG" ] ||
+    find "$IMAGE_DIR" "$ROOT_DIR/images/bin" "$ROOT_DIR/kernel" \
+        -path "$IMAGE_DIR/build" -prune -o \
+        -path "$IMAGE_DIR/dist" -prune -o \
+        -type f -newer "$IMAGE_CONFIG" -print -quit | grep -q .
+then
+    "$IMAGE_DIR/build.sh"
 fi
 
 mkdir -p "$OUTPUT_DIR"
 make -C "$ROOT_DIR" wasm
-make -C "$ROOT_DIR/c" -f Makefile.js
 
-node --cpu-prof --cpu-prof-dir "$OUTPUT_DIR" --cpu-prof-name tinyemu.cpuprofile \
-    "$SCRIPT_DIR/profile-xv6.mjs" tinyemu "$DEPLOYMENT_DIR/riscbox.cfg" \
-    "$ROOT_DIR/c/js/riscbox-wasm.js" "$TIMEOUT_SECONDS" \
-    > "$OUTPUT_DIR/tinyemu.log" 2>&1
+if [ "$RUN_TINYEMU" = true ]; then
+    make -C "$ROOT_DIR/c" -f Makefile.js
+    node --cpu-prof --cpu-prof-dir "$OUTPUT_DIR" --cpu-prof-name tinyemu.cpuprofile \
+        "$SCRIPT_DIR/profile-xv6.mjs" tinyemu "$IMAGE_CONFIG" \
+        "$ROOT_DIR/c/js/riscbox-wasm.js" "$TIMEOUT_SECONDS" \
+        > "$OUTPUT_DIR/tinyemu.log" 2>&1
+fi
 
 node --cpu-prof --cpu-prof-dir "$OUTPUT_DIR" --cpu-prof-name riscbox.cpuprofile \
-    "$SCRIPT_DIR/profile-xv6.mjs" riscbox "$DEPLOYMENT_DIR/riscbox.cfg" \
+    "$SCRIPT_DIR/profile-xv6.mjs" riscbox "$IMAGE_CONFIG" \
     "$ROOT_DIR/target/wasm32-unknown-unknown/release/riscbox_wasm.wasm" \
     "$TIMEOUT_SECONDS" > "$OUTPUT_DIR/riscbox.log" 2>&1
 
-for artifact in riscbox.cpuprofile tinyemu.cpuprofile riscbox.log tinyemu.log; do
+for artifact in riscbox.cpuprofile riscbox.log; do
     if [ ! -s "$OUTPUT_DIR/$artifact" ]; then
         echo "profile artifact is missing or empty: $OUTPUT_DIR/$artifact" >&2
         exit 1
     fi
 done
+if [ "$RUN_TINYEMU" = true ]; then
+    for artifact in tinyemu.cpuprofile tinyemu.log; do
+        if [ ! -s "$OUTPUT_DIR/$artifact" ]; then
+            echo "profile artifact is missing or empty: $OUTPUT_DIR/$artifact" >&2
+            exit 1
+        fi
+    done
+fi
 
 echo "profiles: $OUTPUT_DIR"

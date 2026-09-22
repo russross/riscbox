@@ -31,8 +31,7 @@ no production network origin service, native TAP backend, or SLIRP backend.
 RV32, multiple harts, vectors, the hypervisor extension, PCIe, AIA, UEFI,
 general device emulation, a native UI, SDL, SLIRP, and native filesystem or
 socket backends are outside the current scope. Networking exists but is not a
-near-term expansion area. Add scope only when a target guest or deployment has
-a concrete need.
+near-term expansion area.
 
 Repository map and terminology
 ------------------------------

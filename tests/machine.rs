@@ -1,8 +1,8 @@
 use riscbox::browser_storage::HttpBlockStore;
 use riscbox::entropy::{EntropyError, EntropySource};
 use riscbox::machine::{
-    BootImages, FRAMEBUFFER_BASE, FramebufferConfig, Machine, MachineConfig, RAM_BASE, RTC_BASE,
-    RedrawSpan, VIRTIO_BASE,
+    BootImages, CLINT_BASE, FRAMEBUFFER_BASE, FramebufferConfig, Machine, MachineConfig, RAM_BASE,
+    RTC_BASE, RedrawSpan, VIRTIO_BASE,
 };
 use riscbox::memory::{AccessWidth, GuestAddress};
 use riscbox::platform::FinishStatus;
@@ -481,4 +481,27 @@ fn machine_exposes_complete_host_time_through_the_rtc() {
         .read(GuestAddress(RTC_BASE + 4), AccessWidth::Word)
         .expect("RTC high word");
     assert_eq!((high << 32) | low, nanoseconds);
+}
+
+#[test]
+fn waiting_delay_tracks_clint_and_rtc_deadlines() {
+    let mut machine = machine(false);
+    machine.update_time(1_000_000, 100_000_000);
+    machine
+        .bus_mut()
+        .write(GuestAddress(CLINT_BASE + 0x4000), AccessWidth::Word, 1_050_000)
+        .expect("CLINT compare");
+    machine
+        .bus_mut()
+        .write(GuestAddress(CLINT_BASE + 0x4004), AccessWidth::Word, 0)
+        .expect("CLINT compare high");
+    assert_eq!(machine.sleep_duration_ms(10), 5);
+
+    machine
+        .bus_mut()
+        .write(GuestAddress(RTC_BASE + 8), AccessWidth::Word, 103_000_000)
+        .expect("RTC alarm");
+    assert_eq!(machine.sleep_duration_ms(10), 3);
+    machine.update_time(1_030_000, 103_000_000);
+    assert_eq!(machine.sleep_duration_ms(10), 2);
 }

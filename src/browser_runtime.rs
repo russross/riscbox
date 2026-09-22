@@ -467,9 +467,11 @@ impl BrowserRuntime {
             running.deliver_event(event)?;
         }
         running.machine.update_time(timer_ticks, host_nanoseconds);
+        let mut waiting = false;
         for _ in 0..self.policy.blocks_per_slice() {
             let outcome = running.machine.run(self.policy.block_cycles);
             if outcome.state == crate::cpu::RunState::Waiting {
+                waiting = true;
                 break;
             }
         }
@@ -497,9 +499,12 @@ impl BrowserRuntime {
                 self.actions.push_back(HostAction::Framebuffer(update));
             }
         }
-        self.actions.push_back(HostAction::Schedule(
-            self.policy.scheduled_delay(self.policy.maximum_delay_ms),
-        ));
+        let delay = if waiting {
+            running.machine.sleep_duration_ms(self.policy.maximum_delay_ms)
+        } else {
+            0
+        };
+        self.actions.push_back(HostAction::Schedule(delay));
         self.pump_http_requests()
     }
 

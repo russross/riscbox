@@ -87,6 +87,9 @@ bindings. The platform boots current xv6 over UART and VirtIO block and boots a
 prepared Alpine system through OpenSBI to login and clean shutdown. The browser
 adapter loads configuration, firmware, kernels, initrds, and split HTTP disks
 relative to the configuration URL. HTTP disk writes are session-local.
+Browser execution yields after at most three million guest cycles. Runnable
+guests reschedule immediately; waiting guests sleep until the nearest CLINT,
+supervisor timer, or RTC deadline, capped at ten milliseconds.
 
 VirtIO 9p is a generic concurrent asynchronous transport. Rust validates
 descriptors and message envelopes but does not implement filesystem semantics.

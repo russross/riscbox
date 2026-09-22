@@ -86,7 +86,8 @@ runtime.start(new URL("./riscbox.cfg", location.href).href, 256);
 ```
 
 The adapter schedules execution automatically unless a `schedule(milliseconds)`
-callback is supplied. Integrations can also provide `networkWrite`,
+callback is supplied. Runnable guests request an immediate next slice; waiting
+guests request a bounded timer delay. Integrations can also provide `networkWrite`,
 `framebufferRefresh`, and `p9Servers`. Host input methods are
 `consoleInput(bytes)`, `consoleResize(columns, rows)`, `keyEvent()`,
 `pointerEvent()`, `wheelEvent()`, `networkInput()`, and `networkCarrier()`.

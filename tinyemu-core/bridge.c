@@ -192,6 +192,13 @@ void tinyemu_core_set_time(TinyemuCore *core, uint64_t ticks)
     riscv_cpu_update_time(core->cpu, ticks);
 }
 
+uint64_t tinyemu_core_stimecmp(const TinyemuCore *core)
+{
+    if (riscv_cpu_get_mip(core->cpu) & MIP_STIP)
+        return UINT64_MAX;
+    return riscv_cpu_get_stimecmp(core->cpu);
+}
+
 void tinyemu_core_set_interrupts(TinyemuCore *core, uint32_t mask)
 {
     const uint32_t external = MIP_MSIP | MIP_MTIP | MIP_MEIP | MIP_SEIP;

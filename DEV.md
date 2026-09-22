@@ -21,9 +21,9 @@ Development priorities
 4.  Improve image preparation only when a small loader or boot feature removes
     material deployment friction. Prepared raw kernels and initrds remain the
     baseline.
-5.  Measure the TinyEMU core on the prepared browser xv6 compile profile and
-    compare guest completion, V8 profile duration, and artifact size with the
-    recorded Rust interpreter and archived TinyEMU results.
+5.  Investigate the remaining active CPU time difference between the Rust
+    platform with the TinyEMU core and the archived C platform using paired
+    profiles of the same prepared guest image.
 
 CPU core validation
 -------------------
@@ -31,8 +31,9 @@ CPU core validation
 The standalone Rust CPU, memory, and SoftFP modules still provide reference
 tests while production `Machine` execution uses `tinyemu-core/`. Migrate focused
 architectural coverage to the C core before removing the reference modules.
-Compare browser xv6 compile measurements with the recorded 203.275-second Rust
-profile and 98.558-second archived TinyEMU profile using the existing harness.
+The browser xv6 compile profile with the new scheduler completed in 105.333 seconds,
+against 97.400 seconds for the archived C platform. Investigate the remaining
+interpreter cost without changing the recorded guest workload.
 
 Candidate work
 --------------

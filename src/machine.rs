@@ -726,6 +726,19 @@ impl Machine {
         self.cpu.set_time(timer_ticks);
     }
 
+    #[must_use]
+    pub fn sleep_duration_ms(&mut self, maximum_delay_ms: u32) -> u32 {
+        let now = self.bus.timer_ticks;
+        let mut delay = self
+            .bus
+            .rtc
+            .limit_delay_ms(maximum_delay_ms, self.bus.host_nanoseconds);
+        if !self.bus.clint.timer_interrupt(now) {
+            delay = delay.min(timer_delay_ms(self.bus.clint.timecmp(), now));
+        }
+        delay.min(timer_delay_ms(self.cpu.stimecmp(), now))
+    }
+
     pub fn run(&mut self, cycles: u32) -> RunOutcome {
         self.sync_interrupts();
         let result = self.cpu.run_host(cycles, &mut self.bus);
@@ -1185,4 +1198,9 @@ fn virtio_irq_checked(index: usize) -> Option<u8> {
 fn low_u32(value: u64) -> u32 {
     let bytes = value.to_le_bytes();
     u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+}
+
+fn timer_delay_ms(compare: u64, now: u64) -> u32 {
+    let ticks = compare.saturating_sub(now) / 10_000;
+    u32::try_from(ticks).unwrap_or(u32::MAX)
 }

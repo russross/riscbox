@@ -198,9 +198,4 @@ impl RunPolicy {
     pub fn blocks_per_slice(self) -> u32 {
         self.yield_cycles.div_ceil(self.block_cycles.max(1))
     }
-
-    #[must_use]
-    pub fn scheduled_delay(self, requested_delay_ms: u32) -> u32 {
-        requested_delay_ms.min(self.maximum_delay_ms)
-    }
 }

@@ -96,7 +96,7 @@ fn responses_must_match_the_single_pending_request() {
 }
 
 #[test]
-fn run_delivers_queued_input_and_always_reschedules() {
+fn run_delivers_queued_input_and_reschedules_runnable_guest_immediately() {
     let mut runtime = BrowserRuntime::default();
     runtime.start(start()).expect("start");
     let (config_id, _) = request(&mut runtime);
@@ -118,7 +118,7 @@ fn run_delivers_queued_input_and_always_reschedules() {
     let mut controller = BrowserController::default();
     assert_eq!(controller.queue_console(b"x"), 1);
     runtime.run(&mut controller, 0, 0).expect("execution slice");
-    assert_eq!(runtime.next_action(), Some(HostAction::Schedule(10)));
+    assert_eq!(runtime.next_action(), Some(HostAction::Schedule(0)));
 }
 
 #[test]
@@ -175,7 +175,7 @@ fn virtio_input_before_driver_initialization_is_buffered() {
         riscbox::browser::NetworkInputResult::Accepted
     );
     runtime.run(&mut controller, 0, 0).expect("execution slice");
-    assert_eq!(runtime.next_action(), Some(HostAction::Schedule(10)));
+    assert_eq!(runtime.next_action(), Some(HostAction::Schedule(0)));
 }
 
 #[test]
@@ -206,7 +206,7 @@ fn uart_output_follows_the_console_configuration() {
                 Some(HostAction::Console(b"A".to_vec()))
             );
         }
-        assert_eq!(runtime.next_action(), Some(HostAction::Schedule(10)));
+        assert_eq!(runtime.next_action(), Some(HostAction::Schedule(0)));
     }
 }
 
@@ -360,5 +360,31 @@ fn framebuffer_updates_coexist_with_the_virtio_console() {
         runtime.framebuffer_bytes(update).expect("pixel rows")[..4],
         [1, 0, 0, 0]
     );
+    assert_eq!(runtime.next_action(), Some(HostAction::Schedule(0)));
+}
+
+#[test]
+fn waiting_guest_uses_bounded_sleep() {
+    let mut runtime = BrowserRuntime::default();
+    runtime.start(start()).expect("start");
+    let (config_id, _) = request(&mut runtime);
+    runtime
+        .complete_http(
+            config_id,
+            200,
+            br#"{version:1,machine:"riscv64",memory_size:32,bios:"fw.bin",console:"uart"}"#
+                .to_vec(),
+        )
+        .expect("configuration");
+    let (firmware_id, _) = request(&mut runtime);
+    runtime
+        .complete_http(firmware_id, 200, 0x1050_0073_u32.to_le_bytes().to_vec())
+        .expect("WFI firmware");
+    assert_eq!(runtime.next_action(), Some(HostAction::Started));
+    assert_eq!(runtime.next_action(), Some(HostAction::Schedule(0)));
+
+    runtime
+        .run(&mut BrowserController::default(), 0, 0)
+        .expect("waiting slice");
     assert_eq!(runtime.next_action(), Some(HostAction::Schedule(10)));
 }

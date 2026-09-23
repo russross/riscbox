@@ -3,18 +3,12 @@ use riscbox::guest_memory::{AccessWidth, GuestAddress, RamFlags};
 use riscbox::memory::PhysicalMemory;
 
 const CSR_MSTATUS: u16 = 0x300;
-const CSR_MIDELEG: u16 = 0x303;
-const CSR_MIE: u16 = 0x304;
 const CSR_MENVCFG: u16 = 0x30a;
 const CSR_PMPCFG0: u16 = 0x3a0;
 const CSR_PMPADDR0: u16 = 0x3b0;
-const CSR_MEPC: u16 = 0x341;
 const CSR_MCAUSE: u16 = 0x342;
 const CSR_MTVAL: u16 = 0x343;
-const CSR_STIMECMP: u16 = 0x14d;
 const CSR_SATP: u16 = 0x180;
-
-const MIP_STIP: u64 = 1 << 5;
 
 fn machine() -> (Cpu, PhysicalMemory) {
     let mut memory = PhysicalMemory::new();
@@ -28,10 +22,6 @@ fn instruction(memory: &mut PhysicalMemory, address: u64, value: u32) {
     memory
         .write(GuestAddress(address), AccessWidth::Word, u64::from(value))
         .unwrap();
-}
-
-fn r(funct7: u32, rs2: u32, rs1: u32, funct3: u32, rd: u32, opcode: u32) -> u32 {
-    funct7 << 25 | rs2 << 20 | rs1 << 15 | funct3 << 12 | rd << 7 | opcode
 }
 
 fn i(immediate: i32, rs1: u32, funct3: u32, rd: u32, opcode: u32) -> u32 {
@@ -53,22 +43,6 @@ fn sv39_page_tables(memory: &mut PhysicalMemory, leaf_address: u64, leaf: u64) {
     memory
         .write(GuestAddress(leaf_address), AccessWidth::DoubleWord, leaf)
         .unwrap();
-}
-
-#[test]
-fn applies_pmp_to_supervisor_data_access() {
-    let (mut cpu, mut memory) = machine();
-    cpu.write_csr(CSR_PMPADDR0, 0x4000).unwrap();
-    cpu.write_csr(CSR_PMPCFG0, 0x0d).unwrap();
-    cpu.write_csr(CSR_MEPC, 0x2000).unwrap();
-    cpu.write_csr(CSR_MSTATUS, 1 << 11).unwrap();
-    run_one(&mut cpu, &mut memory, 0x3020_0073);
-    cpu.set_register(1, 0x8000);
-    cpu.set_register(2, 7);
-    instruction(&mut memory, 0x2000, r(0, 2, 1, 3, 0, 0x23));
-    cpu.run(&mut memory, 1);
-    assert_eq!(cpu.read_csr(CSR_MCAUSE), Ok(7));
-    assert_eq!(cpu.read_csr(CSR_MTVAL), Ok(0x8000));
 }
 
 #[test]
@@ -106,22 +80,6 @@ fn sv39_updates_accessed_bits_when_svadu_is_enabled() {
         memory.read(GuestAddress(0x6000), AccessWidth::DoubleWord),
         Ok((8 << 10) | 0x47)
     );
-}
-
-#[test]
-fn sstc_timer_wakes_a_cpu_waiting_for_interrupt() {
-    let (mut cpu, mut memory) = machine();
-    cpu.write_csr(CSR_MENVCFG, 1_u64 << 63).unwrap();
-    cpu.write_csr(CSR_STIMECMP, 10).unwrap();
-    cpu.write_csr(CSR_MIDELEG, 0).unwrap();
-    cpu.write_csr(CSR_MIE, MIP_STIP).unwrap();
-    cpu.write_csr(CSR_MSTATUS, 1 << 3).unwrap();
-    run_one(&mut cpu, &mut memory, 0x1050_0073);
-    assert_eq!(cpu.run(&mut memory, 1).cycles, 0);
-
-    cpu.set_time(10);
-    assert_eq!(cpu.run(&mut memory, 1).cycles, 1);
-    assert_eq!(cpu.read_csr(CSR_MCAUSE), Ok((1_u64 << 63) | 5));
 }
 
 #[test]

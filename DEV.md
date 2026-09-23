@@ -34,15 +34,16 @@ Shared callback/run types, interrupt bits, and guest-memory types now live with
 the active TinyEMU and platform interfaces. Migrate focused architectural
 coverage to the C core before removing the reference implementations.
 
-CPU test migration is active. `tests/tinyemu_cpu_migration.rs` now checks RV64
-integer/M-extension results and precise illegal-instruction trap state by
+CPU test migration is active. `tests/tinyemu_cpu_migration.rs` checks RV64
+integer/M-extension results,
+precise illegal-instruction trap state, PMP denial, and Sstc timer wakeup by
 running guest instruction streams on `tinyemu_core::Core`; corresponding Rust
 interpreter cases have been removed. The Rust-only fast-path tests describe
 implementation details and will be retired rather than recreated. Remaining
 architectural migration ledger:
 
-*   Pending: PMP, Sv39/SVADU/PBMT/Svnapot, Sstc, atomic/compressed, scalar
-    extensions, and floating-point instruction suites.
+*   Pending: Sv39/SVADU/PBMT/Svnapot, atomic/compressed, scalar extensions,
+    and floating-point instruction suites.
 *   Coverage gap to fill: the current Core inspection API exposes GPRs, PC,
     machine cause, and machine trap value, but not arbitrary CSRs or FPRs.
     Probes can save hidden state into guest RAM; add a narrowly scoped

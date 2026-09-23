@@ -5,6 +5,10 @@ const CSR_MSTATUS: u32 = 0x300;
 const CSR_PMPCFG0: u32 = 0x3a0;
 const CSR_PMPADDR0: u32 = 0x3b0;
 const CSR_MEPC: u32 = 0x341;
+const CSR_MENVCFG: u32 = 0x30a;
+const CSR_MIE: u32 = 0x304;
+const CSR_STIMECMP: u32 = 0x14d;
+const CSR_MTVEC: u32 = 0x305;
 
 fn core() -> Core {
     let mut core = Core::new().expect("TinyEMU core should initialize");
@@ -32,6 +36,11 @@ fn r(funct7: u32, rs2: u32, rs1: u32, funct3: u32, rd: u32, opcode: u32) -> u32 
 
 fn csrrw(csr: u32, source: u32) -> u32 {
     csr << 20 | source << 15 | 1 << 12 | 0x73
+}
+
+fn store(rs2: u32, rs1: u32, funct3: u32, immediate: i32) -> u32 {
+    let immediate = immediate.cast_unsigned() & 0xfff;
+    (immediate >> 5) << 25 | rs2 << 20 | rs1 << 15 | funct3 << 12 | (immediate & 0x1f) << 7 | 0x23
 }
 
 #[test]
@@ -64,10 +73,13 @@ fn tinyemu_returns_to_supervisor_then_records_precise_illegal_instruction_trap()
     let mut core = core();
     put(&mut core, 0x2000, &[0xffff_ffff]);
     // Set mepc to 0x2000 and MPP to supervisor before executing mret.
+    put(&mut core, 0x3000, &[0x1050_0073]);
     put(
         &mut core,
         CODE,
         &[
+            0x0000_32b7, // lui x5, 3
+            csrrw(CSR_MTVEC, 5),
             0x0000_42b7, // lui x5, 4
             csrrw(CSR_PMPADDR0, 5),
             addi(6, 0, 15),
@@ -89,4 +101,58 @@ fn tinyemu_returns_to_supervisor_then_records_precise_illegal_instruction_trap()
 
 fn slli(rd: u32, amount: u32) -> u32 {
     amount << 20 | rd << 15 | 1 << 12 | rd << 7 | 0x13
+}
+
+#[test]
+fn tinyemu_enforces_pmp_on_supervisor_data_access() {
+    let mut core = core();
+    put(&mut core, 0x3000, &[0x1050_0073]);
+    put(
+        &mut core,
+        CODE,
+        &[
+            0x0000_32b7, // lui x5, 3
+            csrrw(CSR_MTVEC, 5),
+            0x0000_42b7, // lui x5, 4
+            csrrw(CSR_PMPADDR0, 5),
+            addi(6, 0, 13),
+            csrrw(CSR_PMPCFG0, 6),
+            0x0000_82b7, // lui x5, 8
+            addi(2, 0, 7),
+            0x0002_11b7, // lui x3, 0x21
+            addi(3, 3, -2048),
+            csrrw(CSR_MSTATUS, 3),
+            store(2, 5, 3, 0),
+        ],
+    );
+    core.run(20);
+    assert_eq!(core.machine_cause(), 7);
+    assert_eq!(core.machine_trap_value(), 0x8000);
+}
+
+#[test]
+fn tinyemu_sstc_timer_wakes_waiting_hart() {
+    let mut core = core();
+    put(
+        &mut core,
+        CODE,
+        &[
+            addi(1, 0, 1),
+            slli(1, 31),
+            slli(1, 32),
+            csrrw(CSR_MENVCFG, 1),
+            addi(2, 0, 10),
+            csrrw(CSR_STIMECMP, 2),
+            addi(3, 0, 32),
+            csrrw(CSR_MIE, 3),
+            addi(4, 0, 8),
+            csrrw(CSR_MSTATUS, 4),
+            0x1050_0073,
+        ],
+    );
+    core.run(20);
+    assert_eq!(core.run(1).waiting, 1);
+    core.set_time(10);
+    core.run(1);
+    assert_eq!(core.machine_cause(), (1_u64 << 63) | 5);
 }

@@ -5,10 +5,10 @@ Unreleased
 ----------
 
 *   Began migrating CPU architectural tests onto TinyEMU-owned RAM and the
-    production C execution core. RV64 integer/M-extension results and precise
-    illegal-instruction trap cause/value now run as guest instruction streams;
-    the matching standalone Rust interpreter cases were removed. No production
-    C execution or memory path changed.
+    production C execution core. RV64 integer/M-extension results, precise
+    illegal-instruction trap cause/value, PMP denial, and Sstc timer wakeup now
+    run as guest instruction streams; matching standalone Rust interpreter
+    cases were removed. No production C execution or memory path changed.
 *   Changed browser scheduling to request immediate continuation while the
     guest is runnable and a bounded CLINT, supervisor timer, or RTC delay while
     it waits. The existing xv6 profile image completed and shut down in a

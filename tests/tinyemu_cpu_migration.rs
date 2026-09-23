@@ -156,3 +156,145 @@ fn tinyemu_sstc_timer_wakes_waiting_hart() {
     core.run(1);
     assert_eq!(core.machine_cause(), (1_u64 << 63) | 5);
 }
+
+fn write_u64(core: &mut Core, address: u64, value: u64) {
+    core.ram_range(address, 8, true)
+        .expect("page table range should be guest RAM")
+        .copy_from_slice(&value.to_le_bytes());
+}
+
+fn read_u64(core: &mut Core, address: u64) -> u64 {
+    u64::from_le_bytes(
+        core.ram_range(address, 8, false)
+            .expect("page table range should be guest RAM")
+            .try_into()
+            .expect("eight-byte read"),
+    )
+}
+
+fn sv39_probe(
+    adue: bool,
+    pbmte: bool,
+    leaf_address: u64,
+    leaf: u64,
+    virtual_address: u32,
+    data_address: u64,
+    data: u64,
+) -> Core {
+    const CSR_SATP: u32 = 0x180;
+    const CSR_MTVEC: u32 = 0x305;
+
+    let mut core = core();
+    write_u64(&mut core, 0x4008, (5 << 10) | 1);
+    write_u64(&mut core, 0x5000, (6 << 10) | 1);
+    write_u64(&mut core, leaf_address, leaf);
+    write_u64(&mut core, data_address, data);
+    put(&mut core, 0x9000, &[0x1050_0073]);
+
+    let mut code = vec![
+        0x0000_92b7, // lui x5, 9
+        csrrw(CSR_MTVEC, 5),
+        0x0000_42b7, // lui x5, 4
+        csrrw(CSR_PMPADDR0, 5),
+        addi(6, 0, 15),
+        csrrw(CSR_PMPCFG0, 6),
+        addi(3, 0, 8),
+        slli(3, 60),
+        addi(3, 3, 4),
+        csrrw(CSR_SATP, 3),
+    ];
+    if adue || pbmte {
+        code.extend([addi(4, 0, 1), slli(4, 31), slli(4, 30)]);
+        if pbmte {
+            code.extend([addi(7, 0, 1), slli(7, 31), slli(7, 31), add(4, 4, 7)]);
+        }
+        code.push(csrrw(CSR_MENVCFG, 4));
+    }
+    code.extend([
+        0x0002_12b7, // lui x5, 0x21
+        addi(5, 5, -2048),
+        csrrw(CSR_MSTATUS, 5),
+        0x4000_00b7, // lui x1, 0x40000
+    ]);
+    if virtual_address != 0x4000_0000 {
+        code.extend([0x0000_33b7, add(1, 1, 7)]); // add a low-page offset
+    }
+    code.extend([load(2, 1, 3, 0), 0x1050_0073]);
+    put(&mut core, CODE, &code);
+    core.run(40);
+    core
+}
+
+fn add(rd: u32, rs1: u32, rs2: u32) -> u32 {
+    r(0, rs2, rs1, 0, rd, 0x33)
+}
+
+fn load(rd: u32, rs1: u32, funct3: u32, immediate: i32) -> u32 {
+    (immediate.cast_unsigned() & 0xfff) << 20 | rs1 << 15 | funct3 << 12 | rd << 7 | 0x03
+}
+
+#[test]
+fn tinyemu_sv39_updates_accessed_bit_when_svadu_is_enabled() {
+    let mut core = sv39_probe(
+        true,
+        false,
+        0x6000,
+        (8 << 10) | 0x07,
+        0x4000_0000,
+        0x8000,
+        0x1122_3344_5566_7788,
+    );
+    assert_eq!(core.register(2), 0x1122_3344_5566_7788);
+    assert_eq!(read_u64(&mut core, 0x6000), (8 << 10) | 0x47);
+}
+
+#[test]
+fn tinyemu_sv39_faults_when_accessed_bit_is_clear_without_svadu() {
+    let core = sv39_probe(
+        false,
+        false,
+        0x6000,
+        (8 << 10) | 0x07,
+        0x4000_0000,
+        0x8000,
+        0,
+    );
+    assert_eq!(core.machine_cause(), 13);
+    assert_eq!(core.machine_trap_value(), 0x4000_0000);
+}
+
+#[test]
+fn tinyemu_sv39_requires_pbmt_enable_and_maps_napot_pages() {
+    let mut pbmt = sv39_probe(
+        false,
+        false,
+        0x6000,
+        (8 << 10) | (1_u64 << 61) | 0xc7,
+        0x4000_0000,
+        0x8000,
+        0x0123_4567_89ab_cdef,
+    );
+    assert_eq!(pbmt.machine_cause(), 13);
+
+    pbmt = sv39_probe(
+        true,
+        true,
+        0x6000,
+        (8 << 10) | (1_u64 << 61) | 0xc7,
+        0x4000_0000,
+        0x8000,
+        0x0123_4567_89ab_cdef,
+    );
+    assert_eq!(pbmt.register(2), 0x0123_4567_89ab_cdef);
+
+    let napot = sv39_probe(
+        true,
+        false,
+        0x6018,
+        (8 << 10) | (1_u64 << 63) | 0xc7,
+        0x4000_3000,
+        0x3000,
+        0xfedc_ba98_7654_3210,
+    );
+    assert_eq!(napot.register(2), 0xfedc_ba98_7654_3210);
+}

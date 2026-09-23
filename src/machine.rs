@@ -1044,6 +1044,19 @@ impl Machine {
         Ok(self.bus.memory.ram_view(GuestAddress(address), len)?)
     }
 
+    /// Writes bytes into guest RAM for host services and validation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the requested range is not writable RAM.
+    pub fn write_ram(&mut self, address: u64, bytes: &[u8]) -> Result<(), MachineError> {
+        self.bus
+            .memory
+            .ram_range(GuestAddress(address), bytes.len(), true)?
+            .copy_from_slice(bytes);
+        Ok(())
+    }
+
     #[must_use]
     pub fn cpu(&self) -> &Core {
         &self.cpu

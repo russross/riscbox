@@ -31,6 +31,11 @@ CPU core validation
 The standalone Rust CPU, memory, and SoftFP modules still provide reference
 tests while production `Machine` execution uses `tinyemu-core/`. Migrate focused
 architectural coverage to the C core before removing the reference modules.
+VirtIO device tests now use an unbooted `Machine` and TinyEMU-owned guest RAM;
+their fake block, network, entropy, and 9p backends remain host-interface test
+doubles. The direct VirtIO transport tests still use `PhysicalMemory`. Reassess
+those tests separately to decide which should exercise MMIO through `Machine`
+and which benefit from a small test-only `MemoryAccess` fixture.
 The saved xv6 compile profiles in `images/xv6-profile/build/profiles/` show
 105.332 seconds for `riscbox-scheduler` versus 97.400 seconds for `tinyemu`, an
 8.1% longer sampled profile in the current Riscbox WASM build. Both logs reach

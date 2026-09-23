@@ -1,4 +1,4 @@
-use super::AccessWidth;
+use crate::guest_memory::AccessWidth;
 use core::ptr;
 
 #[cfg_attr(target_arch = "wasm32", inline(always))]

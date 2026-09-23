@@ -1,4 +1,4 @@
-use riscbox::cpu::{MIP_MEIP, MIP_SEIP};
+use riscbox::platform::interrupts::{MIP_MEIP, MIP_SEIP};
 use riscbox::platform::{Clint, FinishStatus, Finisher, GoldfishRtc, Plic, Uart16550};
 
 #[test]

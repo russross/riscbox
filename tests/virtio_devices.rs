@@ -1,7 +1,7 @@
 use riscbox::browser_storage::HttpBlockStore;
 use riscbox::entropy::{EntropyError, EntropySource};
+use riscbox::guest_memory::{AccessWidth, GuestAddress};
 use riscbox::machine::{Machine, MachineConfig, VIRTIO_BASE};
-use riscbox::memory::{AccessWidth, GuestAddress};
 use riscbox::virtio_devices::{
     BlockBackend, DeviceError, InputKind, MAX_NETWORK_FRAME_SIZE, MAX_PENDING_NETWORK_FRAMES,
     NetworkBackend, NetworkIngress, NinePBackend, NinePGeneration, NinePOutcome, NinePRequestId,
@@ -14,6 +14,7 @@ const DESC: u64 = RAM + 0x1000;
 const AVAIL: u64 = RAM + 0x2000;
 const USED: u64 = RAM + 0x3000;
 const DATA: u64 = RAM + 0x4000;
+type PendingRequest = (NinePRequestId, Vec<u8>, u32);
 
 fn test_machine() -> Machine {
     Machine::new(MachineConfig {
@@ -61,7 +62,7 @@ fn machine_configure(machine: &mut Machine, slot: usize, queue: u16) {
             machine,
             base + register,
             AccessWidth::Word,
-            address as u32 as u64,
+            u64::from(u32::try_from(address & u64::from(u32::MAX)).expect("low address fits u32")),
         );
         machine_write(
             machine,
@@ -187,7 +188,7 @@ fn entropy_fills_writable_chains_and_rejects_readable_buffers() {
         machine
             .bus_mut()
             .write(GuestAddress(VIRTIO_BASE + 0x50), AccessWidth::Word, 0),
-        Err(riscbox::cpu::BusError::AccessFault)
+        Err(riscbox::tinyemu_core::BusError::AccessFault)
     );
 }
 
@@ -493,14 +494,14 @@ fn network_drops_frames_that_do_not_fit_and_rejects_offload_headers() {
         transmit
             .bus_mut()
             .write(GuestAddress(VIRTIO_BASE + 0x50), AccessWidth::Word, 1,),
-        Err(riscbox::cpu::BusError::AccessFault)
+        Err(riscbox::tinyemu_core::BusError::AccessFault)
     );
     assert!(packets.borrow().is_empty());
 }
 
 #[derive(Clone)]
 struct Pending9p {
-    requests: Rc<RefCell<Vec<(NinePRequestId, Vec<u8>, u32)>>>,
+    requests: Rc<RefCell<Vec<PendingRequest>>>,
     generation: Rc<RefCell<NinePGeneration>>,
 }
 
@@ -819,7 +820,7 @@ fn io_bounds_and_pointer_profiles_are_enforced() {
         block
             .bus_mut()
             .write(GuestAddress(VIRTIO_BASE + 0x50), AccessWidth::Word, 0,),
-        Err(riscbox::cpu::BusError::AccessFault)
+        Err(riscbox::tinyemu_core::BusError::AccessFault)
     );
 
     for (kind, event, size, bits) in [

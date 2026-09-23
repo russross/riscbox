@@ -1,5 +1,8 @@
-use riscbox::cpu::{BusError, Cpu, CpuBus, MIP_MTIP};
-use riscbox::memory::{AccessWidth, ArenaOffset, GuestAddress, PhysicalMemory, RamFlags};
+use riscbox::cpu::{Cpu, CpuBus};
+use riscbox::guest_memory::{AccessWidth, ArenaOffset, GuestAddress, RamFlags};
+use riscbox::memory::PhysicalMemory;
+use riscbox::platform::interrupts::MIP_MTIP;
+use riscbox::tinyemu_core::BusError;
 
 const CSR_MCAUSE: u16 = 0x342;
 const CSR_MEPC: u16 = 0x341;

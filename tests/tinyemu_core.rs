@@ -1,5 +1,4 @@
-use riscbox::cpu::BusError;
-use riscbox::tinyemu_core::{Core, HostCallbacks};
+use riscbox::tinyemu_core::{BusError, Core, HostCallbacks};
 
 #[derive(Default)]
 struct Device {
@@ -44,12 +43,11 @@ fn c_core_routes_device_accesses_without_leaving_the_slice() {
     core.register_device(0x1000_0000, 0x1000, 4)
         .expect("device aperture");
     let bytes = core.ram_range(0x1000, 16, true).expect("instruction RAM");
-    for (chunk, instruction) in bytes.chunks_exact_mut(4).zip([
-        0x1000_0137_u32,
-        0x0001_2083,
-        0x0011_2223,
-        0x1050_0073,
-    ]) {
+    for (chunk, instruction) in
+        bytes
+            .chunks_exact_mut(4)
+            .zip([0x1000_0137_u32, 0x0001_2083, 0x0011_2223, 0x1050_0073])
+    {
         chunk.copy_from_slice(&instruction.to_le_bytes());
     }
     let mut device = Device::default();

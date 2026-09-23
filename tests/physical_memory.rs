@@ -1,6 +1,7 @@
-use riscbox::memory::{
-    ArenaOffset, DeviceWidths, GuestAddress, Invalidation, MemoryError, PhysicalMemory, RamFlags,
+use riscbox::guest_memory::{
+    ArenaOffset, DeviceWidths, DirtySnapshot, GuestAddress, Invalidation, MemoryError, RamFlags,
 };
+use riscbox::memory::PhysicalMemory;
 
 #[test]
 fn maps_ram_and_devices_in_registration_order() {
@@ -93,7 +94,7 @@ fn dirty_pages_snapshot_and_reset_match_the_c_double_buffer() {
     );
     assert_eq!(
         memory.take_dirty_pages(tracked),
-        Ok(riscbox::memory::DirtySnapshot {
+        Ok(DirtySnapshot {
             words: vec![1, 1],
             invalidation: Some(Invalidation {
                 arena_offset: ArenaOffset(0x1000),

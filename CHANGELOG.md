@@ -11,6 +11,10 @@ Unreleased
     fixed delay; idle sampled time fell from 40.714 to 7.036 seconds. The
     recorded archived C profile is 97.400 seconds. The new trace and console
     log are retained as `riscbox-scheduler` artifacts beside those baselines.
+*   Moved machine callback errors and run outcomes to the TinyEMU boundary,
+    interrupt bits to the platform module, and shared guest-memory types beside
+    the TinyEMU-backed RAM bridge. Production C execution and memory paths are
+    unchanged.
 *   Moved production CPU instruction execution, CSR/VM/TLB handling, SoftFP,
     and physical RAM into a freestanding TinyEMU C core. Rust retains machine
     setup and devices and enters C for coarse timeslices, crossing back for

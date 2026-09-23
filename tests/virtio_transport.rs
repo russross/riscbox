@@ -1,4 +1,5 @@
-use riscbox::memory::{AccessWidth, GuestAddress, PhysicalMemory, RamFlags};
+use riscbox::guest_memory::{AccessWidth, GuestAddress, RamFlags};
+use riscbox::memory::PhysicalMemory;
 use riscbox::virtio::{DescriptorIndex, QueueError, QueueIndex, VERSION_1, VirtioTransport};
 
 const RAM: u64 = 0x8000_0000;

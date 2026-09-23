@@ -1,6 +1,8 @@
 //! Core devices for the QEMU-compatible RISC-V virtual platform.
 
-use crate::cpu::{MIP_MEIP, MIP_SEIP};
+pub mod interrupts;
+
+use crate::platform::interrupts::{MIP_MEIP, MIP_SEIP};
 
 pub const TEST_FINISHER_FAIL: u16 = 0x3333;
 pub const TEST_FINISHER_PASS: u16 = 0x5555;

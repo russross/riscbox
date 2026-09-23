@@ -4,7 +4,7 @@ use super::{
     PMP_CFG_A_MASK, PMP_CFG_A_TOR, PMP_CFG_L, PMP_CFG_R, PMP_CFG_W, PMP_CFG_X, Privilege, TLB_SIZE,
     TlbEntry, Trap,
 };
-use crate::memory::AccessWidth;
+use crate::guest_memory::AccessWidth;
 use crate::memory::{read_width, write_width};
 
 const SATP_MODE_SV39: u64 = 8;

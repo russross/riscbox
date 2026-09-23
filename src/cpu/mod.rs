@@ -5,16 +5,10 @@ mod execute;
 mod floating;
 mod mmu;
 
-use crate::memory::{
-    AccessWidth, ArenaOffset, GuestAddress, MemoryError, PhysicalMemory, read_u16, read_u32,
-};
-
-pub const MIP_SSIP: u32 = 1 << 1;
-pub const MIP_MSIP: u32 = 1 << 3;
-pub const MIP_STIP: u32 = 1 << 5;
-pub const MIP_MTIP: u32 = 1 << 7;
-pub const MIP_SEIP: u32 = 1 << 9;
-pub const MIP_MEIP: u32 = 1 << 11;
+use crate::guest_memory::{AccessWidth, ArenaOffset, GuestAddress, MemoryError};
+use crate::memory::{PhysicalMemory, read_u16, read_u32};
+use crate::platform::interrupts::{MIP_MSIP, MIP_MTIP, MIP_SEIP, MIP_SSIP, MIP_STIP};
+use crate::tinyemu_core::{BusError, RunOutcome, RunState};
 
 const MSTATUS_SIE: u64 = 1 << 1;
 const MSTATUS_MIE: u64 = 1 << 3;
@@ -127,23 +121,6 @@ pub enum Privilege {
     User = 0,
     Supervisor = 1,
     Machine = 3,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RunState {
-    Running,
-    Waiting,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RunOutcome {
-    pub cycles: u32,
-    pub state: RunState,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum BusError {
-    AccessFault,
 }
 
 pub trait CpuBus {

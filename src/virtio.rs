@@ -2,7 +2,7 @@
 
 use core::fmt;
 
-use crate::memory::{AccessWidth, GuestAddress, MemoryAccess, MemoryError};
+use crate::guest_memory::{AccessWidth, GuestAddress, MemoryAccess, MemoryError};
 
 pub const MMIO_SIZE: u64 = 0x1000;
 pub const MAX_QUEUES: usize = 8;

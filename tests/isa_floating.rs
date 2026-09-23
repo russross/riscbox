@@ -1,5 +1,6 @@
 use riscbox::cpu::{Cpu, CsrError};
-use riscbox::memory::{AccessWidth, GuestAddress, PhysicalMemory, RamFlags};
+use riscbox::guest_memory::{AccessWidth, GuestAddress, RamFlags};
+use riscbox::memory::PhysicalMemory;
 
 const CSR_FFLAGS: u16 = 0x001;
 const CSR_FRM: u16 = 0x002;

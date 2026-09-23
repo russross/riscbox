@@ -37,8 +37,9 @@ Repository map and terminology
 ------------------------------
 
 *   `src/` owns the Rust machine, devices, configuration, storage, browser
-    runtime, and the typed boundary to the C core. Standalone Rust CPU,
-    memory, and SoftFP modules remain as reference test surfaces.
+    runtime, and the typed boundary to the C core. `guest_memory.rs` owns the
+    shared memory API and TinyEMU RAM bridge. Standalone Rust CPU, physical
+    memory, and SoftFP implementations remain only as reference test surfaces.
 *   `tinyemu-core/` is the active freestanding TinyEMU CPU, SoftFP, and physical
     memory implementation. `build.rs` compiles it with Clang for native and
     raw WASM targets.
@@ -79,8 +80,11 @@ intentionally absent. Advertise only implemented behavior.
 Production timeslices enter the TinyEMU C instruction loop. C owns CPU state,
 TLB, physical mappings, and RAM; its setup and teardown allocations use the
 Rust global allocator. Rust owns platform devices and handles MMIO callbacks.
-The C core is compiled without a C runtime, Emscripten, or WASI. The standalone
-Rust interpreter remains for focused reference tests, not machine execution.
+Shared callback errors and run outcomes live at the TinyEMU boundary, while
+interrupt masks live with the platform and memory access types live with the
+TinyEMU RAM bridge. The C core is compiled without a C runtime, Emscripten, or
+WASI. The standalone Rust interpreter and physical-memory model remain for
+focused reference tests, not machine execution.
 
 The generated device tree follows standard libfdt layout and QEMU `virt`
 bindings. The platform boots current xv6 over UART and VirtIO block and boots a

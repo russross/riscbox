@@ -28,9 +28,11 @@ Development priorities
 CPU core validation
 -------------------
 
-The standalone Rust CPU, memory, and SoftFP modules still provide reference
-tests while production `Machine` execution uses `tinyemu-core/`. Migrate focused
-architectural coverage to the C core before removing the reference modules.
+The standalone Rust CPU, physical-memory model, and SoftFP modules still provide
+reference tests while production `Machine` execution uses `tinyemu-core/`.
+Shared callback/run types, interrupt bits, and guest-memory types now live with
+the active TinyEMU and platform interfaces. Migrate focused architectural
+coverage to the C core before removing the reference implementations.
 VirtIO device tests now use an unbooted `Machine` and TinyEMU-owned guest RAM;
 their fake block, network, entropy, and 9p backends remain host-interface test
 doubles. The direct VirtIO transport tests still use `PhysicalMemory`. Reassess

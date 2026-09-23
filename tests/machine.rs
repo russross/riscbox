@@ -1,10 +1,10 @@
 use riscbox::browser_storage::HttpBlockStore;
 use riscbox::entropy::{EntropyError, EntropySource};
+use riscbox::guest_memory::{AccessWidth, GuestAddress};
 use riscbox::machine::{
     BootImages, CLINT_BASE, FRAMEBUFFER_BASE, FramebufferConfig, Machine, MachineConfig, RAM_BASE,
     RTC_BASE, RedrawSpan, VIRTIO_BASE,
 };
-use riscbox::memory::{AccessWidth, GuestAddress};
 use riscbox::platform::FinishStatus;
 use riscbox::virtio_devices::{DeviceError, NetworkBackend, NetworkIngress};
 use std::cell::RefCell;
@@ -489,7 +489,11 @@ fn waiting_delay_tracks_clint_and_rtc_deadlines() {
     machine.update_time(1_000_000, 100_000_000);
     machine
         .bus_mut()
-        .write(GuestAddress(CLINT_BASE + 0x4000), AccessWidth::Word, 1_050_000)
+        .write(
+            GuestAddress(CLINT_BASE + 0x4000),
+            AccessWidth::Word,
+            1_050_000,
+        )
         .expect("CLINT compare");
     machine
         .bus_mut()

@@ -470,7 +470,7 @@ impl BrowserRuntime {
         let mut waiting = false;
         for _ in 0..self.policy.blocks_per_slice() {
             let outcome = running.machine.run(self.policy.block_cycles);
-            if outcome.state == crate::cpu::RunState::Waiting {
+            if outcome.state == crate::tinyemu_core::RunState::Waiting {
                 waiting = true;
                 break;
             }

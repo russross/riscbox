@@ -1,10 +1,179 @@
-//! Device access to the `TinyEMU` physical map and its RAM.
+//! Shared guest memory types and access to TinyEMU-owned RAM.
 
-use crate::memory::{
-    AccessWidth, DeviceWidths, DirtySnapshot, GuestAddress, MemoryAccess, MemoryError, RamFlags,
-    RegionId, PAGE_SIZE,
-};
+use core::fmt;
+
 use crate::tinyemu_core::{Core, CoreHandle};
+
+pub const PAGE_SIZE: u64 = 4096;
+pub const MAX_REGIONS: usize = 32;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GuestAddress(pub u64);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ArenaOffset(pub u32);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum AccessWidth {
+    Byte,
+    HalfWord,
+    Word,
+    DoubleWord,
+}
+
+impl AccessWidth {
+    #[must_use]
+    pub const fn bytes(self) -> usize {
+        match self {
+            Self::Byte => 1,
+            Self::HalfWord => 2,
+            Self::Word => 4,
+            Self::DoubleWord => 8,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RegionId(pub(crate) usize);
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RamFlags(u8);
+
+impl RamFlags {
+    pub(crate) const ROM_BIT: u8 = 1 << 0;
+    pub(crate) const DIRTY_TRACKING_BIT: u8 = 1 << 1;
+    pub(crate) const DISABLED_BIT: u8 = 1 << 2;
+
+    pub const ROM: Self = Self(Self::ROM_BIT);
+    pub const DIRTY_TRACKING: Self = Self(Self::DIRTY_TRACKING_BIT);
+    pub const DISABLED: Self = Self(Self::DISABLED_BIT);
+
+    #[must_use]
+    pub const fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+
+    pub(crate) const fn contains(self, bit: u8) -> bool {
+        self.0 & bit != 0
+    }
+
+    pub(crate) const fn without(self, bit: u8) -> Self {
+        Self(self.0 & !bit)
+    }
+
+    pub(crate) const fn bits(self) -> u8 {
+        self.0
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DeviceWidths(u8);
+
+impl DeviceWidths {
+    pub const U8: Self = Self(1 << 0);
+    pub const U16: Self = Self(1 << 1);
+    pub const U32: Self = Self(1 << 2);
+
+    #[must_use]
+    pub const fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+
+    pub(crate) const fn bits(self) -> u8 {
+        self.0
+    }
+}
+
+pub trait MemoryAccess {
+    /// Reads a guest value.
+    ///
+    /// # Errors
+    /// Returns an error for an inaccessible range.
+    fn read(&mut self, address: GuestAddress, width: AccessWidth) -> Result<u64, MemoryError>;
+    /// Writes a guest value.
+    ///
+    /// # Errors
+    /// Returns an error for an inaccessible or read-only range.
+    fn write(
+        &mut self,
+        address: GuestAddress,
+        width: AccessWidth,
+        value: u64,
+    ) -> Result<(), MemoryError>;
+    /// Checks a complete guest RAM range.
+    ///
+    /// # Errors
+    /// Returns an error when the range is not suitable RAM.
+    fn validate_ram(
+        &mut self,
+        address: GuestAddress,
+        len: usize,
+        write: bool,
+    ) -> Result<(), MemoryError>;
+    /// Copies bytes out of guest RAM.
+    ///
+    /// # Errors
+    /// Returns an error for an inaccessible range.
+    fn read_bytes(&mut self, address: GuestAddress, bytes: &mut [u8]) -> Result<(), MemoryError>;
+    /// Copies bytes into guest RAM.
+    ///
+    /// # Errors
+    /// Returns an error for an inaccessible or read-only range.
+    fn write_bytes(&mut self, address: GuestAddress, bytes: &[u8]) -> Result<(), MemoryError>;
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Invalidation {
+    pub arena_offset: ArenaOffset,
+    pub len: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DirtySnapshot {
+    pub words: Vec<u32>,
+    pub invalidation: Option<Invalidation>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum MemoryError {
+    ArenaTooLarge,
+    InvalidRamSize(u64),
+    InvalidRegion(usize),
+    RegionLimit,
+    RegionTooLarge(u64),
+    ReadOnly,
+    Unmapped(GuestAddress),
+    WrongRegionKind,
+}
+
+impl fmt::Display for MemoryError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ArenaTooLarge => formatter.write_str("guest-memory arena exceeds 4 GiB"),
+            Self::InvalidRamSize(size) => {
+                write!(
+                    formatter,
+                    "RAM size {size:#x} is zero or is not page aligned"
+                )
+            }
+            Self::InvalidRegion(index) => write!(formatter, "invalid memory region {index}"),
+            Self::RegionLimit => write!(
+                formatter,
+                "physical memory map exceeds {MAX_REGIONS} regions"
+            ),
+            Self::RegionTooLarge(size) => {
+                write!(formatter, "device region size {size:#x} exceeds 32 bits")
+            }
+            Self::ReadOnly => formatter.write_str("write to read-only memory"),
+            Self::Unmapped(address) => {
+                write!(formatter, "unmapped physical address {:#x}", address.0)
+            }
+            Self::WrongRegionKind => formatter.write_str("operation does not apply to this region"),
+        }
+    }
+}
+
+impl std::error::Error for MemoryError {}
 
 #[derive(Clone, Copy)]
 struct RamRegion {
@@ -159,11 +328,7 @@ impl MemoryAccess for GuestMemory {
         self.ram_range(address, len, write).map(|_| ())
     }
 
-    fn read_bytes(
-        &mut self,
-        address: GuestAddress,
-        bytes: &mut [u8],
-    ) -> Result<(), MemoryError> {
+    fn read_bytes(&mut self, address: GuestAddress, bytes: &mut [u8]) -> Result<(), MemoryError> {
         bytes.copy_from_slice(self.ram_range(address, bytes.len(), false)?);
         Ok(())
     }

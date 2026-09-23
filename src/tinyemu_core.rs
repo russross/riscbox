@@ -1,8 +1,25 @@
 //! Ownership and ABI boundary for the C execution core.
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BusError {
+    AccessFault,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RunState {
+    Running,
+    Waiting,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct RunOutcome {
+    pub cycles: u32,
+    pub state: RunState,
+}
+
 #[allow(unsafe_code)]
 mod ffi {
-    use crate::cpu::BusError;
+    use super::BusError;
     use std::alloc::{Layout, alloc_zeroed, dealloc};
     use std::ffi::{CStr, c_char, c_void};
     use std::ptr::NonNull;

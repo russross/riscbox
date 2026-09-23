@@ -1,5 +1,6 @@
 use riscbox::cpu::Cpu;
-use riscbox::memory::{AccessWidth, GuestAddress, PhysicalMemory, RamFlags};
+use riscbox::guest_memory::{AccessWidth, GuestAddress, RamFlags};
+use riscbox::memory::PhysicalMemory;
 
 fn machine() -> (Cpu, PhysicalMemory) {
     let mut memory = PhysicalMemory::new();

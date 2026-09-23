@@ -4,7 +4,7 @@ use core::fmt;
 use std::collections::{BTreeMap, VecDeque};
 
 use crate::entropy::SharedEntropy;
-use crate::memory::{AccessWidth, MemoryAccess};
+use crate::guest_memory::{AccessWidth, MemoryAccess};
 use crate::virtio::{DescriptorChain, QueueError, QueueIndex, VirtioTransport};
 
 const CONFIG_BASE: u32 = 0x100;

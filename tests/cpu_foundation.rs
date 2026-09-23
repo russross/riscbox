@@ -1,5 +1,6 @@
 use riscbox::cpu::{Cpu, Privilege};
-use riscbox::memory::{AccessWidth, GuestAddress, PhysicalMemory, RamFlags};
+use riscbox::guest_memory::{AccessWidth, GuestAddress, RamFlags};
+use riscbox::memory::PhysicalMemory;
 
 const CSR_MSTATUS: u16 = 0x300;
 const CSR_MIDELEG: u16 = 0x303;

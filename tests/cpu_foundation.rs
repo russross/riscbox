@@ -1,4 +1,4 @@
-use riscbox::cpu::{Cpu, Privilege};
+use riscbox::cpu::Cpu;
 use riscbox::guest_memory::{AccessWidth, GuestAddress, RamFlags};
 use riscbox::memory::PhysicalMemory;
 
@@ -53,51 +53,6 @@ fn sv39_page_tables(memory: &mut PhysicalMemory, leaf_address: u64, leaf: u64) {
     memory
         .write(GuestAddress(leaf_address), AccessWidth::DoubleWord, leaf)
         .unwrap();
-}
-
-#[test]
-fn executes_rv64i_integer_memory_and_multiply_divide() {
-    let (mut cpu, mut memory) = machine();
-
-    run_one(&mut cpu, &mut memory, i(-8, 0, 0, 1, 0x13));
-    run_one(&mut cpu, &mut memory, i(3, 0, 0, 2, 0x13));
-    run_one(&mut cpu, &mut memory, r(0, 2, 1, 0, 3, 0x33));
-    run_one(&mut cpu, &mut memory, r(0x20, 2, 1, 0, 4, 0x33));
-    run_one(&mut cpu, &mut memory, r(1, 2, 1, 0, 5, 0x33));
-    run_one(&mut cpu, &mut memory, r(1, 2, 1, 4, 6, 0x33));
-    assert_eq!(cpu.register(1), u64::MAX - 7);
-    assert_eq!(cpu.register(3), u64::MAX - 4);
-    assert_eq!(cpu.register(4), u64::MAX - 10);
-    assert_eq!(cpu.register(5), u64::MAX - 23);
-    assert_eq!(cpu.register(6), u64::MAX - 1);
-
-    cpu.set_register(10, 0x8000);
-    run_one(&mut cpu, &mut memory, i(-1, 0, 0, 11, 0x13));
-    let store = (11 << 20) | (10 << 15) | (3 << 12) | 0x23;
-    run_one(&mut cpu, &mut memory, store);
-    run_one(&mut cpu, &mut memory, i(0, 10, 3, 12, 0x03));
-    assert_eq!(cpu.register(12), u64::MAX);
-    assert_eq!(cpu.register(0), 0);
-    assert_eq!(cpu.retired_instructions(), 9);
-}
-
-#[test]
-fn records_precise_traps_and_returns_to_supervisor() {
-    let (mut cpu, mut memory) = machine();
-    cpu.write_csr(CSR_PMPADDR0, 0x4000).unwrap();
-    cpu.write_csr(CSR_PMPCFG0, 0x0f).unwrap();
-    cpu.write_csr(CSR_MEPC, 0x2000).unwrap();
-    cpu.write_csr(CSR_MSTATUS, 1 << 11).unwrap();
-    run_one(&mut cpu, &mut memory, 0x3020_0073);
-    assert_eq!(cpu.pc(), 0x2000);
-    assert_eq!(cpu.privilege(), Privilege::Supervisor);
-
-    instruction(&mut memory, 0x2000, 0xffff_ffff);
-    cpu.run(&mut memory, 1);
-    assert_eq!(cpu.privilege(), Privilege::Machine);
-    assert_eq!(cpu.read_csr(CSR_MCAUSE), Ok(2));
-    assert_eq!(cpu.read_csr(CSR_MEPC), Ok(0x2000));
-    assert_eq!(cpu.read_csr(CSR_MTVAL), Ok(0xffff_ffff));
 }
 
 #[test]

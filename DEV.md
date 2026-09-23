@@ -33,6 +33,23 @@ reference tests while production `Machine` execution uses `tinyemu-core/`.
 Shared callback/run types, interrupt bits, and guest-memory types now live with
 the active TinyEMU and platform interfaces. Migrate focused architectural
 coverage to the C core before removing the reference implementations.
+
+CPU test migration is active. `tests/tinyemu_cpu_migration.rs` now checks RV64
+integer/M-extension results and precise illegal-instruction trap state by
+running guest instruction streams on `tinyemu_core::Core`; corresponding Rust
+interpreter cases have been removed. The Rust-only fast-path tests describe
+implementation details and will be retired rather than recreated. Remaining
+architectural migration ledger:
+
+*   Pending: PMP, Sv39/SVADU/PBMT/Svnapot, Sstc, atomic/compressed, scalar
+    extensions, and floating-point instruction suites.
+*   Coverage gap to fill: the current Core inspection API exposes GPRs, PC,
+    machine cause, and machine trap value, but not arbitrary CSRs or FPRs.
+    Probes can save hidden state into guest RAM; add a narrowly scoped
+    test-only inspection API only where guest observation is impractical.
+*   Pending disposition: standalone SoftFP tests validate the parallel Rust
+    implementation and should be replaced with instruction-level coverage or
+    removed; direct TLB/cache fast-path tests do not describe production C.
 VirtIO device tests now use an unbooted `Machine` and TinyEMU-owned guest RAM;
 their fake block, network, entropy, and 9p backends remain host-interface test
 doubles. The direct VirtIO transport tests still use `PhysicalMemory`. Reassess

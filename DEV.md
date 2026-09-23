@@ -43,10 +43,10 @@ implementation details and will be retired rather than recreated. Remaining
 architectural migration ledger:
 
 *   Completed: integer/M, precise traps, PMP, Sstc, Sv39/SVADU/PBMT/Svnapot,
-    AMO word/doubleword, LR/SC, and reserved compressed-instruction probes now
-    execute on TinyEMU.
-*   Pending: other compressed instructions, scalar extensions, and
-    floating-point instruction suites.
+    AMO word/doubleword, LR/SC, compressed control/stack behavior, Zcb
+    operations, reserved encodings, and compressed hints now execute on
+    TinyEMU.
+*   Pending: scalar extensions and floating-point instruction suites.
 *   Coverage gap to fill: the current Core inspection API exposes GPRs, PC,
     machine cause, and machine trap value, but not arbitrary CSRs or FPRs.
     Probes can save hidden state into guest RAM; add a narrowly scoped

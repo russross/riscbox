@@ -361,3 +361,108 @@ fn tinyemu_compressed_reserved_encoding_traps() {
     assert_eq!(core.machine_cause(), 2);
     assert_eq!(core.machine_trap_value(), 0);
 }
+
+fn put_mixed(core: &mut Core, address: u64, pieces: &[&[u8]]) {
+    let mut bytes = Vec::new();
+    for piece in pieces {
+        bytes.extend_from_slice(piece);
+    }
+    core.ram_range(address, bytes.len(), true)
+        .expect("instruction stream should be guest RAM")
+        .copy_from_slice(&bytes);
+}
+
+fn word(value: u32) -> [u8; 4] {
+    value.to_le_bytes()
+}
+
+fn halfword(value: u16) -> [u8; 2] {
+    value.to_le_bytes()
+}
+
+fn c_li(rd: u16, immediate: u16) -> u16 {
+    0x4001 | rd << 7 | (immediate & 0x1f) << 2 | (immediate & 0x20) << 7
+}
+
+#[test]
+fn tinyemu_compressed_control_and_stack_memory_use_two_byte_steps() {
+    let mut core = core();
+    put_mixed(
+        &mut core,
+        CODE,
+        &[
+            &word(0x0000_8137), // lui x2, 8
+            &halfword(c_li(1, 31)),
+            &halfword(0x0085),  // c.addi x1, 1
+            &word(0x8123_41b7), // lui x3, 0x81234
+            &word(addi(3, 3, 0x567)),
+            &halfword(0xc00e),  // c.swsp x3, 0(sp)
+            &halfword(0x4202),  // c.lwsp x4, 0(sp)
+            &word(0x0000_22b7), // lui x5, 2
+            &word(addi(5, 5, 2)),
+            &halfword(0x8282), // c.jr x5
+        ],
+    );
+    put_mixed(&mut core, 0x2002, &[&word(0x1050_0073)]);
+    core.run(40);
+    assert_eq!(core.register(1), 32);
+    assert_eq!(core.register(4), 0xffff_ffff_8123_4567);
+    assert_eq!(core.pc(), 0x2006);
+}
+
+#[test]
+fn tinyemu_zcb_unary_multiply_and_byte_memory_operations_execute() {
+    let mut core = core();
+    put(&mut core, 0x9000, &[0x1050_0073]);
+    put_mixed(
+        &mut core,
+        CODE,
+        &[
+            &word(0x0000_9637), // lui x12, 9
+            &word(csrrw(CSR_MTVEC, 12)),
+            &word(addi(8, 0, -128)),
+            &halfword(0x9c61), // c.zext.b x8
+            &word(addi(9, 0, 3)),
+            &halfword(0x9c45),  // c.mul x8, x9
+            &word(0x0000_8537), // lui x10, 8
+            &word(addi(11, 0, 0xab)),
+            &halfword(0x890c), // c.sb x11, 0(x10)
+            &halfword(0x8100), // c.lbu x8, 0(x10)
+            &halfword(0x9002), // c.ebreak
+        ],
+    );
+    core.run(30);
+    assert_eq!(core.register(8), 0xab);
+    assert_eq!(core.register(10), 0x8000);
+    assert_eq!(core.machine_cause(), 3);
+    assert_eq!(core.machine_trap_value(), 0);
+    assert_eq!(
+        core.ram_range(0x8000, 1, false)
+            .expect("byte target should be guest RAM")[0],
+        0xab
+    );
+}
+
+#[test]
+fn tinyemu_compressed_mops_and_lui_hints_preserve_state() {
+    for instruction in (0x6081_u16..=0x6781).step_by(0x100) {
+        let mut core = core();
+        put_mixed(
+            &mut core,
+            CODE,
+            &[
+                &word(0x0000_1237), // lui x4, 1
+                &word(addi(4, 4, 0x234)),
+                &halfword(instruction),
+                &word(0x1050_0073),
+            ],
+        );
+        core.run(20);
+        assert_eq!(core.register(4), 0x1234);
+    }
+
+    let mut core = core();
+    put_mixed(&mut core, CODE, &[&halfword(0x6005), &word(0x1050_0073)]);
+    core.run(10);
+    assert_eq!(core.pc(), CODE + 6);
+}

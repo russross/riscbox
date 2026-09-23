@@ -46,8 +46,9 @@ architectural migration ledger:
     AMO word/doubleword, LR/SC, compressed control/stack behavior, Zcb,
     compressed hints, B/Zba/Zbb/word operations, MOPS/WRS/SINVAL, CSR write
     traps, and CBO permission/control behavior now execute on TinyEMU.
-*   Pending: floating-point instruction suite and the disposition of the
-    standalone SoftFP reference suite.
+*   Completed: F/D instructions now cover arithmetic, fused operations,
+    subnormal division, rounding modes and flags, NaNs, conversions, compressed
+    double memory, disabled-state traps, and the former SoftFP edge cases.
 *   Coverage gap to fill: the current Core inspection API exposes GPRs, PC,
     machine cause, and machine trap value, but not arbitrary CSRs or FPRs.
     Probes can save hidden state into guest RAM; add a narrowly scoped

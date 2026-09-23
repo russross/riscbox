@@ -8,8 +8,9 @@ Unreleased
     production C execution core. RV64 integer/M-extension results, precise
     illegal-instruction trap cause/value, PMP denial, Sstc timer wakeup,
     Sv39/SVADU/PBMT/Svnapot translation, AMO, LR/SC, and compressed illegal
-    instruction behavior, compressed control/stack, Zcb, and compressed hint
-    behavior now run as guest instruction streams;
+    instruction behavior, compressed control/stack, Zcb/hints, B/Zba/Zbb,
+    MOPS/WRS/SINVAL, CSR write traps, and CBO controls now run as guest
+    instruction streams;
     matching standalone Rust interpreter cases were removed. No production C
     execution or memory path changed.
 *   Changed browser scheduling to request immediate continuation while the

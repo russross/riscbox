@@ -225,6 +225,10 @@ fn sv39_probe(
     core
 }
 
+fn i(immediate: i32, rs1: u32, funct3: u32, rd: u32, opcode: u32) -> u32 {
+    (immediate.cast_unsigned() & 0xfff) << 20 | rs1 << 15 | funct3 << 12 | rd << 7 | opcode
+}
+
 fn add(rd: u32, rs1: u32, rs2: u32) -> u32 {
     r(0, rs2, rs1, 0, rd, 0x33)
 }
@@ -465,4 +469,201 @@ fn tinyemu_compressed_mops_and_lui_hints_preserve_state() {
     put_mixed(&mut core, CODE, &[&halfword(0x6005), &word(0x1050_0073)]);
     core.run(10);
     assert_eq!(core.pc(), CODE + 6);
+}
+
+fn csrrs(csr: u32, source: u32, destination: u32) -> u32 {
+    csr << 20 | source << 15 | 2 << 12 | destination << 7 | 0x73
+}
+
+#[test]
+fn tinyemu_advertises_b_and_executes_address_and_bit_manipulation() {
+    let mut core = core();
+    write_u64(&mut core, 0x8000, 0x8000_0000_0000_00f1);
+    put(
+        &mut core,
+        CODE,
+        &[
+            0x0000_80b7, // lui x1, 8
+            load(1, 1, 3, 0),
+            addi(2, 0, 3),
+            r(0x10, 2, 1, 2, 3, 0x33),  // sh1add
+            r(0x14, 2, 1, 1, 4, 0x33),  // bset
+            r(0x24, 2, 1, 1, 5, 0x33),  // bclr
+            r(0x34, 2, 1, 1, 6, 0x33),  // binv
+            r(0x24, 2, 1, 5, 7, 0x33),  // bext
+            r(0x20, 2, 1, 7, 8, 0x33),  // andn
+            r(0x30, 2, 1, 1, 9, 0x33),  // rol
+            r(0x05, 2, 1, 4, 10, 0x33), // min
+            csrrs(0x301, 0, 20),        // read misa
+            0x1050_0073,
+        ],
+    );
+    core.run(30);
+    assert_eq!(core.register(3), 0x1e5);
+    assert_eq!(core.register(4), 0x8000_0000_0000_00f9);
+    assert_eq!(core.register(5), 0x8000_0000_0000_00f1);
+    assert_eq!(core.register(6), 0x8000_0000_0000_00f9);
+    assert_eq!(core.register(7), 0);
+    assert_eq!(core.register(8), 0x8000_0000_0000_00f0);
+    assert_eq!(core.register(9), 0x78c);
+    assert_eq!(core.register(10), 0x8000_0000_0000_00f1);
+    assert_ne!(core.register(20) & (1 << (b'B' - b'A')), 0);
+}
+
+#[test]
+fn tinyemu_executes_word_address_bit_and_conditional_operations() {
+    let mut core = core();
+    put(
+        &mut core,
+        CODE,
+        &[
+            0x8000_00b7, // lui x1, 0x80000
+            addi(1, 1, 1),
+            addi(2, 0, 4),
+            r(0x04, 2, 1, 0, 3, 0x3b),
+            r(0x10, 2, 1, 2, 4, 0x3b),
+            r(0x04, 0, 1, 4, 5, 0x3b),
+            r(0x30, 2, 1, 1, 6, 0x3b),
+            addi(7, 0, 0x55),
+            r(0x07, 0, 7, 5, 9, 0x33),
+            r(0x07, 2, 7, 7, 10, 0x33),
+            0x1050_0073,
+        ],
+    );
+    core.run(30);
+    assert_eq!(core.register(3), 0x8000_0005);
+    assert_eq!(core.register(4), 0x1_0000_0006);
+    assert_eq!(core.register(5), 1);
+    assert_eq!(core.register(6), 0x18);
+    assert_eq!(core.register(9), 0);
+    assert_eq!(core.register(10), 0);
+}
+
+#[test]
+fn tinyemu_executes_mops_waits_and_supervisor_invalidation() {
+    let mut running = core();
+    put(&mut running, 0x9000, &[0x1050_0073]);
+    put(
+        &mut running,
+        CODE,
+        &[
+            0x0000_01b7, // lui x3, 0
+            addi(3, 0, -1),
+            0x81c2_41f3, // mop.r.0 x3,x4
+            addi(3, 0, -1),
+            0xce52_41f3, // mop.rr.7 x3,x4,x5
+            0x00d0_0073, // wrs.nto
+            0x01d0_0073, // wrs.sto
+            0x1800_0073, // sfence.w.inval
+            0x1810_0073, // sfence.inval.ir
+            0x1600_0073, // sinval.vma x0,x0
+            0x9002_0000, // reserved instruction traps after tested sequence
+        ],
+    );
+    running.run(30);
+    assert_eq!(running.register(3), 0);
+    assert_eq!(running.machine_cause(), 2);
+
+    let mut invalid = core();
+    put(&mut invalid, 0x9000, &[0x1050_0073]);
+    put(
+        &mut invalid,
+        CODE,
+        &[0x0000_92b7, csrrw(CSR_MTVEC, 5), 0x8000_41f3],
+    );
+    invalid.run(10);
+    assert_eq!(invalid.machine_cause(), 2);
+    assert_eq!(invalid.machine_trap_value(), 0x8000_41f3);
+}
+
+#[test]
+fn tinyemu_csr_read_set_traps_when_source_register_is_nonzero() {
+    let mut core = core();
+    put(&mut core, 0x9000, &[0x1050_0073]);
+    put(
+        &mut core,
+        CODE,
+        &[
+            0x0000_92b7, // lui x5, 9
+            csrrw(CSR_MTVEC, 5),
+            addi(4, 0, 0),
+            0xf112_21f3, // csrrs x3, mvendorid, x4
+        ],
+    );
+    core.run(10);
+    assert_eq!(core.machine_cause(), 2);
+}
+
+#[test]
+fn tinyemu_enforces_cache_block_controls_and_zeroes_whole_blocks() {
+    let mut core = core();
+    core.ram_range(0x8040, 64, true)
+        .expect("cache block should be guest RAM")
+        .fill(0xa5);
+    put(
+        &mut core,
+        CODE,
+        &[
+            0x0000_92b7, // lui x5, 9
+            csrrw(CSR_MTVEC, 5),
+            addi(1, 0, 8),
+            slli(1, 12), // x1 = 0x8000
+            addi(1, 1, 0x53),
+            addi(3, 0, 14),
+            slli(3, 4),
+            csrrw(CSR_MENVCFG, 3),
+            csrrs(CSR_MENVCFG, 0, 4),
+            addi(5, 0, 10),
+            slli(5, 4),
+            csrrw(0x10a, 5),
+            csrrs(0x10a, 0, 6),
+            i(4, 1, 2, 0, 0x0f), // cbo.zero
+            0x9002_0000,
+        ],
+    );
+    core.run(30);
+    assert_eq!(core.register(4) & 0xf0, 0xc0);
+    assert_eq!(core.register(6), 1 << 7);
+    assert!(
+        core.ram_range(0x8040, 64, false)
+            .expect("cache block should remain guest RAM")
+            .iter()
+            .all(|byte| *byte == 0)
+    );
+}
+
+#[test]
+fn tinyemu_checks_supervisor_cache_block_permission() {
+    let mut core = core();
+    put(&mut core, 0x9000, &[0x1050_0073]);
+    put(&mut core, 0x2000, &[i(4, 1, 2, 0, 0x0f), 0x9002_0000]);
+    put(
+        &mut core,
+        CODE,
+        &[
+            0x0000_92b7, // lui x5, 9
+            csrrw(CSR_MTVEC, 5),
+            0x0000_42b7, // lui x5, 4
+            csrrw(CSR_PMPADDR0, 5),
+            addi(6, 0, 15),
+            csrrw(CSR_PMPCFG0, 6),
+            addi(1, 0, 8),
+            slli(1, 12),
+            addi(1, 1, 0x53),
+            addi(3, 0, 14),
+            slli(3, 4),
+            csrrw(CSR_MENVCFG, 3),
+            addi(4, 0, 10),
+            slli(4, 4),
+            csrrw(0x10a, 4),
+            0x0000_22b7, // lui x5, 2
+            csrrw(CSR_MEPC, 5),
+            addi(6, 0, 1),
+            slli(6, 11),
+            csrrw(CSR_MSTATUS, 6),
+            0x3020_0073,
+        ],
+    );
+    core.run(40);
+    assert_eq!(core.machine_cause(), 2);
 }

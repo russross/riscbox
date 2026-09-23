@@ -31,9 +31,26 @@ CPU core validation
 The standalone Rust CPU, memory, and SoftFP modules still provide reference
 tests while production `Machine` execution uses `tinyemu-core/`. Migrate focused
 architectural coverage to the C core before removing the reference modules.
-The browser xv6 compile profile with the new scheduler completed in 105.333 seconds,
-against 97.400 seconds for the archived C platform. Investigate the remaining
-interpreter cost without changing the recorded guest workload.
+The saved xv6 compile profiles in `images/xv6-profile/build/profiles/` show
+105.332 seconds for `riscbox-scheduler` versus 97.400 seconds for `tinyemu`, an
+8.1% longer sampled profile in the current Riscbox WASM build. Both logs reach
+`XV6_PROFILE_BUILD_COMPLETE`; their guest timestamps at the following ext4
+read-only remount are 104.075 and 96.130 seconds, respectively. The guest
+workload and platform identification in the logs match. This is one paired
+capture, so the size of the difference still needs repeated runs to establish
+run-to-run variance.
+
+The dominant sampled function is the TinyEMU `riscv_cpu_interp_x64` loop in
+both profiles: 84.5% of Riscbox samples and 81.7% of TinyEMU samples. Riscbox
+also attributes 4.4% to `pmp_access_ok`, 1.9% to `get_phys_addr`, and 0.7% to
+`riscv64_read_slow`; together with other non-interpreter C frames these appear
+to be costs around the same core rather than Rust platform or JavaScript
+overhead. The archived TinyEMU profile reports most C work under the opaque
+`wasm-function[275]` frame, so it cannot support a direct function-by-function
+comparison. The idle share is similar (6.7% Riscbox, 7.8% TinyEMU), and file
+buffer callbacks account for less than 0.5% in TinyEMU. Follow up by repeating
+the paired capture and resolving/minifying symbol attribution for the archived
+module before choosing an optimization target. Keep the guest workload fixed.
 
 Candidate work
 --------------

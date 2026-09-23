@@ -298,3 +298,66 @@ fn tinyemu_sv39_requires_pbmt_enable_and_maps_napot_pages() {
     );
     assert_eq!(napot.register(2), 0xfedc_ba98_7654_3210);
 }
+
+fn amo(operation: u32, rs2: u32, rs1: u32, width: u32, rd: u32) -> u32 {
+    operation << 27 | rs2 << 20 | rs1 << 15 | width << 12 | rd << 7 | 0x2f
+}
+
+#[test]
+fn tinyemu_atomic_word_and_doubleword_operations_return_old_values() {
+    let mut core = core();
+    write_u64(&mut core, 0x8000, 0xffff_fffe);
+    put(
+        &mut core,
+        CODE,
+        &[
+            0x0000_80b7, // lui x1, 8
+            addi(2, 0, 5),
+            amo(0, 2, 1, 2, 3),
+            addi(2, 0, 9),
+            amo(1, 2, 1, 3, 4),
+            0x1050_0073,
+        ],
+    );
+    core.run(20);
+    assert_eq!(core.register(3), u64::MAX - 1);
+    assert_eq!(core.register(4), 3);
+    assert_eq!(read_u64(&mut core, 0x8000), 9);
+}
+
+#[test]
+fn tinyemu_lr_sc_tracks_reservation_address_and_width() {
+    let mut core = core();
+    write_u64(&mut core, 0x8000, 0x8000_0000);
+    put(
+        &mut core,
+        CODE,
+        &[
+            0x0000_80b7, // lui x1, 8
+            0x1234_5137, // lui x2, 0x12345
+            addi(2, 2, 0x678),
+            amo(2, 0, 1, 2, 3),
+            amo(3, 2, 1, 2, 4),
+            amo(3, 2, 1, 2, 5),
+            0x1050_0073,
+        ],
+    );
+    core.run(20);
+    assert_eq!(core.register(3), 0xffff_ffff_8000_0000);
+    assert_eq!(core.register(4), 0);
+    assert_eq!(core.register(5), 1);
+    assert_eq!(read_u64(&mut core, 0x8000), 0x1234_5678);
+}
+
+#[test]
+fn tinyemu_compressed_reserved_encoding_traps() {
+    let mut core = core();
+    put(&mut core, 0x9000, &[0x1050_0073]);
+    put(&mut core, CODE, &[0x0000_92b7, csrrw(CSR_MTVEC, 5)]);
+    core.ram_range(CODE + 8, 2, true)
+        .expect("compressed instruction range should be guest RAM")
+        .copy_from_slice(&0_u16.to_le_bytes());
+    core.run(10);
+    assert_eq!(core.machine_cause(), 2);
+    assert_eq!(core.machine_trap_value(), 0);
+}

@@ -6,8 +6,9 @@ Unreleased
 
 *   Began migrating CPU architectural tests onto TinyEMU-owned RAM and the
     production C execution core. RV64 integer/M-extension results, precise
-    illegal-instruction trap cause/value, PMP denial, Sstc timer wakeup, and
-    Sv39/SVADU/PBMT/Svnapot translation now run as guest instruction streams;
+    illegal-instruction trap cause/value, PMP denial, Sstc timer wakeup,
+    Sv39/SVADU/PBMT/Svnapot translation, AMO, LR/SC, and compressed illegal
+    instruction behavior now run as guest instruction streams;
     matching standalone Rust interpreter cases were removed. No production C
     execution or memory path changed.
 *   Changed browser scheduling to request immediate continuation while the

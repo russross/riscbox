@@ -42,10 +42,11 @@ interpreter cases have been removed. The Rust-only fast-path tests describe
 implementation details and will be retired rather than recreated. Remaining
 architectural migration ledger:
 
-*   Completed: integer/M, precise traps, PMP, Sstc, and the former
-    `cpu_foundation.rs` Sv39/SVADU/PBMT/Svnapot probes now execute on TinyEMU.
-*   Pending: atomic/compressed, scalar extensions, and floating-point
-    instruction suites.
+*   Completed: integer/M, precise traps, PMP, Sstc, Sv39/SVADU/PBMT/Svnapot,
+    AMO word/doubleword, LR/SC, and reserved compressed-instruction probes now
+    execute on TinyEMU.
+*   Pending: other compressed instructions, scalar extensions, and
+    floating-point instruction suites.
 *   Coverage gap to fill: the current Core inspection API exposes GPRs, PC,
     machine cause, and machine trap value, but not arbitrary CSRs or FPRs.
     Probes can save hidden state into guest RAM; add a narrowly scoped

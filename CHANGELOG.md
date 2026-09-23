@@ -4,6 +4,10 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Load raw or gzip-compressed kernels at the existing boot address, with
+    decompressed size bounded by the RAM and initrd layout. Image deployments
+    now publish `gzip -9` kernels under names derived from the uncompressed
+    kernel hash; QEMU image preparation continues to use the raw kernel.
 *   Migrated architectural CPU, privileged, memory-translation, atomic,
     compressed, scalar-extension, and floating-point probes to guest programs
     executed by `tinyemu-core` in `tests/tinyemu_architecture.rs`. Added TinyEMU-owned RAM tests for bounds,

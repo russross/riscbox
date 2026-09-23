@@ -42,9 +42,10 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
-kernel_name=linux-$(sha256sum "$KERNEL_IMAGE" | cut -c 1-8)
+kernel_name=linux-$(sha256sum "$KERNEL_IMAGE" | cut -c 1-8).gz
 bios_name=fw_jump.bin-$(sha256sum "$OPENSBI" | cut -c 1-8)
-install -m 644 "$KERNEL_IMAGE" "$stage_dir/$kernel_name"
+gzip -9 -n -c "$KERNEL_IMAGE" > "$stage_dir/$kernel_name"
+chmod 644 "$stage_dir/$kernel_name"
 install -m 644 "$OPENSBI" "$stage_dir/$bios_name"
 install -m 644 "$ROOT_DIR/js/riscbox.js" "$stage_dir/riscbox.js"
 mkdir -p "$stage_dir/p9"

@@ -10,7 +10,9 @@ Files
 *   `riscbox.js` and `riscbox.wasm` are the emulator runtime.
 *   `riscbox.cfg` describes the virtual machine. Boot paths are relative to
     this file.
-*   `fw_jump.bin-HASH` is OpenSBI firmware and `linux-HASH` is the guest kernel.
+*   `fw_jump.bin-HASH` is OpenSBI firmware and `linux-HASH.gz` is the
+    gzip-compressed guest kernel. The kernel hash identifies the uncompressed
+    image.
 *   `drive-HASH/blk.txt` describes the HTTP disk; its
     `blkNNNNNNNNN.bin` files are 256 KiB blocks. The hashes identify source
     content, so assets shared by image generations retain stable URLs.
@@ -50,7 +52,7 @@ typical disk-backed VM is:
     machine: "riscv64",
     memory_size: 256,
     bios: "fw_jump.bin-81ceef21",
-    kernel: "linux-a837bc72",
+    kernel: "linux-a837bc72.gz",
     cmdline: "root=/dev/vda rw rootfstype=ext4 console=hvc0",
     drive0: { file: "drive-827a7b2f/blk.txt" },
     console: "virtio",
@@ -171,5 +173,6 @@ current config with:
 
     ../../tools/image_deployment.py clean ./dist
 
-The cleaner only considers `drive-HASH`, `linux-HASH`, and `fw_jump.bin-HASH`
-assets. It leaves the active generation and unrelated deployment files intact.
+The cleaner only considers `drive-HASH`, `linux-HASH`, `linux-HASH.gz`, and
+`fw_jump.bin-HASH` assets. It leaves the active generation and unrelated
+deployment files intact.

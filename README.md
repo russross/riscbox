@@ -148,7 +148,8 @@ disk-backed Linux VM is:
 
 The main options are:
 
-*   `bios`, `kernel`, and optional `initrd` select raw boot payloads.
+*   `bios`, `kernel`, and optional `initrd` select boot payloads. Kernels may
+    be raw or gzip-compressed; firmware and initrds are loaded as supplied.
     `memory_size` is in MiB, and `cmdline` is passed to Linux.
 *   `console` is `virtio` by default or `uart`. `uart_output: true` mirrors
     firmware and early-kernel UART output while input stays on VirtIO.
@@ -163,9 +164,9 @@ The main options are:
     installs a frontend. Native TAP and SLIRP backends are not supported.
 
 Boot payloads are explicit. Riscbox directly loads raw OpenSBI `fw_jump.bin`, a
-raw uncompressed Linux `Image`, an optional opaque initramfs, or a flat
-bare-metal image. It does not parse ELF, PE/COFF, FIT, qcow2, or compressed
-kernel images and does not bundle OpenSBI or U-Boot.
+raw or gzip-compressed Linux `Image`, an optional opaque initramfs, or a flat
+bare-metal image. It does not parse ELF, PE/COFF, FIT, qcow2, or other
+compressed kernel formats and does not bundle OpenSBI or U-Boot.
 
 Creating an image project
 -------------------------
@@ -188,11 +189,13 @@ Use `images/bin/create-alpine-ext4` to create the filesystem,
 build scripts show the exact call order. Keep downloads and generated files
 under `build/`; the final ignored output belongs in `dist/`.
 
-The distribution builder splits the disk into HTTP-loadable blocks and gives
-boot and disk assets content-derived names. Publish new assets first and
-`riscbox.cfg` last so each VM start sees one complete generation. Static hosting
-needs ordinary `GET` requests, the `application/wasm` MIME type, and CORS when
-assets cross origins; range requests and a server application are unnecessary.
+The distribution builder splits the disk into HTTP-loadable blocks, compresses
+the kernel with `gzip -9`, and gives boot and disk assets content-derived names.
+The `.gz` kernel name uses the uncompressed kernel's hash. Publish new assets
+first and `riscbox.cfg` last so each VM start sees one complete generation.
+Static hosting needs ordinary `GET` requests, the `application/wasm` MIME type,
+and CORS when assets cross origins; range requests and a server application are
+unnecessary.
 See [images/README.md](images/README.md) for image layout and
 [images/DEPLOYMENT.md](images/DEPLOYMENT.md) for deployment details.
 

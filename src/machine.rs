@@ -1,6 +1,9 @@
 //! Composition and boot loading for the browser RISC-V virtual machine.
 
 use core::fmt;
+use std::io::Read;
+
+use flate2::read::MultiGzDecoder;
 
 use crate::browser_storage::{HttpBlockStore, HttpRequest, StorageError};
 use crate::entropy::{EntropyError, SharedEntropy, SystemEntropy};
@@ -89,6 +92,7 @@ pub enum MachineError {
     FirmwareTooLarge,
     FirmwareOverlapsKernel,
     KernelTooLarge,
+    InvalidCompressedKernel,
     KernelOverlapsInitrd,
     InitrdTooLarge,
     DeviceTreeTooLarge,
@@ -111,6 +115,7 @@ impl fmt::Display for MachineError {
                 formatter.write_str("firmware overlaps the kernel load address")
             }
             Self::KernelTooLarge => formatter.write_str("kernel does not fit in RAM"),
+            Self::InvalidCompressedKernel => formatter.write_str("invalid gzip-compressed kernel"),
             Self::KernelOverlapsInitrd => formatter.write_str("kernel overlaps initrd"),
             Self::InitrdTooLarge => formatter.write_str("initrd does not fit in RAM"),
             Self::DeviceTreeTooLarge => formatter.write_str("device tree does not fit in RAM"),
@@ -606,17 +611,31 @@ impl Machine {
     ///
     /// # Errors
     ///
-    /// Returns an error when images overlap or do not fit in guest RAM.
+    /// Returns an error when images overlap, do not fit in guest RAM, or contain
+    /// an invalid gzip-compressed kernel.
     pub fn load_boot(&mut self, images: BootImages<'_>) -> Result<BootLayout, MachineError> {
         let firmware_end =
             u64::try_from(images.firmware.len()).map_err(|_| MachineError::FirmwareTooLarge)?;
         if firmware_end > self.config.ram_size {
             return Err(MachineError::FirmwareTooLarge);
         }
-        let kernel_size = images.kernel.map_or(0, |image| image.len() as u64);
         if images.kernel.is_some() && firmware_end > KERNEL_OFFSET {
             return Err(MachineError::FirmwareOverlapsKernel);
         }
+        let initrd_offset = self.config.ram_size.div_ceil(2).min(128 << 20);
+        let kernel_limit = if images.initrd.is_some() {
+            initrd_offset
+        } else {
+            self.config.ram_size
+        }
+        .saturating_sub(KERNEL_OFFSET);
+        let decoded_kernel = images
+            .kernel
+            .filter(|image| image.starts_with(&[0x1f, 0x8b]))
+            .map(|image| decode_kernel(image, kernel_limit, images.initrd.is_some()))
+            .transpose()?;
+        let kernel = decoded_kernel.as_deref().or(images.kernel);
+        let kernel_size = kernel.map_or(0, |image| image.len() as u64);
         let kernel_end = if images.kernel.is_some() {
             KERNEL_OFFSET
                 .checked_add(kernel_size)
@@ -628,7 +647,6 @@ impl Machine {
             return Err(MachineError::KernelTooLarge);
         }
         let initrd_size = images.initrd.map_or(0, |image| image.len() as u64);
-        let initrd_offset = self.config.ram_size.div_ceil(2).min(128 << 20);
         if images.initrd.is_some() && kernel_end > initrd_offset {
             return Err(MachineError::KernelOverlapsInitrd);
         }
@@ -676,7 +694,7 @@ impl Machine {
             return Err(MachineError::DeviceTreeTooLarge);
         }
         self.copy_to_ram(RAM_BASE, images.firmware)?;
-        if let Some(kernel) = images.kernel {
+        if let Some(kernel) = kernel {
             self.copy_to_ram(RAM_BASE + KERNEL_OFFSET, kernel)?;
         }
         if let Some(initrd_image) = images.initrd {
@@ -1171,6 +1189,25 @@ impl Machine {
             .ram_view(GuestAddress(FRAMEBUFFER_BASE + u64::from(offset)), len)
             .ok()
     }
+}
+
+fn decode_kernel(image: &[u8], limit: u64, has_initrd: bool) -> Result<Vec<u8>, MachineError> {
+    // Bound decoded output before it can consume more memory than the boot
+    // layout permits. Reading one extra byte distinguishes a full region
+    // from a kernel that would cross its end.
+    let mut decoded = Vec::new();
+    MultiGzDecoder::new(image)
+        .take(limit.saturating_add(1))
+        .read_to_end(&mut decoded)
+        .map_err(|_| MachineError::InvalidCompressedKernel)?;
+    if decoded.len() as u64 > limit {
+        return Err(if has_initrd {
+            MachineError::KernelOverlapsInitrd
+        } else {
+            MachineError::KernelTooLarge
+        });
+    }
+    Ok(decoded)
 }
 
 fn offset(address: u64, base: u64) -> Result<u32, BusError> {

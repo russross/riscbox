@@ -19,8 +19,9 @@ Development priorities
     or Linux depends on it. Correct the existing platform instead of adding
     compatibility modes.
 4.  Improve image preparation only when a small loader or boot feature removes
-    material deployment friction. Prepared raw kernels and initrds remain the
-    baseline.
+    material deployment friction. Raw kernels remain the QEMU preparation
+    baseline; browser deployments use gzip-compressed kernels. Initrds remain
+    opaque.
 5.  Investigate the remaining active CPU time difference between the Rust
     platform with the TinyEMU core and the archived C platform using paired
     profiles of the same prepared guest image.
@@ -75,7 +76,7 @@ intentionally terminal-only.
 
 ### Boot and image loading
 
-Evaluate a standard bootloader path, compressed kernel loading, and other image
+Evaluate a standard bootloader path and other image
 features only against a concrete Alpine deployment problem. Linux already
 handles compressed initrds after Riscbox loads them opaquely. Any new loader
 must justify its code size and failure surface relative to image preparation.

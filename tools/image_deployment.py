@@ -41,7 +41,12 @@ def rewrite_config(source: Path, output: Path, bios: str, kernel: str, drive: st
 
 def referenced_assets(config: str) -> set[str]:
     """Return locally named content-addressed assets referenced by config."""
-    references = set(re.findall(r'"((?:drive|linux|fw_jump\.bin)-[0-9a-f]{8})(?:/blk\.txt)?"', config))
+    references = set(
+        re.findall(
+            r'"((?:drive|fw_jump\.bin)-[0-9a-f]{8}|linux-[0-9a-f]{8}(?:\.gz)?)(?:/blk\.txt)?"',
+            config,
+        )
+    )
     if len(references) != 3:
         raise ValueError("configuration must reference one hashed drive, kernel, and BIOS")
     return references

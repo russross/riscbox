@@ -9,6 +9,7 @@ path = "src/lib.rs"
 crate-type = ["rlib", "cdylib"]
 
 [dependencies]
+flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
 
 [lints.rust]
 unsafe_code = "deny"

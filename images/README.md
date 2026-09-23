@@ -67,6 +67,8 @@ Create a directory with these inputs:
 Keep downloads and generated files under `build/`. A normal build should leave
 only intentional image inputs visible to Git.
 
-The distribution builder writes content-addressed boot and disk assets and
-replaces `dist/riscbox.cfg` last. Remove superseded generations when appropriate
+The distribution builder compresses the kernel with `gzip -9` and writes
+content-addressed boot and disk assets. The kernel name uses the uncompressed
+kernel's hash with a `.gz` suffix. It replaces `dist/riscbox.cfg` last. Remove
+superseded generations when appropriate
 with `../../tools/image_deployment.py clean ./dist` from an image directory.

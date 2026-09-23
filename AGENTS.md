@@ -89,7 +89,10 @@ The generated device tree follows standard libfdt layout and QEMU `virt`
 bindings. The platform boots current xv6 over UART and VirtIO block and boots a
 prepared Alpine system through OpenSBI to login and clean shutdown. The browser
 adapter loads configuration, firmware, kernels, initrds, and split HTTP disks
-relative to the configuration URL. HTTP disk writes are session-local.
+relative to the configuration URL. Raw and gzip-compressed kernels load at the
+same guest address; decompressed output is bounded by the boot layout. Image
+deployments gzip the kernel while naming it from the uncompressed hash. HTTP
+disk writes are session-local.
 Browser execution yields after at most three million guest cycles. Runnable
 guests reschedule immediately; waiting guests sleep until the nearest CLINT,
 supervisor timer, or RTC deadline, capped at ten milliseconds.

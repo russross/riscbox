@@ -1,8 +1,17 @@
 //! Core devices for the QEMU-compatible RISC-V virtual platform.
 
-pub mod interrupts;
-
-use crate::platform::interrupts::{MIP_MEIP, MIP_SEIP};
+/// Machine software interrupt pending bit.
+pub const MIP_MSIP: u32 = 1 << 3;
+/// Machine timer interrupt pending bit.
+pub const MIP_MTIP: u32 = 1 << 7;
+/// Supervisor timer interrupt pending bit.
+pub const MIP_STIP: u32 = 1 << 5;
+/// Supervisor software interrupt pending bit.
+pub const MIP_SSIP: u32 = 1 << 1;
+/// Supervisor external interrupt pending bit.
+pub const MIP_SEIP: u32 = 1 << 9;
+/// Machine external interrupt pending bit.
+pub const MIP_MEIP: u32 = 1 << 11;
 
 pub const TEST_FINISHER_FAIL: u16 = 0x3333;
 pub const TEST_FINISHER_PASS: u16 = 0x5555;

@@ -1,5 +1,6 @@
-use riscbox::platform::interrupts::{MIP_MEIP, MIP_SEIP};
-use riscbox::platform::{Clint, FinishStatus, Finisher, GoldfishRtc, Plic, Uart16550};
+use riscbox::platform::{
+    Clint, FinishStatus, Finisher, GoldfishRtc, MIP_MEIP, MIP_SEIP, Plic, Uart16550,
+};
 
 #[test]
 fn clint_exposes_split_time_compare_and_software_interrupt() {

@@ -10,8 +10,9 @@ use crate::guest_memory::{
     AccessWidth, ArenaOffset, DeviceWidths, GuestAddress, MemoryAccess, MemoryError, RamFlags,
     RegionId,
 };
-use crate::platform::interrupts::{MIP_MSIP, MIP_MTIP};
-use crate::platform::{Clint, FinishStatus, Finisher, GoldfishRtc, Plic, Uart16550};
+use crate::platform::{
+    Clint, FinishStatus, Finisher, GoldfishRtc, MIP_MSIP, MIP_MTIP, Plic, Uart16550,
+};
 use crate::tinyemu_core::{BusError, Core, HostCallbacks, RunOutcome, RunState};
 use crate::virtio::{MMIO_SIZE, VirtioTransport};
 use crate::virtio_devices::{

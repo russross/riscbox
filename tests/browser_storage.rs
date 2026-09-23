@@ -1,4 +1,4 @@
-use riscbox::browser_storage::{HttpBlockStore, HttpFile, StorageError};
+use riscbox::browser_storage::{HttpBlockStore, StorageError};
 
 #[test]
 fn split_image_requests_relative_blocks_and_reads_across_them() {
@@ -51,14 +51,11 @@ fn writes_are_copy_on_write_and_ranges_are_checked() {
 }
 
 #[test]
-fn manifest_and_plain_http_file_validation_are_explicit() {
+fn manifest_validation_is_explicit() {
     assert!(matches!(
         HttpBlockStore::from_manifest("disk", "{block_size:3,n_block:1}", 1024),
         Err(StorageError::InvalidManifest("invalid block_size"))
     ));
-    let file = HttpFile::new("root.bin".to_owned(), None);
-    let mut data = b"plain".to_vec();
-    assert_eq!(file.decode(&mut data).expect("plain file"), b"plain");
 }
 
 #[test]

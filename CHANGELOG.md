@@ -92,7 +92,8 @@ Unreleased
 *   Replaced the legacy `file`, `socket`, and `js9p` filesystem configuration
     forms with `{ server, tag }` and a host registry of generic 9P2000.L
     servers. Removed the proprietary Rust HTTP 9p backend and command-file
-    protocol; encrypted HTTP block images still retain their crypto support.
+    protocol. The legacy encrypted HTTP filesystem helpers and their crypto
+    dependencies were later removed; split HTTP-backed block disks remain.
 *   Made VirtIO 9p concurrent. The transport retains bounded descriptor chains
     by typed request ID, accepts out-of-order reply and suppression outcomes,
     validates complete message envelopes and tags, and retires endpoint

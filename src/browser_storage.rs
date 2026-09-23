@@ -4,7 +4,6 @@ use std::collections::{BTreeMap, VecDeque};
 use std::fmt;
 
 use crate::config::{Value, parse_value};
-use crate::crypto::{CryptoError, decrypt_legacy_file};
 use crate::virtio_devices::{BlockBackend, BlockRequestStatus, DeviceError};
 
 const SECTOR_SIZE: usize = 512;
@@ -31,7 +30,6 @@ pub enum StorageError {
     UnknownRequest,
     MissingBlock(u32),
     OutOfRange,
-    Crypto(CryptoError),
 }
 
 impl fmt::Display for StorageError {
@@ -41,12 +39,6 @@ impl fmt::Display for StorageError {
 }
 
 impl std::error::Error for StorageError {}
-
-impl From<CryptoError> for StorageError {
-    fn from(error: CryptoError) -> Self {
-        Self::Crypto(error)
-    }
-}
 
 #[derive(Default)]
 pub struct HttpQueue {
@@ -356,30 +348,6 @@ impl BlockBackend for HttpBlockStore {
             Ok(()) => Ok(BlockRequestStatus::Complete),
             Err(StorageError::MissingBlock(_)) => Ok(BlockRequestStatus::Pending),
             Err(_) => Err(DeviceError::Backend),
-        }
-    }
-}
-
-pub struct HttpFile {
-    pub url: String,
-    key: Option<[u8; 16]>,
-}
-
-impl HttpFile {
-    #[must_use]
-    pub const fn new(url: String, key: Option<[u8; 16]>) -> Self {
-        Self { url, key }
-    }
-
-    /// Validates and optionally decrypts a downloaded file.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when legacy decryption fails.
-    pub fn decode<'a>(&self, data: &'a mut [u8]) -> Result<&'a [u8], StorageError> {
-        match &self.key {
-            Some(key) => Ok(decrypt_legacy_file(key, data)?),
-            None => Ok(data),
         }
     }
 }

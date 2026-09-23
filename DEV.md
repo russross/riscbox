@@ -88,6 +88,41 @@ request latency, resident and logical 9p tree sizes, and peak lazy-load memory
 only when those paths become a demonstrated bottleneck. Keep that work separate
 from the CPU interpreter optimization baseline.
 
+### WASM build rules
+
+Apply and test various standard tweaks to the Rust WASM build rules to shrink
+the binary and check for performance differences (including optimizing for
+size).
+
+### Support more boot options
+
+Stop using `fw_jump` and switch to `fw_dynamic` with appropriate platform setup changes. Fill out boot-time config options to include optional memory layout controls (kernel load location but also device placement). Make sure common configs are all supported:
+
+* OpenSBI firmware included or not (see xv6 on qemu), compressed or not
+* kernel at default/custom load location, compressed or not
+* initrd included or not, compressed or not
+* U-Boot to support booting ISO images or other plain install media with kernel/initrd in the image (OpenSBI -> U-Boot, which finds the attached image and finds its GRUB or whatever and boots)
+* multiple attached block devices: http drive or plain supplied image, the latter with readonly, CoW, or mutable options
+
+### More controls from the host
+
+Audit and improve hooks for the host app to control the guest:
+
+* Hard reboot with same initial boot setup (discard CoW block device changes, 9p server is outside the machine so it is unaffected)
+* Reboot with CoW block device changes intact
+* Suspend/resume
+* Shutdown request (signals OS so it can flush buffers and shut down gracefully), then frees up resources
+* Hard kill
+* Lower CPU use mode (sleep delays between timeslices), with ability for the host to adjust it
+
+### WASI integration
+
+Examine what the WASI platform offers and see if deeper support/integration is attractive or not.
+
+### Debugger support
+
+Add qemu-like debugger hooks. This would probably require a lot of planning and work, but a potential use case would be debugging an xv6 kernel, maybe even from another riscbox instance running linux on the same page.
+
 Design and milestone format
 ---------------------------
 

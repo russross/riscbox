@@ -163,6 +163,15 @@ fn write_u64(core: &mut Core, address: u64, value: u64) {
         .copy_from_slice(&value.to_le_bytes());
 }
 
+fn read_u32(core: &mut Core, address: u64) -> u32 {
+    u32::from_le_bytes(
+        core.ram_range(address, 4, false)
+            .expect("four-byte read")
+            .try_into()
+            .expect("four-byte range"),
+    )
+}
+
 fn read_u64(core: &mut Core, address: u64) -> u64 {
     u64::from_le_bytes(
         core.ram_range(address, 8, false)
@@ -191,7 +200,7 @@ fn sv39_probe(
     write_u64(&mut core, data_address, data);
     put(&mut core, 0x9000, &[0x1050_0073]);
 
-    let mut code = vec![
+    let mut instructions = vec![
         0x0000_92b7, // lui x5, 9
         csrrw(CSR_MTVEC, 5),
         0x0000_42b7, // lui x5, 4
@@ -204,23 +213,23 @@ fn sv39_probe(
         csrrw(CSR_SATP, 3),
     ];
     if adue || pbmte {
-        code.extend([addi(4, 0, 1), slli(4, 31), slli(4, 30)]);
+        instructions.extend([addi(4, 0, 1), slli(4, 31), slli(4, 30)]);
         if pbmte {
-            code.extend([addi(7, 0, 1), slli(7, 31), slli(7, 31), add(4, 4, 7)]);
+            instructions.extend([addi(7, 0, 1), slli(7, 31), slli(7, 31), add(4, 4, 7)]);
         }
-        code.push(csrrw(CSR_MENVCFG, 4));
+        instructions.push(csrrw(CSR_MENVCFG, 4));
     }
-    code.extend([
+    instructions.extend([
         0x0002_12b7, // lui x5, 0x21
         addi(5, 5, -2048),
         csrrw(CSR_MSTATUS, 5),
         0x4000_00b7, // lui x1, 0x40000
     ]);
     if virtual_address != 0x4000_0000 {
-        code.extend([0x0000_33b7, add(1, 1, 7)]); // add a low-page offset
+        instructions.extend([0x0000_33b7, add(1, 1, 7)]); // add a low-page offset
     }
-    code.extend([load(2, 1, 3, 0), 0x1050_0073]);
-    put(&mut core, CODE, &code);
+    instructions.extend([load(2, 1, 3, 0), 0x1050_0073]);
+    put(&mut core, CODE, &instructions);
     core.run(40);
     core
 }
@@ -676,8 +685,8 @@ fn fs(funct7: u32, rs3: u32, rs2: u32, rs1: u32, rd: u32, opcode: u32) -> u32 {
     rs3 << 27 | funct7 << 25 | rs2 << 20 | rs1 << 15 | rd << 7 | opcode
 }
 
-fn enable_fp(code: &mut Vec<u32>) {
-    code.extend([addi(5, 0, 3), slli(5, 13), csrrw(CSR_MSTATUS, 5)]);
+fn enable_fp(instructions: &mut Vec<u32>) {
+    instructions.extend([addi(5, 0, 3), slli(5, 13), csrrw(CSR_MSTATUS, 5)]);
 }
 
 fn fsw(source: u32, base: u32, offset: i32) -> u32 {
@@ -695,9 +704,9 @@ fn tinyemu_loads_stores_and_runs_basic_single_and_double_fp_operations() {
     let mut core = core();
     write_u64(&mut core, 0x8000, 1.5_f32.to_bits().into());
     write_u64(&mut core, 0x8008, 2.25_f64.to_bits());
-    let mut code = vec![0x0000_80b7]; // lui x1, 8
-    enable_fp(&mut code);
-    code.extend([
+    let mut instructions = vec![0x0000_80b7]; // lui x1, 8
+    enable_fp(&mut instructions);
+    instructions.extend([
         i(0, 1, 2, 2, 0x07),  // flw f2,0(x1)
         i(8, 1, 3, 3, 0x07),  // fld f3,8(x1)
         fp(0x00, 2, 2, 0, 4), // fadd.s f4,f2,f2
@@ -706,18 +715,18 @@ fn tinyemu_loads_stores_and_runs_basic_single_and_double_fp_operations() {
         fsd(5, 1, 24),
         0x1050_0073,
     ]);
-    put(&mut core, CODE, &code);
+    put(&mut core, CODE, &instructions);
     core.run(30);
-    assert_eq!(read_u64(&mut core, 0x8010) as u32, 3.0_f32.to_bits());
+    assert_eq!(read_u32(&mut core, 0x8010), 3.0_f32.to_bits());
     assert_eq!(read_u64(&mut core, 0x8018), 5.0625_f64.to_bits());
 }
 
 #[test]
 fn tinyemu_fp_csrs_nan_boxing_and_extension_bits_follow_architecture() {
     let mut core = core();
-    let mut code = Vec::new();
-    enable_fp(&mut code);
-    code.extend([
+    let mut instructions = Vec::new();
+    enable_fp(&mut instructions);
+    instructions.extend([
         csrrs(0x301, 0, 20),
         addi(6, 0, 0x7b),
         csrrw(0x003, 6),
@@ -731,12 +740,12 @@ fn tinyemu_fp_csrs_nan_boxing_and_extension_bits_follow_architecture() {
         fsw(4, 10, 0),
         0x1050_0073,
     ]);
-    put(&mut core, CODE, &code);
+    put(&mut core, CODE, &instructions);
     core.run(30);
     assert_eq!(core.register(20) & ((1 << 3) | (1 << 5)), 0x28);
     assert_eq!(core.register(7), 3);
     assert_eq!(core.register(8), 0x1b);
-    assert_eq!(read_u64(&mut core, 0x8000) as u32, 0x7fc0_0000);
+    assert_eq!(read_u32(&mut core, 0x8000), 0x7fc0_0000);
 }
 
 #[test]
@@ -744,9 +753,9 @@ fn tinyemu_sign_compare_class_and_conversion_instructions_cover_both_formats() {
     let mut core = core();
     write_u64(&mut core, 0x8000, 1.5_f32.to_bits().into());
     write_u64(&mut core, 0x8004, (-2.0_f32).to_bits().into());
-    let mut code = vec![0x0000_80b7];
-    enable_fp(&mut code);
-    code.extend([
+    let mut instructions = vec![0x0000_80b7];
+    enable_fp(&mut instructions);
+    instructions.extend([
         i(0, 1, 2, 1, 0x07),
         i(4, 1, 2, 2, 0x07),
         fp(0x10, 2, 1, 1, 3), // fsgnjn.s
@@ -764,10 +773,10 @@ fn tinyemu_sign_compare_class_and_conversion_instructions_cover_both_formats() {
         0x1050_0073,
     ]);
     // Capture integer comparison/class/conversion results as guest memory.
-    *code.last_mut().expect("store placeholder") = store(4, 1, 2, 32);
-    put(&mut core, CODE, &code);
+    *instructions.last_mut().expect("store placeholder") = store(4, 1, 2, 32);
+    put(&mut core, CODE, &instructions);
     core.run(40);
-    assert_eq!(read_u64(&mut core, 0x8010) as u32, 1.5_f32.to_bits());
+    assert_eq!(read_u32(&mut core, 0x8010), 1.5_f32.to_bits());
     assert_eq!(read_u64(&mut core, 0x8018), 1.5_f64.to_bits());
     assert_eq!(core.register(4), 1);
     assert_eq!(core.register(5), 1 << 1);
@@ -782,9 +791,9 @@ fn tinyemu_fused_sqrt_min_max_and_compressed_double_memory_execute() {
     write_u64(&mut core, 0x8008, 3.0_f64.to_bits());
     write_u64(&mut core, 0x8010, 4.0_f64.to_bits());
     write_u64(&mut core, 0x8100, 7.5_f64.to_bits());
-    let mut code = vec![0x0000_80b7];
-    enable_fp(&mut code);
-    code.extend([
+    let mut instructions = vec![0x0000_80b7];
+    enable_fp(&mut instructions);
+    instructions.extend([
         i(0, 1, 3, 1, 0x07),
         i(8, 1, 3, 2, 0x07),
         i(16, 1, 3, 3, 0x07),
@@ -799,7 +808,7 @@ fn tinyemu_fused_sqrt_min_max_and_compressed_double_memory_execute() {
         0x0000_8437, // lui x8,8
     ]);
     let mut bytes = Vec::new();
-    for instruction in &code {
+    for instruction in &instructions {
         bytes.extend_from_slice(&instruction.to_le_bytes());
     }
     bytes.extend_from_slice(&halfword(0x2004)); // c.fld f9,0(x8)
@@ -834,10 +843,10 @@ fn tinyemu_traps_when_fp_is_disabled_or_dynamic_rounding_is_reserved() {
 
     let mut reserved = core();
     put(&mut reserved, 0x9000, &[0x1050_0073]);
-    let mut code = vec![0x0000_92b7, csrrw(CSR_MTVEC, 5)];
-    enable_fp(&mut code);
-    code.extend([addi(6, 0, 5), csrrw(0x002, 6), fp(0x00, 2, 1, 7, 3)]);
-    put(&mut reserved, CODE, &code);
+    let mut instructions = vec![0x0000_92b7, csrrw(CSR_MTVEC, 5)];
+    enable_fp(&mut instructions);
+    instructions.extend([addi(6, 0, 5), csrrw(0x002, 6), fp(0x00, 2, 1, 7, 3)]);
+    put(&mut reserved, CODE, &instructions);
     reserved.run(20);
     assert_eq!(reserved.machine_cause(), 2);
 }
@@ -851,9 +860,9 @@ fn tinyemu_fused_arithmetic_preserves_tiny_products_and_cancellation() {
     write_u64(&mut core, 0x8018, 0x3ff0_0000_0000_0001);
     write_u64(&mut core, 0x8020, 0x3fef_ffff_ffff_fffe);
     write_u64(&mut core, 0x8028, 0xbff0_0000_0000_0000);
-    let mut code = vec![0x0000_80b7];
-    enable_fp(&mut code);
-    code.extend([
+    let mut instructions = vec![0x0000_80b7];
+    enable_fp(&mut instructions);
+    instructions.extend([
         i(0, 1, 3, 1, 0x07),
         i(8, 1, 3, 2, 0x07),
         i(16, 1, 3, 3, 0x07),
@@ -866,7 +875,7 @@ fn tinyemu_fused_arithmetic_preserves_tiny_products_and_cancellation() {
         fsd(4, 1, 56),
         0x1050_0073,
     ]);
-    put(&mut core, CODE, &code);
+    put(&mut core, CODE, &instructions);
     core.run(40);
     assert_eq!(read_u64(&mut core, 0x8030), 0x0df0_0000_0000_0000);
     assert_eq!(read_u64(&mut core, 0x8038), 0xb970_0000_0000_0000);
@@ -878,9 +887,9 @@ fn tinyemu_fp_rounding_modes_and_sticky_exception_flags_are_observable() {
     write_u64(&mut core, 0x8000, 1.0_f32.to_bits().into());
     write_u64(&mut core, 0x8004, 2.0_f32.powi(-25).to_bits().into());
     write_u64(&mut core, 0x8008, 0);
-    let mut code = vec![0x0000_80b7];
-    enable_fp(&mut code);
-    code.extend([
+    let mut instructions = vec![0x0000_80b7];
+    enable_fp(&mut instructions);
+    instructions.extend([
         i(0, 1, 2, 1, 0x07),
         i(4, 1, 2, 2, 0x07),
         i(8, 1, 2, 3, 0x07),
@@ -893,11 +902,11 @@ fn tinyemu_fp_rounding_modes_and_sticky_exception_flags_are_observable() {
         csrrs(0x001, 0, 7),
         0x1050_0073,
     ]);
-    put(&mut core, CODE, &code);
+    put(&mut core, CODE, &instructions);
     core.run(40);
-    assert_eq!(read_u64(&mut core, 0x8010) as u32, 1.0_f32.to_bits());
-    assert_eq!(read_u64(&mut core, 0x8014) as u32, 1.0_f32.to_bits() + 1);
-    assert_eq!(read_u64(&mut core, 0x8018) as u32, f32::INFINITY.to_bits());
+    assert_eq!(read_u32(&mut core, 0x8010), 1.0_f32.to_bits());
+    assert_eq!(read_u32(&mut core, 0x8014), 1.0_f32.to_bits() + 1);
+    assert_eq!(read_u32(&mut core, 0x8018), f32::INFINITY.to_bits());
     assert_eq!(core.register(7), 1 | 8);
 }
 
@@ -907,9 +916,9 @@ fn tinyemu_nan_comparisons_minimum_and_classification_follow_riscv() {
     write_u64(&mut core, 0x8000, 0x7fc0_0001);
     write_u64(&mut core, 0x8004, 0x7f80_0001);
     write_u64(&mut core, 0x8008, 1.0_f32.to_bits().into());
-    let mut code = vec![0x0000_80b7];
-    enable_fp(&mut code);
-    code.extend([
+    let mut instructions = vec![0x0000_80b7];
+    enable_fp(&mut instructions);
+    instructions.extend([
         i(0, 1, 2, 1, 0x07),
         i(4, 1, 2, 2, 0x07),
         i(8, 1, 2, 3, 0x07),
@@ -923,10 +932,10 @@ fn tinyemu_nan_comparisons_minimum_and_classification_follow_riscv() {
         csrrs(0x001, 0, 9),
         0x1050_0073,
     ]);
-    put(&mut core, CODE, &code);
+    put(&mut core, CODE, &instructions);
     core.run(40);
-    assert_eq!(read_u64(&mut core, 0x8010) as u32, 1.0_f32.to_bits());
-    assert_eq!(read_u64(&mut core, 0x8014) as u32, 1.0_f32.to_bits());
+    assert_eq!(read_u32(&mut core, 0x8010), 1.0_f32.to_bits());
+    assert_eq!(read_u32(&mut core, 0x8014), 1.0_f32.to_bits());
     assert_eq!(core.register(6), 0);
     assert_eq!(core.register(7), 0);
     assert_eq!(core.register(8), 1 << 8);
@@ -938,16 +947,16 @@ fn tinyemu_double_division_normalizes_subnormal_operands() {
     let mut core = core();
     write_u64(&mut core, 0x8000, 1);
     write_u64(&mut core, 0x8008, 0x0010_0000_0000_0001);
-    let mut code = vec![0x0000_80b7];
-    enable_fp(&mut code);
-    code.extend([
+    let mut instructions = vec![0x0000_80b7];
+    enable_fp(&mut instructions);
+    instructions.extend([
         i(0, 1, 3, 1, 0x07),
         i(8, 1, 3, 2, 0x07),
         fp(0x0d, 2, 1, 0, 3), // fdiv.d
         fsd(3, 1, 16),
         0x1050_0073,
     ]);
-    put(&mut core, CODE, &code);
+    put(&mut core, CODE, &instructions);
     core.run(30);
     assert_eq!(read_u64(&mut core, 0x8010), 0x3caf_ffff_ffff_fffe);
 }
@@ -957,9 +966,9 @@ fn tinyemu_float_integer_and_format_conversions_cover_rounding_boundaries() {
     let mut core = core();
     write_u64(&mut core, 0x8000, 2.5_f32.to_bits().into());
     write_u64(&mut core, 0x8008, 1.5_f64.to_bits());
-    let mut code = vec![0x0000_80b7];
-    enable_fp(&mut code);
-    code.extend([
+    let mut instructions = vec![0x0000_80b7];
+    enable_fp(&mut instructions);
+    instructions.extend([
         i(0, 1, 2, 1, 0x07),
         i(8, 1, 3, 2, 0x07),
         fp(0x60, 0, 1, 0, 4), // fcvt.w.s near-even
@@ -975,13 +984,13 @@ fn tinyemu_float_integer_and_format_conversions_cover_rounding_boundaries() {
         fsd(5, 1, 24),
         0x1050_0073,
     ]);
-    put(&mut core, CODE, &code);
+    put(&mut core, CODE, &instructions);
     core.run(40);
     assert_eq!(core.register(4), 2);
     assert_eq!(core.register(5), 3);
-    assert_eq!(read_u64(&mut core, 0x8010) as u32, 1.5_f32.to_bits());
+    assert_eq!(read_u32(&mut core, 0x8010), 1.5_f32.to_bits());
     assert_eq!(
-        read_u64(&mut core, 0x8014) as u32,
+        read_u32(&mut core, 0x8014),
         (-9_223_372_036_854_775_808.0_f32).to_bits()
     );
     assert_eq!(read_u64(&mut core, 0x8018), 0x43ef_ffff_ffff_ffff);

@@ -1,5 +1,5 @@
-use riscbox::guest_memory::{AccessWidth, GuestAddress, RamFlags};
-use riscbox::memory::PhysicalMemory;
+use riscbox::guest_memory::{AccessWidth, GuestAddress, MemoryAccess, MemoryError};
+use riscbox::tinyemu_core::Core;
 use riscbox::virtio::{DescriptorIndex, QueueError, QueueIndex, VERSION_1, VirtioTransport};
 
 const RAM: u64 = 0x8000_0000;
@@ -7,30 +7,82 @@ const DESC: u64 = RAM + 0x1000;
 const AVAIL: u64 = RAM + 0x2000;
 const USED: u64 = RAM + 0x3000;
 
-fn memory() -> PhysicalMemory {
-    let mut memory = PhysicalMemory::new();
-    memory
-        .register_ram(GuestAddress(RAM), 0x8000, RamFlags::default())
-        .unwrap();
-    memory
+struct TestRam(Core);
+
+impl TestRam {
+    fn new() -> Self {
+        let mut core = Core::new().expect("TinyEMU core allocation");
+        core.register_ram(RAM, 0x8000, 0)
+            .expect("guest RAM registration");
+        Self(core)
+    }
+
+    fn range(
+        &mut self,
+        address: GuestAddress,
+        len: usize,
+        write: bool,
+    ) -> Result<&mut [u8], MemoryError> {
+        self.0
+            .ram_range(address.0, len, write)
+            .ok_or(MemoryError::Unmapped(address))
+    }
+}
+
+impl MemoryAccess for TestRam {
+    fn read(&mut self, address: GuestAddress, width: AccessWidth) -> Result<u64, MemoryError> {
+        let mut bytes = [0; 8];
+        let len = width.bytes();
+        bytes[..len].copy_from_slice(self.range(address, len, false)?);
+        Ok(u64::from_le_bytes(bytes))
+    }
+
+    fn write(
+        &mut self,
+        address: GuestAddress,
+        width: AccessWidth,
+        value: u64,
+    ) -> Result<(), MemoryError> {
+        let len = width.bytes();
+        self.range(address, len, true)?
+            .copy_from_slice(&value.to_le_bytes()[..len]);
+        Ok(())
+    }
+
+    fn validate_ram(
+        &mut self,
+        address: GuestAddress,
+        len: usize,
+        write: bool,
+    ) -> Result<(), MemoryError> {
+        self.range(address, len, write).map(|_| ())
+    }
+
+    fn read_bytes(&mut self, address: GuestAddress, bytes: &mut [u8]) -> Result<(), MemoryError> {
+        bytes.copy_from_slice(self.range(address, bytes.len(), false)?);
+        Ok(())
+    }
+
+    fn write_bytes(&mut self, address: GuestAddress, bytes: &[u8]) -> Result<(), MemoryError> {
+        self.range(address, bytes.len(), true)?
+            .copy_from_slice(bytes);
+        Ok(())
+    }
+}
+
+fn memory() -> TestRam {
+    TestRam::new()
 }
 
 fn transport() -> VirtioTransport {
     VirtioTransport::new(2, 1 << 9, &[8])
 }
 
-fn write(memory: &mut PhysicalMemory, address: u64, width: AccessWidth, value: u64) {
-    memory.write(GuestAddress(address), width, value).unwrap();
+fn write(memory: &mut TestRam, address: u64, width: AccessWidth, value: u64) {
+    MemoryAccess::write(memory, GuestAddress(address), width, value).unwrap();
 }
 
-fn descriptor(
-    memory: &mut PhysicalMemory,
-    index: u16,
-    address: u64,
-    len: u32,
-    flags: u16,
-    next: u16,
-) {
+fn descriptor(memory: &mut TestRam, index: u16, address: u64, len: u32, flags: u16, next: u16) {
     let base = DESC + u64::from(index) * 16;
     write(memory, base, AccessWidth::DoubleWord, address);
     write(memory, base + 8, AccessWidth::Word, u64::from(len));
@@ -137,7 +189,10 @@ fn fragmented_chain_copies_and_publishes_used_entry() {
             .unwrap(),
         0
     );
-    assert_eq!(&memory.arena()[0x6001..0x6005], b"WXYZ");
+    assert_eq!(
+        memory.range(GuestAddress(RAM + 0x6001), 4, false).unwrap(),
+        b"WXYZ"
+    );
     device
         .complete_chain(&mut memory, QueueIndex(0), &chain, 4)
         .unwrap();

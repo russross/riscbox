@@ -57,10 +57,6 @@ impl RamFlags {
         self.0 & bit != 0
     }
 
-    pub(crate) const fn without(self, bit: u8) -> Self {
-        Self(self.0 & !bit)
-    }
-
     pub(crate) const fn bits(self) -> u8 {
         self.0
     }

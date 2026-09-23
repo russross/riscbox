@@ -38,14 +38,14 @@ Repository map and terminology
 
 *   `src/` owns the Rust machine, devices, configuration, storage, browser
     runtime, and the typed boundary to the C core. `guest_memory.rs` owns the
-    shared memory API and TinyEMU RAM bridge. Standalone Rust CPU, physical
-    memory, and SoftFP implementations remain only as reference test surfaces.
+    shared memory API and TinyEMU RAM bridge. No parallel Rust CPU, SoftFP, or
+    physical-memory implementation remains.
 *   `tinyemu-core/` is the active freestanding TinyEMU CPU, SoftFP, and physical
     memory implementation. `build.rs` compiles it with Clang for native and
     raw WASM targets.
 *   `riscbox-wasm/` supplies the small stable raw WASM export surface. Keep
     unsafe ABI code isolated there. Main-crate unsafe code is confined to the
-    fixed-arena access and TinyEMU FFI modules.
+    TinyEMU FFI module.
 *   `js/riscbox.js` is the dependency-free browser adapter for the raw ABI.
 *   `js/network/` is the typed WebSocket Ethernet frontend and protocol.
 *   `js/p9/` is the authoritative TypeScript 9P2000.L server, shared in-memory
@@ -83,8 +83,7 @@ Rust global allocator. Rust owns platform devices and handles MMIO callbacks.
 Shared callback errors and run outcomes live at the TinyEMU boundary, while
 interrupt masks live with the platform and memory access types live with the
 TinyEMU RAM bridge. The C core is compiled without a C runtime, Emscripten, or
-WASI. The standalone Rust interpreter and physical-memory model remain for
-focused reference tests, not machine execution.
+WASI. Rust has no parallel CPU, SoftFP, or physical-memory implementation.
 
 The generated device tree follows standard libfdt layout and QEMU `virt`
 bindings. The platform boots current xv6 over UART and VirtIO block and boots a
@@ -112,8 +111,7 @@ Architecture rules
     only when investigating lineage.
 *   Keep guest virtual and physical addresses as `u64`. Keep allocation,
     JavaScript calls, and uncommon checks out of cached C CPU and RAM paths.
-*   Keep unsafe Rust confined to the fixed-arena access and TinyEMU FFI
-    modules. Document ownership, arena stability, and mutable aliasing
+*   Keep unsafe Rust confined to the TinyEMU FFI module. Document ownership, arena stability, and mutable aliasing
     invariants at each unsafe block.
 *   Keep architectural state and host interfaces strongly typed. Favor concrete
     device ownership, shallow control flow, explicit dependencies, and immutable

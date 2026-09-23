@@ -42,12 +42,7 @@ mod ffi {
     unsafe extern "C" {
         fn tinyemu_core_create() -> *mut CoreState;
         fn tinyemu_core_destroy(core: *mut CoreState);
-        fn tinyemu_core_register_ram(
-            core: *mut CoreState,
-            base: u64,
-            len: u64,
-            flags: i32,
-        ) -> i32;
+        fn tinyemu_core_register_ram(core: *mut CoreState, base: u64, len: u64, flags: i32) -> i32;
         fn tinyemu_core_register_device(
             core: *mut CoreState,
             base: u64,
@@ -115,15 +110,15 @@ mod ffi {
 
         pub fn register_ram(&mut self, base: u64, len: u64, flags: i32) -> Option<usize> {
             // SAFETY: The handle points to the live C core owned by Machine.
-            let region = unsafe { tinyemu_core_register_ram(self.state.as_ptr(), base, len, flags) };
+            let region =
+                unsafe { tinyemu_core_register_ram(self.state.as_ptr(), base, len, flags) };
             usize::try_from(region).ok()
         }
 
         pub fn register_device(&mut self, base: u64, len: u64, widths: i32) -> Option<usize> {
             // SAFETY: The handle points to the live C core owned by Machine.
-            let region = unsafe {
-                tinyemu_core_register_device(self.state.as_ptr(), base, len, widths)
-            };
+            let region =
+                unsafe { tinyemu_core_register_device(self.state.as_ptr(), base, len, widths) };
             usize::try_from(region).ok()
         }
 
@@ -170,6 +165,16 @@ mod ffi {
 
         pub fn register_device(&mut self, base: u64, len: u64, widths: i32) -> Option<usize> {
             self.handle().register_device(base, len, widths)
+        }
+
+        /// Returns and clears the dirty-page snapshot for a registered RAM region.
+        pub fn take_dirty(&mut self, region: usize, count: usize) -> Option<Vec<u32>> {
+            self.handle().take_dirty(region, count)
+        }
+
+        /// Clears one dirty-page marker in a registered RAM region.
+        pub fn clear_dirty(&mut self, region: usize, offset: u64) -> bool {
+            self.handle().clear_dirty(region, offset)
         }
 
         pub fn ram_range(&mut self, address: u64, len: usize, write: bool) -> Option<&mut [u8]> {
@@ -366,5 +371,5 @@ mod ffi {
     }
 }
 
-pub use ffi::{Core, HostCallbacks, RunResult};
 pub(crate) use ffi::CoreHandle;
+pub use ffi::{Core, HostCallbacks, RunResult};

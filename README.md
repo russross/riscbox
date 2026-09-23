@@ -121,10 +121,9 @@ filtering, and any required NAT, DNS, or DHCP.
 
 The root Rust crate exposes the machine, device, configuration, storage, and
 browser-runtime modules for focused testing and custom Rust-side integration.
-`guest_memory` contains the shared guest-memory types and TinyEMU RAM bridge;
-`memory` retains the standalone Rust physical-memory reference model during
-its removal. The crate is not published on crates.io, and the stable deployment
-boundary is the raw WASM ABI wrapped by `js/riscbox.js`.
+`guest_memory` contains the shared guest-memory types and TinyEMU RAM bridge.
+The crate is not published on crates.io. Its stable deployment boundary is the
+raw WASM ABI wrapped by `js/riscbox.js`.
 
 VM configuration
 ----------------

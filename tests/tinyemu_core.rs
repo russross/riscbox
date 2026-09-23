@@ -59,3 +59,38 @@ fn c_core_routes_device_accesses_without_leaving_the_slice() {
     assert_eq!(device.reads, [(0x1000_0000, 4)]);
     assert_eq!(device.writes, [(0x1000_0004, 4, 0x1234_5678)]);
 }
+
+#[test]
+fn c_core_ram_bounds_read_only_flags_and_region_validation() {
+    let mut core = Core::new().expect("C core allocation");
+    assert!(core.register_ram(0x8000_0000, 0, 0).is_none());
+    assert!(core.register_ram(0x8000_0000, 0x1001, 0).is_none());
+    assert!(core.register_ram(u64::MAX - 0xfff, 0x2000, 0).is_none());
+
+    core.register_ram(0x8000_0000, 0x2000, 0)
+        .expect("writable RAM");
+    core.register_ram(0x9000_0000, 0x1000, 1)
+        .expect("read-only RAM");
+    assert!(core.ram_range(0x8000_0000, 0x2000, true).is_some());
+    assert!(core.ram_range(0x8000_1fff, 2, false).is_none());
+    assert!(core.ram_range(0x9000_0000, 1, true).is_none());
+    assert_eq!(core.ram_range(0x9000_0000, 1, false).unwrap(), &[0]);
+}
+
+#[test]
+fn c_core_dirty_pages_snapshot_and_clear_follow_guest_writes() {
+    let mut core = Core::new().expect("C core allocation");
+    core.register_ram(0x9000_0000, 33 * 0x1000, 2)
+        .expect("dirty-tracked RAM");
+
+    core.ram_range(0x9000_0000, 1, true).unwrap()[0] = 1;
+    core.ram_range(0x9000_1000, 1, true).unwrap()[0] = 2;
+    core.ram_range(0x9002_0000, 1, true).unwrap()[0] = 3;
+    assert_eq!(core.take_dirty(0, 2), Some(vec![3, 1]));
+    assert_eq!(core.take_dirty(0, 2), Some(vec![0, 0]));
+
+    core.ram_range(0x9000_1000, 1, true).unwrap()[0] = 4;
+    assert!(core.clear_dirty(0, 0x1001));
+    assert_eq!(core.take_dirty(0, 2), Some(vec![0, 0]));
+    assert!(!core.clear_dirty(0, 33 * 0x1000));
+}

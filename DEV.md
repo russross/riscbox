@@ -28,39 +28,20 @@ Development priorities
 CPU core validation
 -------------------
 
-The standalone Rust CPU, physical-memory model, and SoftFP modules still provide
-reference tests while production `Machine` execution uses `tinyemu-core/`.
-Shared callback/run types, interrupt bits, and guest-memory types now live with
-the active TinyEMU and platform interfaces. Migrate focused architectural
-coverage to the C core before removing the reference implementations.
+CPU test migration is complete. Architectural probes in
+`tests/tinyemu_architecture.rs` run real guest instruction streams on
+`tinyemu_core::Core`, with expected results checked through architectural
+registers, trap state, or guest RAM. The former standalone Rust CPU, SoftFP,
+and physical-memory implementations and their tests have been removed. Rust
+interpreter fast-path comparisons were retired because their cache and polling
+assertions described implementation details rather than guest behavior.
 
-CPU test migration is active. `tests/tinyemu_cpu_migration.rs` checks RV64
-integer/M-extension results,
-precise illegal-instruction trap state, PMP denial, and Sstc timer wakeup by
-running guest instruction streams on `tinyemu_core::Core`; corresponding Rust
-interpreter cases have been removed. The Rust-only fast-path tests describe
-implementation details and will be retired rather than recreated. Remaining
-architectural migration ledger:
-
-*   Completed: integer/M, precise traps, PMP, Sstc, Sv39/SVADU/PBMT/Svnapot,
-    AMO word/doubleword, LR/SC, compressed control/stack behavior, Zcb,
-    compressed hints, B/Zba/Zbb/word operations, MOPS/WRS/SINVAL, CSR write
-    traps, and CBO permission/control behavior now execute on TinyEMU.
-*   Completed: F/D instructions now cover arithmetic, fused operations,
-    subnormal division, rounding modes and flags, NaNs, conversions, compressed
-    double memory, disabled-state traps, and the former SoftFP edge cases.
-*   Coverage gap to fill: the current Core inspection API exposes GPRs, PC,
-    machine cause, and machine trap value, but not arbitrary CSRs or FPRs.
-    Probes can save hidden state into guest RAM; add a narrowly scoped
-    test-only inspection API only where guest observation is impractical.
-*   Pending disposition: standalone SoftFP tests validate the parallel Rust
-    implementation and should be replaced with instruction-level coverage or
-    removed; direct TLB/cache fast-path tests do not describe production C.
-VirtIO device tests now use an unbooted `Machine` and TinyEMU-owned guest RAM;
-their fake block, network, entropy, and 9p backends remain host-interface test
-doubles. The direct VirtIO transport tests still use `PhysicalMemory`. Reassess
-those tests separately to decide which should exercise MMIO through `Machine`
-and which benefit from a small test-only `MemoryAccess` fixture.
+`tests/tinyemu_core.rs` covers C-owned RAM bounds, read-only mappings, dirty
+page snapshots and clearing, instruction execution, and MMIO callbacks.
+`tests/virtio_transport.rs` uses a small `MemoryAccess` adapter backed by
+TinyEMU-owned RAM; it does not allocate a separate guest memory model. The
+VirtIO device tests continue to use an unbooted `Machine` and fake host
+backends.
 The saved xv6 compile profiles in `images/xv6-profile/build/profiles/` show
 105.332 seconds for `riscbox-scheduler` versus 97.400 seconds for `tinyemu`, an
 8.1% longer sampled profile in the current Riscbox WASM build. Both logs reach

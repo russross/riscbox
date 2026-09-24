@@ -83,6 +83,22 @@ must justify its code size and failure surface relative to image preparation.
 
 ### Non-CPU performance
 
+#### Cached 9p completion latency
+
+Today a 9p queue notification retains the request in Rust while the guest
+finishes its CPU slice. JavaScript then dispatches it through microtasks, even
+when the TypeScript server has all data resident. If the guest entered WFI,
+the reply can be ready while its previously scheduled sleep lasts up to 10 ms.
+An HTTP block cache hit, by comparison, completes inside the queue notification.
+
+Explore a synchronous WASM-to-TypeScript request handoff that lets the server
+return an immediate reply for resident data or mark the request pending when
+loading is needed. Keep the TypeScript server separate from the VM and preserve
+asynchronous lazy loading and concurrent 9p request semantics. Wake a sleeping
+guest promptly when a pending reply completes, rather than waiting for its
+earlier sleep timer. Work out the ABI, memory ownership, and session ordering in
+a focused design before implementation.
+
 Measure HTTP block request latency, 9p request/reply copy volume, concurrent
 request latency, resident and logical 9p tree sizes, and peak lazy-load memory
 only when those paths become a demonstrated bottleneck. Keep that work separate

@@ -215,6 +215,19 @@ static inline uintx_t glue(mulhsu, XLEN)(intx_t a, uintx_t b)
     } while (0)
 #endif
 
+/* A slow device write requests a host exit only after this store retires. */
+#define STORE_INSN(size, value, length) do {                            \
+        err = target_write_u ## size(s, addr, (value));                 \
+        if (unlikely(err)) {                                            \
+            if (err > 0) {                                              \
+                RETIRE_INSN;                                           \
+                s->pc = GET_PC() + (length);                            \
+                goto done_interp;                                      \
+            }                                                          \
+            goto mmu_exception;                                        \
+        }                                                              \
+    } while (0)
+
 #if FLEN > 32
 #define READ_FP32(index)                                                \
     (((s->fp_reg[index] & F32_HIGH) == F32_HIGH) ?                     \
@@ -423,15 +436,13 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
                     }
                     break;
                 case 2: /* c.sb */
-                    if (target_write_u8(s, addr, s->reg[rd]))
-                        goto mmu_exception;
+                    STORE_INSN(8, s->reg[rd], 2);
                     break;
                 case 3: /* c.sh */
                     if (insn & (1 << 6))
                         goto illegal_insn;
                     addr = s->reg[rs1] + get_field1(insn, 5, 1, 1);
-                    if (target_write_u16(s, addr, s->reg[rd]))
-                        goto mmu_exception;
+                    STORE_INSN(16, s->reg[rd], 2);
                     break;
                 default:
                     goto illegal_insn;
@@ -444,8 +455,7 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
                     get_field1(insn, 5, 6, 7);
                 rs1 = ((insn >> 7) & 7) | 8;
                 addr = (intx_t)(s->reg[rs1] + imm);
-                if (target_write_u64(s, addr, s->fp_reg[rd]))
-                    goto mmu_exception;
+                STORE_INSN(64, s->fp_reg[rd], 2);
                 break;
             case 6: /* c.sw */
                 imm = get_field1(insn, 10, 3, 5) |
@@ -454,8 +464,7 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
                 rs1 = ((insn >> 7) & 7) | 8;
                 addr = (intx_t)(s->reg[rs1] + imm);
                 val = s->reg[rd];
-                if (target_write_u32(s, addr, val))
-                    goto mmu_exception;
+                STORE_INSN(32, val, 2);
                 break;
             case 7: /* c.sd */
                 imm = get_field1(insn, 10, 3, 5) |
@@ -463,8 +472,7 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
                 rs1 = ((insn >> 7) & 7) | 8;
                 addr = (intx_t)(s->reg[rs1] + imm);
                 val = s->reg[rd];
-                if (target_write_u64(s, addr, val))
-                    goto mmu_exception;
+                STORE_INSN(64, val, 2);
                 break;
             default:
                 goto illegal_insn;
@@ -722,23 +730,20 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
                 imm = get_field1(insn, 10, 3, 5) |
                     get_field1(insn, 7, 6, 8);
                 addr = (intx_t)(s->reg[2] + imm);
-                if (target_write_u64(s, addr, s->fp_reg[rs2]))
-                    goto mmu_exception;
+                STORE_INSN(64, s->fp_reg[rs2], 2);
                 break;
 #endif
             case 6: /* c.swsp */
                 imm = get_field1(insn, 9, 2, 5) |
                     get_field1(insn, 7, 6, 7);
                 addr = (intx_t)(s->reg[2] + imm);
-                if (target_write_u32(s, addr, s->reg[rs2]))
-                    goto mmu_exception;
+                STORE_INSN(32, s->reg[rs2], 2);
                 break;
             case 7: /* c.sdsp */
                 imm = get_field1(insn, 10, 3, 5) |
                     get_field1(insn, 7, 6, 8);
                 addr = (intx_t)(s->reg[2] + imm);
-                if (target_write_u64(s, addr, s->reg[rs2]))
-                    goto mmu_exception;
+                STORE_INSN(64, s->reg[rs2], 2);
                 break;
             default:
                 goto illegal_insn;
@@ -872,20 +877,16 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
             val = s->reg[rs2];
             switch(funct3) {
             case 0: /* sb */
-                if (target_write_u8(s, addr, val))
-                    goto mmu_exception;
+                STORE_INSN(8, val, 4);
                 break;
             case 1: /* sh */
-                if (target_write_u16(s, addr, val))
-                    goto mmu_exception;
+                STORE_INSN(16, val, 4);
                 break;
             case 2: /* sw */
-                if (target_write_u32(s, addr, val))
-                    goto mmu_exception;
+                STORE_INSN(32, val, 4);
                 break;
             case 3: /* sd */
-                if (target_write_u64(s, addr, val))
-                    goto mmu_exception;
+                STORE_INSN(64, val, 4);
                 break;
             default:
                 goto illegal_insn;
@@ -1521,8 +1522,7 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
                     }                                                   \
                     if (s->load_res_valid && s->load_res == addr &&     \
                         s->load_res_size == size / 8) {                  \
-                        if (target_write_u ## size(s, addr, s->reg[rs2])) \
-                            goto mmu_exception;                         \
+                        STORE_INSN(size, s->reg[rs2], 4);              \
                         val = 0;                                        \
                     } else {                                            \
                         if (target_write_check(s, addr, size / 8))       \
@@ -1583,8 +1583,7 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
                     default:                                            \
                         goto illegal_insn;                              \
                     }                                                   \
-                    if (target_write_u ## size(s, addr, val2))          \
-                        goto mmu_exception;                             \
+                    STORE_INSN(size, val2, 4);                         \
                     break;                                              \
                 default:                                                \
                     goto illegal_insn;                                  \
@@ -1645,13 +1644,11 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
             addr = s->reg[rs1] + imm;
             switch(funct3) {
             case 2: /* fsw */
-                if (target_write_u32(s, addr, s->fp_reg[rs2]))
-                    goto mmu_exception;
+                STORE_INSN(32, s->fp_reg[rs2], 4);
                 break;
 #if FLEN >= 64
             case 3: /* fsd */
-                if (target_write_u64(s, addr, s->fp_reg[rs2]))
-                    goto mmu_exception;
+                STORE_INSN(64, s->fp_reg[rs2], 4);
                 break;
 #endif
             default:
@@ -1818,6 +1815,7 @@ the_end:
 #undef intx_t
 #undef XLEN
 #undef OP_A
+#undef STORE_INSN
 #undef RETIRE_INSN
 #if FLEN > 32
 #undef READ_FP32

@@ -77,6 +77,11 @@ impl HttpQueue {
         self.outgoing.pop_front()
     }
 
+    #[must_use]
+    pub fn has_outgoing(&self) -> bool {
+        !self.outgoing.is_empty()
+    }
+
     /// Completes a pending request and returns its URL.
     ///
     /// # Errors
@@ -160,6 +165,11 @@ impl HttpBlockStore {
 
     pub fn next_request(&mut self) -> Option<HttpRequest> {
         self.queue.next_request()
+    }
+
+    #[must_use]
+    pub fn has_outgoing(&self) -> bool {
+        self.queue.has_outgoing()
     }
 
     /// Accepts one block response and makes it available to subsequent reads.

@@ -178,7 +178,6 @@ impl BrowserController {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RunPolicy {
-    pub block_cycles: u32,
     pub yield_cycles: u32,
     pub maximum_delay_ms: u32,
 }
@@ -186,16 +185,8 @@ pub struct RunPolicy {
 impl Default for RunPolicy {
     fn default() -> Self {
         Self {
-            block_cycles: 200_000,
             yield_cycles: 3_000_000,
             maximum_delay_ms: 10,
         }
-    }
-}
-
-impl RunPolicy {
-    #[must_use]
-    pub fn blocks_per_slice(self) -> u32 {
-        self.yield_cycles.div_ceil(self.block_cycles.max(1))
     }
 }

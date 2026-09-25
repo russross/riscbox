@@ -18,6 +18,9 @@ function fakeModule() {
             calls.push(["free", ptr, length]);
         },
         riscbox_next_action() { return 0; },
+        riscbox_run() { return 3; },
+        riscbox_run_cycles() { return 0; },
+        riscbox_run_delay_ms() { return 0; },
         riscbox_action_value() { return 0; },
         riscbox_action_data_address() { return 0; },
         riscbox_action_data_length() { return 0; },
@@ -273,20 +276,23 @@ test("9p registration is validated before later startup actions", () => {
     assert.deepEqual(actions, [2]);
 });
 
-test("host scheduling delegates exactly once", () => {
-    const delays = [];
-    const host = Riscbox.hostImports({ schedule: (delay) => delays.push(delay) });
-    host.attach(fakeModule().exports);
-    host.imports.schedule(7);
-    assert.deepEqual(delays, [7]);
+test("adapter replaces a sleeping timer with one immediate turn", async () => {
+    const fake = fakeModule();
+    let runs = 0;
+    fake.exports.riscbox_run = () => { runs++; return 3; };
+    const runtime = new Riscbox(fake.exports);
+    runtime.schedule(100);
+    runtime.schedule(0);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(runs, 1);
 });
 
 test("run passes complete epoch milliseconds across the 32-bit WASM ABI", () => {
     const fake = fakeModule();
     const calls = [];
-    fake.exports.riscbox_run = (low, high) => {
-        calls.push([low, high]);
-        return 0;
+    fake.exports.riscbox_run = (low, high, budget) => {
+        calls.push([low, high, budget]);
+        return 3;
     };
     const originalNow = Date.now;
     Date.now = () => 1_730_000_000_123;
@@ -295,7 +301,132 @@ test("run passes complete epoch milliseconds across the 32-bit WASM ABI", () => 
     } finally {
         Date.now = originalNow;
     }
-    assert.deepEqual(calls, [[0xcc09_147b, 0x192]]);
+    assert.deepEqual(calls, [[0xcc09_147b, 0x192, 2_995_904]]);
+});
+
+test("hint wait resets after each delivered response", async () => {
+    const fake = fakeModule();
+    let runs = 0;
+    fake.exports.riscbox_run = () => ++runs === 1 ? 2 : 3;
+    fake.exports.riscbox_run_cycles = () => 1;
+    const runtime = new Riscbox(fake.exports);
+    runtime.hints.add("first");
+    runtime.hints.add("second");
+    const afterYields = (count, callback) => {
+        if (count === 0) callback();
+        else queueMicrotask(() => afterYields(count - 1, callback));
+    };
+    afterYields(12, () => {
+        runtime.hints.delete("first");
+        runtime.settledHints++;
+        afterYields(12, () => {
+            runtime.hints.delete("second");
+            runtime.settledHints++;
+        });
+    });
+    const originalError = console.error;
+    const errors = [];
+    console.error = (...args) => errors.push(args);
+    try {
+        await runtime.run();
+    } finally {
+        console.error = originalError;
+    }
+    assert.equal(runs, 2);
+    assert.deepEqual(errors, []);
+});
+
+test("unsettled response hint logs after 20 empty yields and resumes", async () => {
+    const fake = fakeModule();
+    let runs = 0;
+    fake.exports.riscbox_run = () => ++runs === 1 ? 2 : 3;
+    fake.exports.riscbox_run_cycles = () => 1;
+    const runtime = new Riscbox(fake.exports);
+    runtime.hints.add("1:1:7");
+    const originalError = console.error;
+    const errors = [];
+    console.error = (...args) => errors.push(args);
+    try {
+        await runtime.run();
+    } finally {
+        console.error = originalError;
+    }
+    assert.equal(runs, 2);
+    assert.match(errors[0][0], /hint did not settle/);
+    assert.deepEqual(errors[0][1], ["1:1:7"]);
+});
+
+test("resident 9p reply completes before the same turn resumes", async () => {
+    const fake = fakeModule();
+    const actions = [
+        { kind: 7, bytes: Buffer.from("shared") },
+        { kind: 8, bytes: Uint8Array.of(7, 0, 0, 0, 100, 1, 0) },
+    ];
+    let current;
+    fake.exports.riscbox_next_action = () => {
+        current = actions.shift();
+        if (!current) return 0;
+        new Uint8Array(fake.exports.memory.buffer, 64, current.bytes.length).set(current.bytes);
+        return current.kind;
+    };
+    fake.exports.riscbox_action_data_address = () => 64;
+    fake.exports.riscbox_action_data_length = () => current.bytes.length;
+    fake.exports.riscbox_action_endpoint = () => 1;
+    fake.exports.riscbox_action_generation = () => 1;
+    fake.exports.riscbox_action_request_id = () => 7;
+    fake.exports.riscbox_action_reply_capacity = () => 8;
+    fake.exports.riscbox_p9_complete = () => {
+        fake.calls.push("reply");
+        return 0;
+    };
+    let runs = 0;
+    fake.exports.riscbox_run = () => {
+        runs++;
+        if (runs === 2) assert.equal(fake.calls.filter((call) => call === "reply").length, 1);
+        return runs === 1 ? 2 : 3;
+    };
+    fake.exports.riscbox_run_cycles = () => 1;
+    const server = {
+        connect() {
+            return {
+                request(_bytes, _capacity, expectResponse) {
+                    expectResponse();
+                    return Promise.resolve({ kind: "reply", bytes: Uint8Array.of(7, 0, 0, 0, 101, 1, 0) });
+                },
+                close() {},
+            };
+        },
+    };
+    const runtime = new Riscbox(fake.exports, { p9Servers: new Map([["shared", server]]) });
+    await runtime.run();
+    assert.equal(runs, 2);
+});
+
+test("host attention starts HTTP work before the unused CPU budget resumes", async () => {
+    const fake = fakeModule();
+    const url = Buffer.from("https://host/block.bin");
+    new Uint8Array(fake.exports.memory.buffer, 64, url.length).set(url);
+    const actions = [1, 0];
+    fake.exports.riscbox_next_action = () => actions.shift() ?? 0;
+    fake.exports.riscbox_action_value = () => 9;
+    fake.exports.riscbox_action_data_address = () => 64;
+    fake.exports.riscbox_action_data_length = () => url.length;
+    let fetches = 0;
+    let runs = 0;
+    fake.exports.riscbox_run = () => {
+        runs++;
+        if (runs === 2) assert.equal(fetches, 1);
+        return runs === 1 ? 2 : 3;
+    };
+    fake.exports.riscbox_run_cycles = () => 1;
+    const runtime = new Riscbox(fake.exports, {
+        fetch() {
+            fetches++;
+            return new Promise(() => {});
+        },
+    });
+    await runtime.run();
+    assert.equal(runs, 2);
 });
 
 test("vm_start compatibility call marshals current strings and scalar options", () => {

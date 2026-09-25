@@ -93,9 +93,15 @@ relative to the configuration URL. Raw and gzip-compressed kernels load at the
 same guest address; decompressed output is bounded by the boot layout. Image
 deployments gzip the kernel while naming it from the uncompressed hash. HTTP
 disk writes are session-local.
-Browser execution yields after at most three million guest cycles. Runnable
-guests reschedule immediately; waiting guests sleep until the nearest CLINT,
-supervisor timer, or RTC deadline, capped at ten milliseconds.
+The JavaScript platform driver owns a three-million-cycle guest turn and its
+timers. C exits after an MMIO instruction when Rust has queued 9p or HTTP block
+work; Rust releases the exclusive timeslice borrow before JavaScript dispatches
+actions. The driver resumes unused cycles after resident 9p replies and wakes
+waiting guests on later completions. Runnable guests reschedule immediately;
+waiting guests sleep until the nearest CLINT, supervisor timer, or RTC deadline,
+capped at ten milliseconds. The C interpreter may finish a code block a few
+cycles past its requested budget, so the driver reserves a guard within each
+turn and accounts for actual cycles consumed.
 
 VirtIO 9p is a generic concurrent asynchronous transport. Rust validates
 descriptors and message envelopes but does not implement filesystem semantics.

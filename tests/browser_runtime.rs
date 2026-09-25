@@ -41,7 +41,7 @@ fn start_uart_writer(config: &[u8]) -> BrowserRuntime {
         .complete_http(firmware_id, 200, firmware)
         .expect("firmware");
     assert_eq!(runtime.next_action(), Some(HostAction::Started));
-    assert_eq!(runtime.next_action(), Some(HostAction::Schedule(0)));
+    assert_eq!(runtime.next_action(), None);
     runtime
 }
 
@@ -77,7 +77,7 @@ fn configuration_and_boot_assets_load_in_dependency_order() {
 
     assert!(runtime.is_running());
     assert_eq!(runtime.next_action(), Some(HostAction::Started));
-    assert_eq!(runtime.next_action(), Some(HostAction::Schedule(0)));
+    assert_eq!(runtime.next_action(), None);
 }
 
 #[test]
@@ -113,12 +113,14 @@ fn run_delivers_queued_input_and_reschedules_runnable_guest_immediately() {
         .complete_http(firmware_id, 200, vec![0; 64])
         .expect("firmware");
     assert_eq!(runtime.next_action(), Some(HostAction::Started));
-    assert_eq!(runtime.next_action(), Some(HostAction::Schedule(0)));
+    assert_eq!(runtime.next_action(), None);
 
     let mut controller = BrowserController::default();
     assert_eq!(controller.queue_console(b"x"), 1);
-    runtime.run(&mut controller, 0, 0).expect("execution slice");
-    assert_eq!(runtime.next_action(), Some(HostAction::Schedule(0)));
+    runtime
+        .run(&mut controller, 0, 0, 3_000_000)
+        .expect("execution slice");
+    assert_eq!(runtime.next_action(), None);
 }
 
 #[test]
@@ -143,7 +145,9 @@ fn uart_backpressure_retains_unaccepted_browser_input() {
 
     let mut controller = BrowserController::default();
     controller.queue_console(b"ABC");
-    runtime.run(&mut controller, 0, 0).expect("execution slice");
+    runtime
+        .run(&mut controller, 0, 0, 3_000_000)
+        .expect("execution slice");
     assert_eq!(controller.console_len(), 2);
 }
 
@@ -174,8 +178,10 @@ fn virtio_input_before_driver_initialization_is_buffered() {
         controller.network_packet(b"frame"),
         riscbox::browser::NetworkInputResult::Accepted
     );
-    runtime.run(&mut controller, 0, 0).expect("execution slice");
-    assert_eq!(runtime.next_action(), Some(HostAction::Schedule(0)));
+    runtime
+        .run(&mut controller, 0, 0, 3_000_000)
+        .expect("execution slice");
+    assert_eq!(runtime.next_action(), None);
 }
 
 #[test]
@@ -198,7 +204,7 @@ fn uart_output_follows_the_console_configuration() {
     for (config, expects_output) in cases {
         let mut runtime = start_uart_writer(config);
         runtime
-            .run(&mut BrowserController::default(), 0, 0)
+            .run(&mut BrowserController::default(), 0, 0, 3_000_000)
             .expect("execution slice");
         if expects_output {
             assert_eq!(
@@ -206,7 +212,7 @@ fn uart_output_follows_the_console_configuration() {
                 Some(HostAction::Console(b"A".to_vec()))
             );
         }
-        assert_eq!(runtime.next_action(), Some(HostAction::Schedule(0)));
+        assert_eq!(runtime.next_action(), None);
     }
 }
 
@@ -236,7 +242,6 @@ fn drive_manifest_precedes_machine_start_and_prefetch_requests_follow_it() {
         )
         .expect("manifest");
     assert_eq!(runtime.next_action(), Some(HostAction::Started));
-    assert_eq!(runtime.next_action(), Some(HostAction::Schedule(0)));
     let (_, url) = request(&mut runtime);
     assert_eq!(url, "https://host/vm/disk/blk000000001.bin");
 }
@@ -313,7 +318,7 @@ fn configured_9p_servers_are_connected() {
         }))
     );
     assert_eq!(runtime.next_action(), Some(HostAction::Started));
-    assert_eq!(runtime.next_action(), Some(HostAction::Schedule(0)));
+    assert_eq!(runtime.next_action(), None);
 }
 
 #[test]
@@ -338,10 +343,10 @@ fn framebuffer_updates_coexist_with_the_virtio_console() {
         .complete_http(firmware_id, 200, firmware)
         .expect("firmware");
     assert_eq!(runtime.next_action(), Some(HostAction::Started));
-    assert_eq!(runtime.next_action(), Some(HostAction::Schedule(0)));
+    assert_eq!(runtime.next_action(), None);
 
     runtime
-        .run(&mut BrowserController::default(), 0, 0)
+        .run(&mut BrowserController::default(), 0, 0, 3_000_000)
         .expect("execution slice");
     let Some(HostAction::Framebuffer(update)) = runtime.next_action() else {
         panic!("expected framebuffer action");
@@ -360,7 +365,7 @@ fn framebuffer_updates_coexist_with_the_virtio_console() {
         runtime.framebuffer_bytes(update).expect("pixel rows")[..4],
         [1, 0, 0, 0]
     );
-    assert_eq!(runtime.next_action(), Some(HostAction::Schedule(0)));
+    assert_eq!(runtime.next_action(), None);
 }
 
 #[test]
@@ -381,10 +386,11 @@ fn waiting_guest_uses_bounded_sleep() {
         .complete_http(firmware_id, 200, 0x1050_0073_u32.to_le_bytes().to_vec())
         .expect("WFI firmware");
     assert_eq!(runtime.next_action(), Some(HostAction::Started));
-    assert_eq!(runtime.next_action(), Some(HostAction::Schedule(0)));
+    assert_eq!(runtime.next_action(), None);
 
-    runtime
-        .run(&mut BrowserController::default(), 0, 0)
+    let outcome = runtime
+        .run(&mut BrowserController::default(), 0, 0, 3_000_000)
         .expect("waiting slice");
-    assert_eq!(runtime.next_action(), Some(HostAction::Schedule(10)));
+    assert_eq!(outcome.expect("running VM").delay_ms, 10);
+    assert_eq!(runtime.next_action(), None);
 }

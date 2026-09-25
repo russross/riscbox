@@ -4,6 +4,7 @@ use std::cell::RefCell;
 
 use crate::browser::{BrowserController, NetworkInputResult};
 use crate::browser_runtime::{BrowserRuntime, EntropyCallback, HostAction, RuntimeStart};
+use crate::tinyemu_core::RunState;
 use crate::virtio_devices::{
     NinePEndpointId, NinePGeneration, NinePOutcome, NinePRequestId, NinePTransportAction,
 };
@@ -25,6 +26,8 @@ struct AbiState {
     start: Option<StartRequest>,
     runtime: BrowserRuntime,
     action: Option<HostAction>,
+    run_cycles: u32,
+    run_delay_ms: u32,
 }
 
 thread_local! {
@@ -169,7 +172,11 @@ pub extern "C" fn riscbox_network_carrier(up: u32) -> i32 {
 }
 
 #[must_use]
-pub extern "C" fn riscbox_run(now_milliseconds_low: u32, now_milliseconds_high: u32) -> i32 {
+pub extern "C" fn riscbox_run(
+    now_milliseconds_low: u32,
+    now_milliseconds_high: u32,
+    budget: u32,
+) -> i32 {
     STATE.with_borrow_mut(|state| {
         let milliseconds = milliseconds_from_parts(now_milliseconds_low, now_milliseconds_high);
         let AbiState {
@@ -177,14 +184,39 @@ pub extern "C" fn riscbox_run(now_milliseconds_low: u32, now_milliseconds_high: 
             controller,
             ..
         } = state;
-        runtime
-            .run(
-                controller,
-                milliseconds.saturating_mul(10_000),
-                milliseconds.saturating_mul(1_000_000),
-            )
-            .map_or(-1, |()| 0)
+        match runtime.run(
+            controller,
+            milliseconds.saturating_mul(10_000),
+            milliseconds.saturating_mul(1_000_000),
+            budget,
+        ) {
+            Ok(Some(result)) => {
+                state.run_cycles = result.cycles;
+                state.run_delay_ms = result.delay_ms;
+                match result.state {
+                    RunState::Running => 0,
+                    RunState::Waiting => 1,
+                    RunState::HostAttention => 2,
+                }
+            }
+            Ok(None) => {
+                state.run_cycles = 0;
+                state.run_delay_ms = 0;
+                3
+            }
+            Err(_) => -1,
+        }
     })
+}
+
+#[must_use]
+pub extern "C" fn riscbox_run_cycles() -> u32 {
+    STATE.with_borrow(|state| state.run_cycles)
+}
+
+#[must_use]
+pub extern "C" fn riscbox_run_delay_ms() -> u32 {
+    STATE.with_borrow(|state| state.run_delay_ms)
 }
 
 fn milliseconds_from_parts(low: u32, high: u32) -> u64 {
@@ -200,7 +232,6 @@ pub extern "C" fn riscbox_next_action() -> u32 {
             Some(HostAction::Started) => 2,
             Some(HostAction::Console(_)) => 3,
             Some(HostAction::Network(_)) => 4,
-            Some(HostAction::Schedule(_)) => 5,
             Some(HostAction::Framebuffer(_)) => 6,
             Some(HostAction::NineP(NinePTransportAction::Open { .. })) => 7,
             Some(HostAction::NineP(NinePTransportAction::Request { .. })) => 8,
@@ -214,7 +245,6 @@ pub extern "C" fn riscbox_next_action() -> u32 {
 pub extern "C" fn riscbox_action_value() -> u32 {
     STATE.with_borrow(|state| match state.action.as_ref() {
         Some(HostAction::Request(request)) => request.id,
-        Some(HostAction::Schedule(delay)) => *delay,
         _ => 0,
     })
 }
@@ -395,9 +425,7 @@ fn action_bytes(state: &AbiState) -> Option<&[u8]> {
         HostAction::NineP(NinePTransportAction::Open { server_key, .. }) => {
             Some(server_key.as_bytes())
         }
-        HostAction::NineP(NinePTransportAction::Close { .. })
-        | HostAction::Started
-        | HostAction::Schedule(_) => None,
+        HostAction::NineP(NinePTransportAction::Close { .. }) | HostAction::Started => None,
     }
 }
 

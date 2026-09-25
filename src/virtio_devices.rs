@@ -662,6 +662,10 @@ pub trait NinePBackend {
     fn next_transport_action(&mut self) -> Option<NinePTransportAction> {
         None
     }
+
+    fn has_transport_action(&self) -> bool {
+        false
+    }
 }
 
 impl<T: NinePBackend + ?Sized> NinePBackend for Box<T> {
@@ -675,6 +679,10 @@ impl<T: NinePBackend + ?Sized> NinePBackend for Box<T> {
 
     fn next_transport_action(&mut self) -> Option<NinePTransportAction> {
         (**self).next_transport_action()
+    }
+
+    fn has_transport_action(&self) -> bool {
+        (**self).has_transport_action()
     }
 }
 
@@ -742,6 +750,11 @@ impl<B> NinePDevice<B> {
 
     pub fn backend_mut(&mut self) -> &mut B {
         &mut self.backend
+    }
+
+    #[must_use]
+    pub fn backend(&self) -> &B {
+        &self.backend
     }
 
     #[must_use]

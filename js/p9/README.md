@@ -6,6 +6,11 @@
 an independent `P9Session` with its own negotiated message size, fid table,
 active tags, cancellation state, and lifetime. Sessions share namespace data
 and change subscriptions only.
+`request(bytes, replyCapacity, expectResponse)` returns a promise. The session
+calls the single-shot `expectResponse` callback before work that can settle
+without blocking I/O, including suppression of an earlier request by flush,
+version reset, or close. Lazy seed loads do not issue that hint. Promise
+settlement remains the only reply or suppression result.
 
 Operation matrix
 ----------------

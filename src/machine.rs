@@ -181,6 +181,15 @@ enum VirtioSlot {
 }
 
 impl VirtioSlot {
+    fn needs_host(&self) -> bool {
+        // Queue notifications handled entirely in Rust leave these queues empty.
+        match self {
+            Self::HttpBlock(device) => device.device.backend().has_outgoing(),
+            Self::NineP(device) => device.device.backend().has_transport_action(),
+            _ => false,
+        }
+    }
+
     fn read(&self, offset: u32, width: AccessWidth) -> u32 {
         match self {
             Self::Block(device) => device.read(offset, width),
@@ -235,6 +244,7 @@ pub struct PlatformBus {
     virtio: Vec<VirtioSlot>,
     timer_ticks: u64,
     host_nanoseconds: u64,
+    host_attention: bool,
 }
 
 impl PlatformBus {
@@ -277,11 +287,7 @@ impl PlatformBus {
                 })
             })
             .transpose()?;
-        memory.register_device(
-            GuestAddress(FINISHER_BASE),
-            0x1000,
-            DeviceWidths::U32,
-        )?;
+        memory.register_device(GuestAddress(FINISHER_BASE), 0x1000, DeviceWidths::U32)?;
         memory.register_device(GuestAddress(RTC_BASE), 0x1000, DeviceWidths::U32)?;
         memory.register_device(GuestAddress(CLINT_BASE), 0x1_0000, DeviceWidths::U32)?;
         memory.register_device(GuestAddress(PLIC_BASE), 0x400_0000, DeviceWidths::U32)?;
@@ -304,6 +310,7 @@ impl PlatformBus {
             virtio: Vec::new(),
             timer_ticks: 0,
             host_nanoseconds: 0,
+            host_attention: false,
         })
     }
 
@@ -380,6 +387,7 @@ impl PlatformBus {
             device
                 .write(&mut self.memory, device_offset, value32, width)
                 .map_err(|_| BusError::AccessFault)?;
+            self.host_attention |= device.needs_host();
         } else {
             return Err(BusError::AccessFault);
         }
@@ -446,6 +454,10 @@ impl HostCallbacks for PlatformBus {
 
     fn interrupts(&self) -> u32 {
         self.interrupt_mask()
+    }
+
+    fn host_attention(&self) -> bool {
+        self.host_attention
     }
 }
 
@@ -759,15 +771,16 @@ impl Machine {
     }
 
     pub fn run(&mut self, cycles: u32) -> RunOutcome {
+        self.bus.host_attention = false;
         self.sync_interrupts();
         let result = self.cpu.run_host(cycles, &mut self.bus);
         self.sync_interrupts();
         RunOutcome {
             cycles: result.cycles,
-            state: if result.waiting != 0 {
-                RunState::Waiting
-            } else {
-                RunState::Running
+            state: match result.reason {
+                1 => RunState::Waiting,
+                2 => RunState::HostAttention,
+                _ => RunState::Running,
             },
         }
     }
@@ -1162,8 +1175,7 @@ impl Machine {
         )?;
         #[cfg(target_arch = "wasm32")]
         let arena_offset = ArenaOffset(
-            u32::try_from(bytes.as_ptr() as usize)
-                .map_err(|_| MachineError::InvalidFramebuffer)?,
+            u32::try_from(bytes.as_ptr() as usize).map_err(|_| MachineError::InvalidFramebuffer)?,
         );
         #[cfg(not(target_arch = "wasm32"))]
         let arena_offset = {

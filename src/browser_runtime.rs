@@ -12,6 +12,7 @@ use crate::entropy::{EntropyError, EntropySource, SharedEntropy};
 use crate::machine::{
     BootImages, FramebufferConfig, FramebufferUpdate, Machine, MachineConfig, MachineError,
 };
+use crate::tinyemu_core::RunState;
 use crate::virtio_devices::{
     DeviceError, InputKind, NetworkBackend, NinePBackend, NinePEndpointId, NinePGeneration,
     NinePOutcome, NinePRequestId, NinePTransportAction,
@@ -81,6 +82,10 @@ impl NinePBackend for BrowserNineP {
     fn next_transport_action(&mut self) -> Option<NinePTransportAction> {
         self.actions.pop_front()
     }
+
+    fn has_transport_action(&self) -> bool {
+        !self.actions.is_empty()
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -107,7 +112,13 @@ pub enum HostAction {
     Network(Vec<u8>),
     Framebuffer(FramebufferUpdate),
     NineP(NinePTransportAction),
-    Schedule(u32),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BrowserRunResult {
+    pub cycles: u32,
+    pub state: RunState,
+    pub delay_ms: u32,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -436,9 +447,10 @@ impl BrowserRuntime {
         controller: &mut BrowserController,
         timer_ticks: u64,
         host_nanoseconds: u64,
-    ) -> Result<(), RuntimeError> {
+        budget: u32,
+    ) -> Result<Option<BrowserRunResult>, RuntimeError> {
         let State::Running(running) = &mut self.state else {
-            return Ok(());
+            return Ok(None);
         };
         if let Some(size) = controller.take_resize()
             && let Some(slot) = running.console_slot
@@ -466,15 +478,9 @@ impl BrowserRuntime {
         while let Some(event) = controller.next_event() {
             running.deliver_event(event)?;
         }
+        // Every entry samples host time before the C core resumes guest execution.
         running.machine.update_time(timer_ticks, host_nanoseconds);
-        let mut waiting = false;
-        for _ in 0..self.policy.blocks_per_slice() {
-            let outcome = running.machine.run(self.policy.block_cycles);
-            if outcome.state == crate::tinyemu_core::RunState::Waiting {
-                waiting = true;
-                break;
-            }
-        }
+        let outcome = running.machine.run(budget.min(self.policy.yield_cycles));
         let uart = running.machine.take_console_output();
         let mut console = if running.uart_output {
             uart
@@ -499,13 +505,19 @@ impl BrowserRuntime {
                 self.actions.push_back(HostAction::Framebuffer(update));
             }
         }
-        let delay = if waiting {
-            running.machine.sleep_duration_ms(self.policy.maximum_delay_ms)
+        let delay = if outcome.state == RunState::Waiting {
+            running
+                .machine
+                .sleep_duration_ms(self.policy.maximum_delay_ms)
         } else {
             0
         };
-        self.actions.push_back(HostAction::Schedule(delay));
-        self.pump_http_requests()
+        self.pump_http_requests()?;
+        Ok(Some(BrowserRunResult {
+            cycles: outcome.cycles,
+            state: outcome.state,
+            delay_ms: delay,
+        }))
     }
 
     pub fn next_action(&mut self) -> Option<HostAction> {
@@ -629,7 +641,6 @@ impl BrowserRuntime {
         }));
         self.pump_ninep_transport_actions()?;
         self.actions.push_back(HostAction::Started);
-        self.actions.push_back(HostAction::Schedule(0));
         self.pump_http_requests()
     }
 

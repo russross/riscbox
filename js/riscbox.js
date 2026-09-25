@@ -3,14 +3,30 @@
 
     const encoder = new TextEncoder();
     const decoder = new TextDecoder();
+    const TURN_CYCLES = 3_000_000;
+    // C checks its budget at code block boundaries, so reserve one page of slack.
+    const CPU_OVERRUN_GUARD = 4_096;
+    const RUN_WAITING = 1;
+    const RUN_HOST_ATTENTION = 2;
+    const RUN_IDLE = 3;
 
     class Riscbox {
         constructor(exports, options = {}) {
             if (!(exports.memory instanceof WebAssembly.Memory))
                 throw new TypeError("Riscbox WASM must export memory");
+            if (typeof exports.riscbox_run !== "function" ||
+                typeof exports.riscbox_run_cycles !== "function" ||
+                typeof exports.riscbox_run_delay_ms !== "function")
+                throw new TypeError("Riscbox WASM has an incompatible run interface");
             this.exports = exports;
             this.options = options;
             this.p9Sessions = new Map();
+            this.p9Requests = new Map();
+            this.hints = new Set();
+            this.settledHints = 0;
+            this.driving = false;
+            this.timer = null;
+            this.started = false;
         }
 
         static hostImports(options = {}) {
@@ -19,13 +35,6 @@
             const imports = {
                 vm_started() {
                     options.onVmStarted?.();
-                },
-                schedule(delay) {
-                    const milliseconds = Math.max(0, delay | 0);
-                    if (options.schedule)
-                        options.schedule(milliseconds);
-                    else
-                        setTimeout(() => runtime.run(), milliseconds);
                 },
                 random_fill(ptr, len) {
                     try {
@@ -114,12 +123,73 @@
         }
 
         run() {
-            const nowMilliseconds = Date.now();
-            const low = nowMilliseconds >>> 0;
-            const high = Math.floor(nowMilliseconds / 0x1_0000_0000) >>> 0;
-            const result = this.exports.riscbox_run?.(low, high) ?? 0;
-            this.drainActions();
-            return result;
+            return this.drive();
+        }
+
+        schedule(delay) {
+            // A newly completed device request replaces any outstanding WFI timer.
+            if (this.driving)
+                return;
+            if (this.timer !== null)
+                clearTimeout(this.timer);
+            this.timer = setTimeout(() => {
+                this.timer = null;
+                void this.drive().catch((error) => this.options.onError?.(error));
+            }, delay);
+        }
+
+        async drive() {
+            // The timer only starts a turn; this loop owns every continuation in it.
+            if (this.driving)
+                return;
+            if (this.timer !== null) {
+                clearTimeout(this.timer);
+                this.timer = null;
+            }
+            this.driving = true;
+            let remaining = TURN_CYCLES;
+            let nextDelay = 0;
+            try {
+                while (remaining > CPU_OVERRUN_GUARD) {
+                    // Refresh guest-visible time on each entry and subtract actual C cycles.
+                    const now = Date.now();
+                    const reason = this.exports.riscbox_run(
+                        now >>> 0, Math.floor(now / 0x1_0000_0000) >>> 0,
+                        remaining - CPU_OVERRUN_GUARD,
+                    );
+                    if (reason < 0)
+                        throw new Error("Riscbox WASM run failed");
+                    if (reason > RUN_IDLE)
+                        throw new Error(`Riscbox WASM returned invalid run reason ${reason}`);
+                    const cycles = this.exports.riscbox_run_cycles();
+                    if (cycles > remaining)
+                        throw new Error(`Riscbox WASM used ${cycles} cycles from a ${remaining}-cycle budget`);
+                    if (reason === 0 && cycles === 0)
+                        throw new Error("Riscbox WASM made no progress in a runnable turn");
+                    remaining -= cycles;
+                    this.drainActions();
+                    if (reason === RUN_IDLE)
+                        return;
+                    if (reason === RUN_WAITING) {
+                        nextDelay = this.exports.riscbox_run_delay_ms();
+                        break;
+                    }
+                    if (reason === RUN_HOST_ATTENTION) {
+                        // Each settled hinted reply restarts the dry-yield allowance.
+                        let dryYields = 0;
+                        while (this.hints.size > 0 && dryYields < 20) {
+                            const settled = this.settledHints;
+                            await Promise.resolve();
+                            dryYields = this.settledHints === settled ? dryYields + 1 : 0;
+                        }
+                        if (dryYields === 20 && this.hints.size > 0)
+                            console.error("Riscbox 9p response hint did not settle", [...this.hints]);
+                    }
+                }
+            } finally {
+                this.driving = false;
+            }
+            this.schedule(nextDelay);
         }
 
         drainActions() {
@@ -149,19 +219,17 @@
                                 throw new Error(`Riscbox rejected HTTP response ${value}`);
                         });
                         this.drainActions();
+                        if (this.started)
+                            this.schedule(0);
                     }).catch((error) => this.options.onError?.(error));
                 } else if (kind === 2) {
+                    this.started = true;
                     this.options.onVmStarted?.();
+                    this.schedule(0);
                 } else if (kind === 3) {
                     this.options.consoleWrite?.(decoder.decode(this.bytes(ptr, len)));
                 } else if (kind === 4) {
                     this.options.networkWrite?.(this.bytes(ptr, len));
-                } else if (kind === 5) {
-                    const milliseconds = Math.max(0, value | 0);
-                    if (this.options.schedule)
-                        this.options.schedule(milliseconds);
-                    else
-                        setTimeout(() => this.run(), milliseconds);
                 } else if (kind === 6) {
                     const x = this.exports.riscbox_action_x();
                     const y = this.exports.riscbox_action_y();
@@ -188,6 +256,8 @@
                         typeof session.close !== "function")
                         throw new TypeError(`9p server returned an invalid session: ${serverKey}`);
                     const previous = this.p9Sessions.get(endpoint);
+                    if (previous)
+                        this.retireP9(endpoint, previous.generation);
                     previous?.session.close();
                     this.p9Sessions.set(endpoint, { generation, session });
                 } else if (kind === 8) {
@@ -199,9 +269,25 @@
                     if (!current || current.generation !== generation)
                         throw new Error(`9p request targets an inactive endpoint ${endpoint}`);
                     const request = this.bytes(ptr, len);
-                    Promise.resolve().then(() =>
-                        current.session.request(request, replyCapacity)
-                    ).then((outcome) => {
+                    const key = `${endpoint}:${generation}:${requestId}`;
+                    // Keys include the endpoint generation so a reset cannot reuse a hint.
+                    this.p9Requests.set(key, true);
+                    const expectResponse = () => {
+                        if (this.p9Requests.has(key))
+                            this.hints.add(key);
+                    };
+                    let outcomePromise;
+                    try {
+                        outcomePromise = current.session.request(
+                            request, replyCapacity, expectResponse,
+                        );
+                        if (!outcomePromise || typeof outcomePromise.then !== "function")
+                            throw new TypeError("9p session request must return a promise");
+                    } catch (error) {
+                        outcomePromise = Promise.reject(error);
+                    }
+                    outcomePromise.then((outcome) => {
+                        // Only promise settlement supplies a reply or suppression result.
                         if (outcome?.kind === "suppressed")
                             return { outcome: 1, bytes: new Uint8Array() };
                         if (outcome?.kind === "reply" &&
@@ -216,11 +302,13 @@
                             this.p9Sessions.delete(endpoint);
                             active.session.close();
                         }
-                        this.completeP9(endpoint, generation, requestId, 2);
+                        if (this.p9Requests.has(key))
+                            this.completeP9(endpoint, generation, requestId, 2);
+                        this.retireP9(endpoint, generation);
                         this.options.onError?.(error);
                         return null;
                     }).then((completion) => {
-                        if (completion)
+                        if (completion && this.p9Requests.has(key))
                             this.completeP9(
                                 endpoint, generation, requestId,
                                 completion.outcome, completion.bytes,
@@ -233,6 +321,7 @@
                     const generation = this.exports.riscbox_action_generation();
                     const current = this.p9Sessions.get(endpoint);
                     if (current?.generation === generation) {
+                        this.retireP9(endpoint, generation);
                         this.p9Sessions.delete(endpoint);
                         current.session.close();
                     }
@@ -243,6 +332,11 @@
         }
 
         completeP9(endpoint, generation, requestId, outcome, bytes = new Uint8Array()) {
+            // A late completion clears its hint and replaces a sleeping turn timer.
+            const key = `${endpoint}:${generation}:${requestId}`;
+            this.p9Requests.delete(key);
+            if (this.hints.delete(key))
+                this.settledHints++;
             const result = this.withBytes(bytes, (ptr, len) =>
                 this.exports.riscbox_p9_complete(
                     endpoint, generation, requestId, outcome, ptr, len,
@@ -250,6 +344,17 @@
             if (result !== 0)
                 throw new Error(`Riscbox rejected 9p completion ${requestId}`);
             this.drainActions();
+            this.schedule(0);
+        }
+
+        retireP9(endpoint, generation) {
+            const prefix = `${endpoint}:${generation}:`;
+            for (const key of this.p9Requests.keys()) {
+                if (key.startsWith(prefix)) {
+                    this.p9Requests.delete(key);
+                    this.hints.delete(key);
+                }
+            }
         }
 
         consoleInput(data) {

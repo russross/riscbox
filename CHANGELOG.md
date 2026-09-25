@@ -4,6 +4,13 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Added an early host-attention exit after guest MMIO requests for 9p and
+    HTTP block work. The JavaScript driver now owns bounded guest turns,
+    resumes unused cycles after resident 9p replies, and replaces WFI timers
+    when asynchronous replies arrive. 9p sessions can hint that a request will
+    settle through microtasks; the driver logs 20 consecutive empty yields and
+    recovers. Removed the custom `schedule(milliseconds)` option and changed
+    the custom 9p request interface to include `expectResponse`.
 *   Load raw or gzip-compressed kernels at the existing boot address, with
     decompressed size bounded by the RAM and initrd layout. Image deployments
     now publish `gzip -9` kernels under names derived from the uncompressed

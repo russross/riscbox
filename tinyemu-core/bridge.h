@@ -8,7 +8,7 @@ typedef struct TinyemuCore TinyemuCore;
 
 typedef struct {
     uint32_t cycles;
-    uint32_t waiting;
+    uint32_t reason;
 } TinyemuRunResult;
 
 TinyemuCore *tinyemu_core_create(void);

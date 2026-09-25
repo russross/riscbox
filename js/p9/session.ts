@@ -104,6 +104,7 @@ export type FileReadState =
 interface PendingRequest {
     generation: number;
     resolve: (outcome: P9Outcome) => void;
+    expectResponse: () => void;
 }
 
 class P9Error extends Error {
@@ -1029,6 +1030,20 @@ export class ProtocolEngine {
         }
     }
 
+    residentRequest(request: Uint8Array): boolean {
+        if (request.length < 11) return true;
+        const view = new DataView(request.buffer, request.byteOffset, request.byteLength);
+        const type = request[4];
+        if (type !== 116 && type !== 118 && type !== 26) return true;
+        try {
+            const node = this.fid(view.getUint32(7, true)).node;
+            return node.kind !== "file" || node.content.kind === "resident"
+                || node.content.kind === "failed";
+        } catch {
+            return true;
+        }
+    }
+
     async prepare(request: Uint8Array): Promise<void> {
         if (request.length < 11) return;
         const view = new DataView(request.buffer, request.byteOffset, request.byteLength);
@@ -1504,7 +1519,8 @@ export class P9Session {
         this.active = new Map();
     }
 
-    request(request: Uint8Array, replyCapacity: number): Promise<P9Outcome> {
+    request(request: Uint8Array, replyCapacity: number,
+            expectResponse: () => void = () => {}): Promise<P9Outcome> {
         if (this.closed) {
             return Promise.reject(new Error("9p session is closed"));
         }
@@ -1519,6 +1535,7 @@ export class P9Session {
                 throw new P9Error(EPROTO, "invalid 9p message size");
             }
         } catch (error) {
+            expectResponse();
             return Promise.resolve({
                 kind: "reply",
                 bytes: this.protocol.request(request, replyCapacity),
@@ -1527,6 +1544,7 @@ export class P9Session {
         if (type === 100) {
             this.retireActive();
             this.generation += 1;
+            expectResponse();
             return Promise.resolve({
                 kind: "reply",
                 bytes: this.protocol.request(request, replyCapacity),
@@ -1540,22 +1558,33 @@ export class P9Session {
                 const pending = this.active.get(oldTag);
                 if (pending !== undefined) {
                     this.active.delete(oldTag);
+                    pending.expectResponse();
                     pending.resolve({ kind: "suppressed" });
                 }
             }
+            expectResponse();
             return Promise.resolve({
                 kind: "reply",
                 bytes: this.protocol.request(request, replyCapacity),
             });
         }
         if (this.active.has(tag)) {
+            expectResponse();
             const writer = new Writer(replyCapacity, RLERROR, tag);
             writer.u32(EPROTO);
             return Promise.resolve({ kind: "reply", bytes: writer.finish() });
         }
         const generation = this.generation;
+        let hinted = false;
+        const hint = (): void => {
+            if (!hinted) {
+                hinted = true;
+                expectResponse();
+            }
+        };
+        if (this.protocol.residentRequest(request)) hint();
         return new Promise<P9Outcome>((resolve) => {
-            const pending = { generation, resolve };
+            const pending = { generation, resolve, expectResponse: hint };
             this.active.set(tag, pending);
             queueMicrotask(async () => {
                 if (this.active.get(tag) !== pending || this.generation !== generation) {
@@ -1580,6 +1609,7 @@ export class P9Session {
 
     retireActive(): void {
         for (const pending of this.active.values()) {
+            pending.expectResponse();
             pending.resolve({ kind: "suppressed" });
         }
         this.active.clear();

@@ -85,9 +85,10 @@ runtime.start(new URL("./riscbox.cfg", location.href).href, 256);
 </script>
 ```
 
-The adapter schedules execution automatically unless a `schedule(milliseconds)`
-callback is supplied. Runnable guests request an immediate next slice; waiting
-guests request a bounded timer delay. Integrations can also provide `networkWrite`,
+The adapter schedules execution automatically. Runnable guests request an
+immediate next turn; waiting guests sleep until the nearest guest timer deadline,
+up to ten milliseconds. A completed asynchronous device request wakes a waiting
+guest immediately. Integrations can also provide `networkWrite`,
 `framebufferRefresh`, and `p9Servers`. Host input methods are
 `consoleInput(bytes)`, `consoleResize(columns, rows)`, `keyEvent()`,
 `pointerEvent()`, `wheelEvent()`, `networkInput()`, and `networkCarrier()`.
@@ -270,6 +271,7 @@ interface P9Session {
     request(
         bytes: Uint8Array,
         replyCapacity: number,
+        expectResponse: () => void,
     ): Promise<{ kind: "reply"; bytes: Uint8Array } | { kind: "suppressed" }>;
     close(): void;
 }
@@ -279,6 +281,13 @@ The server owns 9P2000.L negotiation, fids, tags, flush ordering, errors, and
 filesystem semantics. Rejecting a request promise means the endpoint failed;
 normal filesystem errors must be encoded as 9p replies. Do not retain request
 or WASM-backed buffers after their documented lifetime.
+Call `expectResponse()` once, before starting the promise or microtask chain,
+when the request can settle without blocking I/O. Call the retained callback
+for each earlier request that a flush, reset, or close can settle. Do not call
+it for HTTP, local-storage, or other asynchronous work. The callback carries
+no result; only the returned promise completes a request. After 20 consecutive
+microtask yields without a response, the driver logs unresolved hints and the
+guest continues. Each delivered response resets that count.
 
 For large static trees, a seed plugin is usually simpler than a custom server.
 It declares the complete namespace and lazily loads regular-file bodies:

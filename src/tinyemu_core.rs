@@ -9,6 +9,7 @@ pub enum BusError {
 pub enum RunState {
     Running,
     Waiting,
+    HostAttention,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -36,7 +37,7 @@ mod ffi {
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub struct RunResult {
         pub cycles: u32,
-        pub waiting: u32,
+        pub reason: u32,
     }
 
     unsafe extern "C" {
@@ -93,6 +94,9 @@ mod ffi {
         /// Returns an access fault for an invalid device operation.
         fn write(&mut self, address: u64, width: u32, value: u32) -> Result<(), BusError>;
         fn interrupts(&self) -> u32;
+        fn host_attention(&self) -> bool {
+            false
+        }
     }
 
     struct HostContext<'a> {
@@ -309,6 +313,16 @@ mod ffi {
         // SAFETY: run_host passes a live HostContext for the call duration.
         let context = unsafe { &*host.cast::<HostContext<'_>>() };
         context.host.interrupts()
+    }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn tinyemu_host_attention(host: *mut c_void) -> u32 {
+        if host.is_null() {
+            return 0;
+        }
+        // SAFETY: The interpreter retains this context only during run_host.
+        let context = unsafe { &*host.cast::<HostContext<'_>>() };
+        u32::from(context.host.host_attention())
     }
 
     #[unsafe(no_mangle)]

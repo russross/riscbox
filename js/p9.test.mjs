@@ -327,6 +327,32 @@ test("flush suppresses the original response before Rflush and permits tag reuse
     session.close();
 });
 
+test("resident requests hint before settlement and flush hints suppressed requests", async () => {
+    const session = new Memory9PServer({ file: "x" }).connect();
+    const events = [];
+    const version = session.request(
+        new Message(100, 0xffff).u32(65536).string("9P2000.L").finish(),
+        65536, () => events.push("version hint"),
+    ).then(() => events.push("version reply"));
+    assert.deepEqual(events, ["version hint"]);
+    await version;
+    await versionAndAttach(session);
+    await exchange(session, new Message(110).u32(1).u32(2).u16(1).string("file"));
+    const old = session.request(
+        new Message(116, 4).u32(2).u64(0).u32(1).finish(),
+        65536, () => events.push("old hint"),
+    );
+    const flush = session.request(
+        new Message(108, 5).u16(4).finish(),
+        65536, () => events.push("flush hint"),
+    );
+    assert.equal((await old).kind, "suppressed");
+    assert.equal((await flush).kind, "reply");
+    assert.equal(events.filter((event) => event === "old hint").length, 1);
+    assert.ok(events.indexOf("old hint") < events.indexOf("flush hint"));
+    session.close();
+});
+
 test("Tversion suppresses older session work and clears fids", async () => {
     const session = new Memory9PServer({ file: "x" }).connect();
     const send = (message) => session.request(message.finish(), 65536);

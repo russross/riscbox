@@ -22,6 +22,7 @@ extern int tinyemu_host_read(void *host, uint64_t address, unsigned width,
 extern int tinyemu_host_write(void *host, uint64_t address, unsigned width,
                               uint32_t value);
 extern uint32_t tinyemu_host_interrupts(void *host);
+extern uint32_t tinyemu_host_attention(void *host);
 
 static uint64_t get_time(void *opaque)
 {
@@ -53,6 +54,8 @@ static int write_device(void *opaque, uint32_t offset, uint32_t value,
                                     1u << size_log2, value);
     tinyemu_core_set_interrupts(device->core,
                                 tinyemu_host_interrupts(device->core->host));
+    if (status == 0 && tinyemu_host_attention(device->core->host))
+        device->core->cpu->host_attention = TRUE;
     return status;
 }
 
@@ -210,12 +213,14 @@ TinyemuRunResult tinyemu_core_run(TinyemuCore *core, uint32_t budget,
                                    void *host)
 {
     core->host = host;
+    core->cpu->host_attention = FALSE;
     uint64_t before = riscv_cpu_get_cycles(core->cpu);
     riscv_cpu_interp(core->cpu, (int)budget);
     core->host = NULL;
     TinyemuRunResult result = {
         (uint32_t)(riscv_cpu_get_cycles(core->cpu) - before),
-        (uint32_t)riscv_cpu_get_power_down(core->cpu)
+        core->cpu->host_attention ? 2u :
+            (riscv_cpu_get_power_down(core->cpu) ? 1u : 0u)
     };
     return result;
 }

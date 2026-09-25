@@ -151,7 +151,7 @@ fn tinyemu_sstc_timer_wakes_waiting_hart() {
         ],
     );
     core.run(20);
-    assert_eq!(core.run(1).waiting, 1);
+    assert_eq!(core.run(1).reason, 1);
     core.set_time(10);
     core.run(1);
     assert_eq!(core.machine_cause(), (1_u64 << 63) | 5);

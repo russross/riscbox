@@ -377,7 +377,7 @@ pmp_check:
     return TRANSLATE_OK;
 }
 
-/* return 0 if OK, != 0 if exception */
+/* Return zero on a read and negative on a guest load exception. */
 int target_read_slow(RISCVCPUState *s, mem_uint_t *pval,
                      target_ulong addr, int size_log2)
 {
@@ -514,7 +514,8 @@ device_read_fault:
     return -1;
 }
 
-/* return 0 if OK, != 0 if exception */
+/* Return zero for an ordinary write, positive for a completed host handoff,
+   and negative for a guest store exception. */
 int target_write_slow(RISCVCPUState *s, target_ulong addr,
                       mem_uint_t val, int size_log2)
 {
@@ -530,7 +531,7 @@ int target_write_slow(RISCVCPUState *s, target_ulong addr,
         /* XXX: should avoid modifying the memory in case of exception */
         for(i = 0; i < size; i++) {
             err = target_write_u8(s, addr + i, (val >> (8 * i)) & 0xff);
-            if (err)
+            if (err < 0)
                 return err;
         }
     } else {
@@ -603,7 +604,7 @@ int target_write_slow(RISCVCPUState *s, target_ulong addr,
             }
         }
     }
-    return 0;
+    return s->host_attention ? 1 : 0;
 device_write_fault:
     s->pending_tval = addr;
     s->pending_exception = CAUSE_FAULT_STORE;
@@ -1449,7 +1450,7 @@ static void glue(riscv_cpu_interp, MAX_XLEN)(RISCVCPUState *s, int n_cycles)
     uint64_t timeout;
 
     timeout = s->elapsed_cycles + n_cycles;
-    while (!s->power_down_flag &&
+    while (!s->power_down_flag && !s->host_attention &&
            (int)(timeout - s->elapsed_cycles) > 0) {
         n_cycles = timeout - s->elapsed_cycles;
         riscv_cpu_interp_x64(s, n_cycles);

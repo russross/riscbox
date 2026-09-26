@@ -36,7 +36,7 @@ pub const VIRTIO_BASE: u64 = 0x1000_1000;
 
 const KERNEL_OFFSET: u64 = 0x20_0000;
 const FDT_ALIGNMENT: u64 = 0x20_0000;
-const FDT_MAX_OFFSET: u64 = 0x4000_0000;
+const FW_DYNAMIC_INFO_ADDRESS: u64 = 0x1028;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FramebufferConfig {
@@ -52,15 +52,23 @@ pub struct MachineConfig {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BootImages<'a> {
-    pub firmware: &'a [u8],
+    pub firmware: Option<&'a [u8]>,
     pub kernel: Option<&'a [u8]>,
     pub initrd: Option<&'a [u8]>,
     pub command_line: &'a str,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct BootAddresses {
+    pub firmware: Option<u64>,
+    pub kernel: Option<u64>,
+    pub initrd: Option<u64>,
+    pub fdt: Option<u64>,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BootLayout {
-    pub firmware_address: u64,
+    pub firmware_address: Option<u64>,
     pub kernel_address: Option<u64>,
     pub initrd_address: Option<u64>,
     pub fdt_address: u64,
@@ -90,12 +98,11 @@ pub enum MachineError {
     InvalidRamSize(u64),
     InvalidFramebuffer,
     FirmwareTooLarge,
-    FirmwareOverlapsKernel,
     KernelTooLarge,
     InvalidCompressedKernel,
-    KernelOverlapsInitrd,
-    InitrdTooLarge,
+    InvalidCompressedFirmware,
     DeviceTreeTooLarge,
+    InvalidBootLayout(String),
     Virtio(DeviceError),
     VirtioSlotLimit,
     WrongVirtioDevice,
@@ -111,14 +118,13 @@ impl fmt::Display for MachineError {
             Self::InvalidRamSize(size) => write!(formatter, "invalid platform RAM size {size:#x}"),
             Self::InvalidFramebuffer => formatter.write_str("invalid framebuffer dimensions"),
             Self::FirmwareTooLarge => formatter.write_str("firmware does not fit in RAM"),
-            Self::FirmwareOverlapsKernel => {
-                formatter.write_str("firmware overlaps the kernel load address")
-            }
             Self::KernelTooLarge => formatter.write_str("kernel does not fit in RAM"),
             Self::InvalidCompressedKernel => formatter.write_str("invalid gzip-compressed kernel"),
-            Self::KernelOverlapsInitrd => formatter.write_str("kernel overlaps initrd"),
-            Self::InitrdTooLarge => formatter.write_str("initrd does not fit in RAM"),
+            Self::InvalidCompressedFirmware => {
+                formatter.write_str("invalid gzip-compressed firmware")
+            }
             Self::DeviceTreeTooLarge => formatter.write_str("device tree does not fit in RAM"),
+            Self::InvalidBootLayout(reason) => formatter.write_str(reason),
             Self::Virtio(error) => error.fmt(formatter),
             Self::VirtioSlotLimit => formatter.write_str("too many `VirtIO` MMIO devices"),
             Self::WrongVirtioDevice => {
@@ -631,49 +637,118 @@ impl Machine {
     /// # Errors
     ///
     /// Returns an error when images overlap, do not fit in guest RAM, or contain
-    /// an invalid gzip-compressed kernel.
+    /// an invalid gzip-compressed payload.
     pub fn load_boot(&mut self, images: BootImages<'_>) -> Result<BootLayout, MachineError> {
-        let firmware_end =
-            u64::try_from(images.firmware.len()).map_err(|_| MachineError::FirmwareTooLarge)?;
-        if firmware_end > self.config.ram_size {
-            return Err(MachineError::FirmwareTooLarge);
+        self.load_boot_at(images, BootAddresses::default())
+    }
+
+    /// Loads boot images at validated physical addresses. Absent firmware directly boots the kernel.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for invalid images, addresses, or overlapping RAM regions.
+    pub fn load_boot_at(
+        &mut self,
+        images: BootImages<'_>,
+        addresses: BootAddresses,
+    ) -> Result<BootLayout, MachineError> {
+        // Resolve addresses before decompressing, so output is bounded by the
+        // space actually available at each selected physical location.
+        if images.firmware.is_some_and(<[u8]>::is_empty) {
+            return Err(MachineError::InvalidBootLayout("firmware is empty".into()));
         }
-        if images.kernel.is_some() && firmware_end > KERNEL_OFFSET {
-            return Err(MachineError::FirmwareOverlapsKernel);
+        let firmware_address = images
+            .firmware
+            .map(|_| addresses.firmware.unwrap_or(RAM_BASE));
+        let kernel_address = images
+            .kernel
+            .map(|_| addresses.kernel.unwrap_or(RAM_BASE + KERNEL_OFFSET));
+        let initrd_address = images.initrd.map(|_| {
+            addresses.initrd.unwrap_or_else(|| {
+                kernel_address
+                    .unwrap_or(RAM_BASE)
+                    .saturating_add(self.config.ram_size.div_ceil(2).min(512 << 20))
+            })
+        });
+        // Reject bad physical positions before subtracting from the RAM end
+        // or reserving space for gzip output.
+        let ram_end = RAM_BASE + self.config.ram_size;
+        for (name, address) in [
+            ("firmware", firmware_address),
+            ("kernel", kernel_address),
+            ("initrd", initrd_address),
+        ] {
+            if let Some(address) = address
+                && (address < RAM_BASE || address >= ram_end)
+            {
+                return Err(MachineError::InvalidBootLayout(format!(
+                    "{name} address is outside RAM"
+                )));
+            }
         }
-        let initrd_offset = self.config.ram_size.div_ceil(2).min(128 << 20);
-        let kernel_limit = if images.initrd.is_some() {
-            initrd_offset
-        } else {
-            self.config.ram_size
-        }
-        .saturating_sub(KERNEL_OFFSET);
+        let decoded_firmware = images
+            .firmware
+            .filter(|image| image.starts_with(&[0x1f, 0x8b]))
+            .map(|image| {
+                decode_gzip(
+                    image,
+                    ram_end - firmware_address.unwrap_or(RAM_BASE),
+                    MachineError::FirmwareTooLarge,
+                    MachineError::InvalidCompressedFirmware,
+                )
+            })
+            .transpose()?;
+        let firmware = decoded_firmware.as_deref().or(images.firmware);
+        // Linux and OpenSBI receive the final decoded bytes in guest RAM.
+        // An initrd stays opaque because the guest owns its compression format.
+        let kernel_limit = kernel_address.map_or(0, |address| ram_end - address);
         let decoded_kernel = images
             .kernel
             .filter(|image| image.starts_with(&[0x1f, 0x8b]))
-            .map(|image| decode_kernel(image, kernel_limit, images.initrd.is_some()))
+            .map(|image| {
+                decode_gzip(
+                    image,
+                    kernel_limit,
+                    MachineError::KernelTooLarge,
+                    MachineError::InvalidCompressedKernel,
+                )
+            })
             .transpose()?;
         let kernel = decoded_kernel.as_deref().or(images.kernel);
-        let kernel_size = kernel.map_or(0, |image| image.len() as u64);
-        let kernel_end = if images.kernel.is_some() {
-            KERNEL_OFFSET
-                .checked_add(kernel_size)
-                .ok_or(MachineError::KernelTooLarge)?
-        } else {
-            firmware_end
-        };
-        if kernel_end > self.config.ram_size {
-            return Err(MachineError::KernelTooLarge);
+        // Check all payload intervals together, including configurations that
+        // place an initrd below or between the other boot images.
+        let mut regions = Vec::new();
+        for (name, address, bytes) in [
+            ("firmware", firmware_address, firmware),
+            ("kernel", kernel_address, kernel),
+            ("initrd", initrd_address, images.initrd),
+        ] {
+            if let (Some(address), Some(bytes)) = (address, bytes) {
+                let end = address.checked_add(bytes.len() as u64).ok_or_else(|| {
+                    MachineError::InvalidBootLayout(format!("{name} address overflows"))
+                })?;
+                if end > ram_end {
+                    return Err(MachineError::InvalidBootLayout(format!(
+                        "{name} does not fit in RAM"
+                    )));
+                }
+                regions.push((name, address, end));
+            }
         }
-        let initrd_size = images.initrd.map_or(0, |image| image.len() as u64);
-        if images.initrd.is_some() && kernel_end > initrd_offset {
-            return Err(MachineError::KernelOverlapsInitrd);
+        if firmware.is_none() && kernel.is_none() {
+            return Err(MachineError::InvalidBootLayout(
+                "boot requires firmware or kernel".into(),
+            ));
         }
-        let initrd_end = initrd_offset
-            .checked_add(initrd_size)
-            .ok_or(MachineError::InitrdTooLarge)?;
-        if initrd_end > self.config.ram_size {
-            return Err(MachineError::InitrdTooLarge);
+        for left in 0..regions.len() {
+            for right in left + 1..regions.len() {
+                if regions[left].1 < regions[right].2 && regions[right].1 < regions[left].2 {
+                    return Err(MachineError::InvalidBootLayout(format!(
+                        "{} overlaps {}",
+                        regions[left].0, regions[right].0
+                    )));
+                }
+            }
         }
         let framebuffer = self
             .bus
@@ -687,7 +762,10 @@ impl Machine {
             });
         let initrd = images
             .initrd
-            .map(|_| (RAM_BASE + initrd_offset, initrd_size));
+            .zip(initrd_address)
+            .map(|(bytes, address)| (address, bytes.len() as u64));
+        // The device tree contains the selected initrd range and current
+        // platform devices, so build it after the payload locations settle.
         let mut rng_seed = [0; 32];
         self.entropy.borrow_mut().fill(&mut rng_seed)?;
         let tree = build_fdt(FdtConfig {
@@ -699,33 +777,49 @@ impl Machine {
             rng_seed: Some(&rng_seed),
             framebuffer,
         });
-        let limit = self.config.ram_size.min(FDT_MAX_OFFSET);
+        let limit = self.config.ram_size;
         let tree_len = u64::try_from(tree.len()).map_err(|_| MachineError::DeviceTreeTooLarge)?;
         if tree_len > limit {
             return Err(MachineError::DeviceTreeTooLarge);
         }
-        let tree_offset = (limit - tree_len) & !(FDT_ALIGNMENT - 1);
-        if tree_offset < kernel_end
-            || (images.initrd.is_some()
-                && initrd_offset < tree_offset + tree_len
-                && tree_offset < initrd_end)
+        let tree_address = addresses
+            .fdt
+            .unwrap_or(RAM_BASE + ((limit - tree_len) & !(FDT_ALIGNMENT - 1)));
+        let tree_end = tree_address
+            .checked_add(tree_len)
+            .ok_or(MachineError::DeviceTreeTooLarge)?;
+        // A caller-selected tree location follows the same bounds and
+        // interval checks as payloads, plus the FDT's 8-byte alignment.
+        if tree_address < RAM_BASE
+            || tree_address & 7 != 0
+            || tree_end > ram_end
+            || regions
+                .iter()
+                .any(|(_, start, end)| tree_address < *end && *start < tree_end)
         {
             return Err(MachineError::DeviceTreeTooLarge);
         }
-        self.copy_to_ram(RAM_BASE, images.firmware)?;
-        if let Some(kernel) = kernel {
-            self.copy_to_ram(RAM_BASE + KERNEL_OFFSET, kernel)?;
+        if let Some((address, firmware)) = firmware_address.zip(firmware) {
+            self.copy_to_ram(address, firmware)?;
         }
-        if let Some(initrd_image) = images.initrd {
-            self.copy_to_ram(RAM_BASE + initrd_offset, initrd_image)?;
+        if let Some((address, kernel)) = kernel_address.zip(kernel) {
+            self.copy_to_ram(address, kernel)?;
         }
-        self.copy_to_ram(RAM_BASE + tree_offset, &tree)?;
-        self.write_reset_vector(RAM_BASE + tree_offset)?;
+        if let Some((address, initrd_image)) = initrd_address.zip(images.initrd) {
+            self.copy_to_ram(address, initrd_image)?;
+        }
+        // The ROM starts at the selected firmware or direct-kernel entry and
+        // supplies the next-stage address through OpenSBI's dynamic-info ABI.
+        self.copy_to_ram(tree_address, &tree)?;
+        let entry = firmware_address.or(kernel_address).ok_or_else(|| {
+            MachineError::InvalidBootLayout("boot requires firmware or kernel".into())
+        })?;
+        self.write_reset_vector(entry, tree_address, kernel_address)?;
         Ok(BootLayout {
-            firmware_address: RAM_BASE,
-            kernel_address: images.kernel.map(|_| RAM_BASE + KERNEL_OFFSET),
-            initrd_address: images.initrd.map(|_| RAM_BASE + initrd_offset),
-            fdt_address: RAM_BASE + tree_offset,
+            firmware_address,
+            kernel_address,
+            initrd_address,
+            fdt_address: tree_address,
             fdt_size: u32::try_from(tree.len()).map_err(|_| MachineError::DeviceTreeTooLarge)?,
         })
     }
@@ -738,20 +832,33 @@ impl Machine {
         Ok(())
     }
 
-    fn write_reset_vector(&mut self, fdt_address: u64) -> Result<(), MachineError> {
-        let mut reset = Vec::with_capacity(40);
+    fn write_reset_vector(
+        &mut self,
+        entry: u64,
+        fdt_address: u64,
+        next: Option<u64>,
+    ) -> Result<(), MachineError> {
+        let mut reset = Vec::with_capacity(88);
+        // The ROM sets a2 to the dynamic-info words after its two pointers,
+        // a0 to the hart ID, and a1 to the device tree pointer.
         for instruction in [
             0x0000_0297_u32,
-            0x0182_b283,
-            0x0000_0597,
-            0x0185_b583,
+            0x0282_8613,
             0xf140_2573,
+            0x0202_b583,
+            0x0182_b283,
             0x0002_8067,
         ] {
             reset.extend_from_slice(&instruction.to_le_bytes());
         }
-        reset.extend_from_slice(&RAM_BASE.to_le_bytes());
+        reset.extend_from_slice(&entry.to_le_bytes());
         reset.extend_from_slice(&fdt_address.to_le_bytes());
+        // OpenSBI version 2 names the S-mode next stage and boot hart zero.
+        // Other firmware may ignore a2 and use the same reset vector.
+        for word in [0x4942_534f_u64, 2, next.unwrap_or(0), 1, 0, 0] {
+            reset.extend_from_slice(&word.to_le_bytes());
+        }
+        debug_assert_eq!(0x1000 + 40, FW_DYNAMIC_INFO_ADDRESS);
         self.copy_to_ram(0x1000, &reset)
     }
 
@@ -1230,7 +1337,12 @@ impl Machine {
     }
 }
 
-fn decode_kernel(image: &[u8], limit: u64, has_initrd: bool) -> Result<Vec<u8>, MachineError> {
+fn decode_gzip(
+    image: &[u8],
+    limit: u64,
+    oversized: MachineError,
+    invalid: MachineError,
+) -> Result<Vec<u8>, MachineError> {
     // Bound decoded output before it can consume more memory than the boot
     // layout permits. Reading one extra byte distinguishes a full region
     // from a kernel that would cross its end.
@@ -1238,13 +1350,9 @@ fn decode_kernel(image: &[u8], limit: u64, has_initrd: bool) -> Result<Vec<u8>, 
     MultiGzDecoder::new(image)
         .take(limit.saturating_add(1))
         .read_to_end(&mut decoded)
-        .map_err(|_| MachineError::InvalidCompressedKernel)?;
+        .map_err(|_| invalid)?;
     if decoded.len() as u64 > limit {
-        return Err(if has_initrd {
-            MachineError::KernelOverlapsInitrd
-        } else {
-            MachineError::KernelTooLarge
-        });
+        return Err(oversized);
     }
     Ok(decoded)
 }

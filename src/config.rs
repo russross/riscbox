@@ -349,6 +349,10 @@ pub struct VmConfig {
     pub bios: Option<String>,
     pub kernel: Option<String>,
     pub initrd: Option<String>,
+    pub bios_address: Option<u64>,
+    pub kernel_address: Option<u64>,
+    pub initrd_address: Option<u64>,
+    pub fdt_address: Option<u64>,
     pub command_line: Option<String>,
     pub console: Console,
     pub uart_output: bool,
@@ -466,6 +470,10 @@ impl VmConfig {
             bios: optional_string(object, "bios")?.map(str::to_owned),
             kernel: optional_string(object, "kernel")?.map(str::to_owned),
             initrd: optional_string(object, "initrd")?.map(str::to_owned),
+            bios_address: optional_address(object, "bios_address")?,
+            kernel_address: optional_address(object, "kernel_address")?,
+            initrd_address: optional_address(object, "initrd_address")?,
+            fdt_address: optional_address(object, "fdt_address")?,
             command_line: optional_string(object, "cmdline")?.map(str::to_owned),
             console,
             uart_output: optional_bool(object, "uart_output")?.unwrap_or(false),
@@ -548,6 +556,29 @@ fn optional_string<'a>(
             value
                 .as_str()
                 .ok_or_else(|| ConfigError(format!("{name} must be a string")))
+        })
+        .transpose()
+}
+
+fn optional_address(
+    object: &BTreeMap<String, Value>,
+    name: &str,
+) -> Result<Option<u64>, ConfigError> {
+    object
+        .get(name)
+        .map(|value| match value {
+            Value::Integer(number) if *number >= 0 => u64::try_from(*number)
+                .map_err(|_| ConfigError(format!("{name} must be a physical address"))),
+            Value::String(source) => {
+                let digits = source.strip_prefix("0x").unwrap_or(source);
+                if source.starts_with("0x") {
+                    u64::from_str_radix(digits, 16)
+                } else {
+                    source.parse::<u64>()
+                }
+                .map_err(|_| ConfigError(format!("{name} must be a physical address")))
+            }
+            _ => Err(ConfigError(format!("{name} must be a physical address"))),
         })
         .transpose()
 }

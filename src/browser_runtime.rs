@@ -10,7 +10,8 @@ use crate::browser_storage::HttpBlockStore;
 use crate::config::{Console, VmConfig, resolve_asset_path};
 use crate::entropy::{EntropyError, EntropySource, SharedEntropy};
 use crate::machine::{
-    BootImages, FramebufferConfig, FramebufferUpdate, Machine, MachineConfig, MachineError,
+    BootAddresses, BootImages, FramebufferConfig, FramebufferUpdate, Machine, MachineConfig,
+    MachineError,
 };
 use crate::tinyemu_core::CpuRunExitReason;
 use crate::virtio_devices::{
@@ -329,7 +330,6 @@ pub enum RuntimeError {
     UnexpectedResponse(u32),
     HttpStatus(u16),
     InvalidConfig(String),
-    MissingFirmware,
     Machine(String),
 }
 
@@ -1060,10 +1060,7 @@ impl BrowserRuntime {
 
     fn finish_loading(&mut self, mut loading: Loading) -> Result<(), RuntimeError> {
         let config = loading.config.take().expect("loading state retains config");
-        let firmware = loading
-            .firmware
-            .as_deref()
-            .ok_or(RuntimeError::MissingFirmware)?;
+        let firmware = loading.firmware.as_deref();
         let ram_size = u64::from(loading.start.ram_mib)
             .checked_shl(20)
             .ok_or_else(|| RuntimeError::Machine("RAM size overflow".into()))?;
@@ -1117,12 +1114,20 @@ impl BrowserRuntime {
             (None, None)
         };
         machine.add_entropy_device()?;
-        machine.load_boot(BootImages {
-            firmware,
-            kernel: loading.kernel.as_deref(),
-            initrd: loading.initrd.as_deref(),
-            command_line: config.command_line.as_deref().unwrap_or_default(),
-        })?;
+        machine.load_boot_at(
+            BootImages {
+                firmware,
+                kernel: loading.kernel.as_deref(),
+                initrd: loading.initrd.as_deref(),
+                command_line: config.command_line.as_deref().unwrap_or_default(),
+            },
+            BootAddresses {
+                firmware: config.bios_address,
+                kernel: config.kernel_address,
+                initrd: config.initrd_address,
+                fdt: config.fdt_address,
+            },
+        )?;
         self.state = State::Running(Box::new(Running {
             machine,
             console_slot,

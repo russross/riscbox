@@ -91,7 +91,12 @@ bindings. The platform boots current xv6 over UART and VirtIO block and boots a
 prepared Alpine system through OpenSBI to login and clean shutdown. The browser
 adapter loads configuration, firmware, kernels, initrds, and split HTTP disks
 relative to the configuration URL. Raw and gzip-compressed kernels load at the
-same guest address; decompressed output is bounded by the boot layout. Image
+same guest address; firmware can also be gzip-compressed, and initrds remain
+opaque. Boot configuration can override firmware, kernel, initrd, and device
+tree physical addresses; the loader validates their RAM bounds and overlap.
+The reset ROM passes OpenSBI `fw_dynamic.bin` a dynamic-info block with the
+next-stage address. Without firmware, the kernel starts directly in M-mode.
+Decompressed output is bounded by the boot layout. Image
 deployments gzip the kernel while naming it from the uncompressed hash. HTTP
 disk writes are session-local. The browser adapter uses `force-cache` for
 content-hash-named boot and disk assets and `no-store` for the configuration.

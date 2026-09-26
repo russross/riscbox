@@ -156,7 +156,7 @@ disk-backed Linux VM is:
     version: 1,
     machine: "riscv64",
     memory_size: 256,
-    bios: "fw_jump.bin",
+    bios: "fw_dynamic.bin",
     kernel: "linux",
     cmdline: "root=/dev/vda rw rootfstype=ext4 console=hvc0",
     drive0: { file: "drive/blk.txt" },
@@ -167,9 +167,14 @@ disk-backed Linux VM is:
 
 The main options are:
 
-*   `bios`, `kernel`, and optional `initrd` select boot payloads. Kernels may
-    be raw or gzip-compressed; firmware and initrds are loaded as supplied.
-    `memory_size` is in MiB, and `cmdline` is passed to Linux.
+*   `bios`, `kernel`, and optional `initrd` select boot payloads. At least one
+    of `bios` and `kernel` is required. Firmware and kernels may be raw or
+    gzip-compressed; initrds are passed to the guest unchanged. `memory_size`
+    is in MiB, and `cmdline` is passed to Linux.
+*   `bios_address`, `kernel_address`, `initrd_address`, and `fdt_address`
+    optionally set physical load addresses. Use quoted hexadecimal strings for
+    addresses above the config parser's signed 32-bit integer range, such as
+    `kernel_address: "0x100000000"`.
 *   `console` is `virtio` by default or `uart`. `uart_output: true` mirrors
     firmware and early-kernel UART output while input stays on VirtIO.
 *   Consecutive `drive0` through `drive3` add VirtIO block devices. Browser
@@ -182,10 +187,15 @@ The main options are:
     single supported network interface as `{ driver: "user" }` when the host
     installs a frontend. Native TAP and SLIRP backends are not supported.
 
-Boot payloads are explicit. Riscbox directly loads raw OpenSBI `fw_jump.bin`, a
-raw or gzip-compressed Linux `Image`, an optional opaque initramfs, or a flat
-bare-metal image. It does not parse ELF, PE/COFF, FIT, qcow2, or other
-compressed kernel formats and does not bundle OpenSBI or U-Boot.
+Boot payloads are explicit. By default, firmware loads at `0x80000000`, a
+kernel at `0x80200000`, and an initrd at the kernel address plus half of RAM
+(capped at 512 MiB). The device tree is placed near the end of RAM at a 2 MiB
+boundary. Riscbox passes OpenSBI `fw_dynamic.bin` the kernel entry through
+its dynamic-info block in the reset ROM. Omitting `bios` starts the kernel in
+M-mode; this supports bare-metal guests such as xv6. An S-mode U-Boot binary
+can be supplied as `kernel` after OpenSBI. Riscbox does not parse ELF,
+PE/COFF, FIT, qcow2, or other compressed kernel formats and does not bundle
+OpenSBI or U-Boot.
 
 Creating an image project
 -------------------------

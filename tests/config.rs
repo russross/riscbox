@@ -6,7 +6,7 @@ const COMPLETE: &str = r#"
     version: 1,
     machine: "riscv64",
     memory_size: 0x100,
-    bios: "fw_jump.bin",
+    bios: "fw_dynamic.bin",
     kernel: "linux",
     initrd: "initrd.img",
     cmdline: "root=/dev/vda",
@@ -81,6 +81,21 @@ fn applies_defaults_and_reports_schema_errors() {
         "{version:1,machine:\"riscv64\",memory_size:128,eth0:{driver:\"user\",ifname:\"tap0\"}}",
     ] {
         assert!(VmConfig::parse(invalid).is_err(), "accepted {invalid}");
+    }
+}
+
+#[test]
+fn parses_full_width_boot_addresses() {
+    let config = VmConfig::parse(
+        "{version:1,machine:\"riscv64\",memory_size:128,kernel:\"Image\",kernel_address:\"0x100000000\",fdt_address:4096}"
+    ).expect("boot addresses");
+    assert_eq!(config.kernel_address, Some(0x1_0000_0000));
+    assert_eq!(config.fdt_address, Some(4096));
+    assert!(config.bios.is_none());
+    for value in ["-1", "\"nope\"", "true"] {
+        let source =
+            format!("{{version:1,machine:\"riscv64\",memory_size:128,kernel_address:{value}}}");
+        assert!(VmConfig::parse(&source).is_err(), "accepted {value}");
     }
 }
 

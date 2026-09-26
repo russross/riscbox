@@ -38,15 +38,15 @@ class ImageDeploymentTests(unittest.TestCase):
             source = root / "source.cfg"
             output = root / "output.cfg"
             source.write_text(
-                '{bios:"fw_jump.bin",kernel:"linux",'
+                '{bios:"fw_dynamic.bin",kernel:"linux",'
                 'fs0:{file:"fs/head"},drive0:{file:"drive/blk.txt"}}'
             )
             helper.rewrite_config(
-                source, output, "fw_jump.bin-11111111", "linux-22222222", "drive-33333333"
+                source, output, "fw_dynamic.bin-11111111", "linux-22222222", "drive-33333333"
             )
             self.assertEqual(
                 output.read_text(),
-                '{bios:"fw_jump.bin-11111111",kernel:"linux-22222222",'
+                '{bios:"fw_dynamic.bin-11111111",kernel:"linux-22222222",'
                 'fs0:{file:"fs/head"},drive0:{file:"drive-33333333/blk.txt"}}',
             )
 
@@ -54,10 +54,10 @@ class ImageDeploymentTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             deployment = Path(temporary)
             (deployment / "riscbox.cfg").write_text(
-                '{bios:"fw_jump.bin-11111111",kernel:"linux-22222222",'
+                '{bios:"fw_dynamic.bin-11111111",kernel:"linux-22222222",'
                 'drive0:{file:"drive-33333333/blk.txt"}}'
             )
-            for name in ["fw_jump.bin-11111111", "fw_jump.bin-aaaaaaaa", "linux-22222222", "linux-bbbbbbbb", "index.html"]:
+            for name in ["fw_dynamic.bin-11111111", "fw_dynamic.bin-aaaaaaaa", "fw_jump.bin-bbbbbbbb", "linux-22222222", "linux-bbbbbbbb", "index.html"]:
                 (deployment / name).write_text(name)
             (deployment / "drive-33333333").mkdir()
             (deployment / "drive-cccccccc").mkdir()
@@ -66,7 +66,7 @@ class ImageDeploymentTests(unittest.TestCase):
 
             self.assertEqual(
                 removed,
-                {"fw_jump.bin-aaaaaaaa", "linux-bbbbbbbb", "drive-cccccccc"},
+                {"fw_dynamic.bin-aaaaaaaa", "fw_jump.bin-bbbbbbbb", "linux-bbbbbbbb", "drive-cccccccc"},
             )
             self.assertTrue((deployment / "drive-33333333").is_dir())
             self.assertTrue((deployment / "index.html").is_file())

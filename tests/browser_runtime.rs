@@ -120,6 +120,38 @@ fn configuration_and_boot_assets_load_in_dependency_order() {
 }
 
 #[test]
+fn browser_boots_without_firmware_and_rejects_an_empty_firmware_file() {
+    let mut runtime = BrowserRuntime::default();
+    runtime.start(start()).expect("start");
+    let (config_id, _) = request(&mut runtime);
+    runtime.complete_http(config_id, 200,
+        br#"{version:1,machine:"riscv64",memory_size:32,kernel:"bare.bin",kernel_address:"0x80400000"}"#.to_vec()
+    ).expect("configuration");
+    let (kernel_id, url) = request(&mut runtime);
+    assert_eq!(url, "https://host/vm/bare.bin");
+    runtime
+        .complete_http(kernel_id, 200, vec![0x13; 64])
+        .expect("direct kernel");
+    assert_eq!(runtime.next_action(), Some(HostAction::Started));
+
+    let mut invalid = BrowserRuntime::default();
+    invalid.start(start()).expect("start");
+    let (config_id, _) = request(&mut invalid);
+    invalid
+        .complete_http(
+            config_id,
+            200,
+            br#"{version:1,machine:"riscv64",memory_size:32,bios:"empty.bin"}"#.to_vec(),
+        )
+        .expect("configuration");
+    let (firmware_id, _) = request(&mut invalid);
+    let error = invalid
+        .complete_http(firmware_id, 200, vec![])
+        .expect_err("empty firmware");
+    assert!(error.to_string().contains("firmware is empty"));
+}
+
+#[test]
 fn responses_must_match_the_single_pending_request() {
     let mut runtime = BrowserRuntime::default();
     runtime.start(start()).expect("start");

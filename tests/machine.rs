@@ -1,14 +1,17 @@
+use flate2::Compression;
+use flate2::write::GzEncoder;
 use riscbox::browser_storage::HttpBlockStore;
 use riscbox::entropy::{EntropyError, EntropySource};
 use riscbox::guest_memory::{AccessWidth, GuestAddress};
 use riscbox::machine::{
-    BootImages, CLINT_BASE, FRAMEBUFFER_BASE, FramebufferConfig, Machine, MachineConfig, RAM_BASE,
-    RTC_BASE, RedrawSpan, VIRTIO_BASE,
+    BootAddresses, BootImages, CLINT_BASE, FRAMEBUFFER_BASE, FramebufferConfig, Machine,
+    MachineConfig, RAM_BASE, RTC_BASE, RedrawSpan, VIRTIO_BASE,
 };
 use riscbox::platform::FinishStatus;
 use riscbox::tinyemu_core::CpuRunExitReason;
 use riscbox::virtio_devices::{DeviceError, NetworkBackend, NetworkIngress};
 use std::cell::RefCell;
+use std::io::Write;
 use std::rc::Rc;
 
 struct FixedEntropy(u8);
@@ -55,7 +58,7 @@ fn virtio_slots_route_mmio_and_appear_in_the_device_tree() {
     );
     let layout = machine
         .load_boot(BootImages {
-            firmware: &[0; 64],
+            firmware: Some(&[0; 64]),
             kernel: None,
             initrd: None,
             command_line: "",
@@ -78,7 +81,7 @@ fn cpu_reads_virtio_config_bytes_through_the_c_device_aperture() {
     }
     machine
         .load_boot(BootImages {
-            firmware: &firmware,
+            firmware: Some(&firmware),
             kernel: None,
             initrd: None,
             command_line: "",
@@ -99,7 +102,7 @@ fn guest_clint_compare_write_exits_for_timer_replanning() {
     }
     machine
         .load_boot(BootImages {
-            firmware: &firmware,
+            firmware: Some(&firmware),
             kernel: None,
             initrd: None,
             command_line: "",
@@ -119,7 +122,7 @@ fn guest_rtc_alarm_write_exits_for_timer_replanning() {
     }
     machine
         .load_boot(BootImages {
-            firmware: &firmware,
+            firmware: Some(&firmware),
             kernel: None,
             initrd: None,
             command_line: "",
@@ -179,7 +182,7 @@ fn network_slot_has_standard_features_carrier_and_fdt_discovery() {
 
     let layout = machine
         .load_boot(BootImages {
-            firmware: &[0; 64],
+            firmware: Some(&[0; 64]),
             kernel: None,
             initrd: None,
             command_line: "",
@@ -214,7 +217,7 @@ fn boot_seed_and_virtio_rng_share_the_machine_entropy_source() {
     );
     let layout = machine
         .load_boot(BootImages {
-            firmware: &[0; 64],
+            firmware: Some(&[0; 64]),
             kernel: None,
             initrd: None,
             command_line: "",
@@ -314,7 +317,7 @@ fn boot_layout_installs_images_tree_and_reset_trampoline() {
     let initrd = [0xcc; 256];
     let layout = machine
         .load_boot(BootImages {
-            firmware: &firmware,
+            firmware: Some(&firmware),
             kernel: Some(&kernel),
             initrd: Some(&initrd),
             command_line: "console=ttyS0",
@@ -344,7 +347,124 @@ fn boot_layout_installs_images_tree_and_reset_trampoline() {
     assert_eq!(&reset[..4], &0x0000_0297_u32.to_le_bytes());
     assert_eq!(&reset[24..32], &RAM_BASE.to_le_bytes());
     assert_eq!(&reset[32..40], &layout.fdt_address.to_le_bytes());
+    let dynamic = machine.read_ram(0x1028, 48).expect("dynamic info");
+    assert_eq!(&dynamic[0..8], &0x4942_534f_u64.to_le_bytes());
+    assert_eq!(&dynamic[8..16], &2_u64.to_le_bytes());
+    assert_eq!(
+        &dynamic[16..24],
+        &layout.kernel_address.expect("kernel").to_le_bytes()
+    );
+    assert_eq!(&dynamic[24..32], &1_u64.to_le_bytes());
     assert_eq!(machine.cpu().pc(), 0x1000);
+}
+
+#[test]
+fn boot_locations_support_direct_kernel_and_reject_overlaps() {
+    let mut machine = machine(false);
+    let kernel = [0x13; 16];
+    let initrd = [0x55; 16];
+    let addresses = BootAddresses {
+        firmware: None,
+        kernel: Some(RAM_BASE + 0x40_0000),
+        initrd: Some(RAM_BASE + 0x80_0000),
+        fdt: Some(RAM_BASE + 0x100_0000),
+    };
+    let layout = machine
+        .load_boot_at(
+            BootImages {
+                firmware: None,
+                kernel: Some(&kernel),
+                initrd: Some(&initrd),
+                command_line: "",
+            },
+            addresses,
+        )
+        .expect("direct boot");
+    assert_eq!(layout.kernel_address, addresses.kernel);
+    assert_eq!(layout.initrd_address, addresses.initrd);
+    assert_eq!(layout.fdt_address, addresses.fdt.expect("FDT address"));
+    assert_eq!(
+        &machine.read_ram(0x1000, 40).expect("reset")[24..32],
+        &addresses.kernel.expect("kernel address").to_le_bytes()
+    );
+
+    let overlap = machine.load_boot_at(
+        BootImages {
+            firmware: Some(&[1; 32]),
+            kernel: Some(&kernel),
+            initrd: None,
+            command_line: "",
+        },
+        BootAddresses {
+            firmware: Some(RAM_BASE + 0x40_0000),
+            ..addresses
+        },
+    );
+    assert!(
+        overlap
+            .expect_err("overlap")
+            .to_string()
+            .contains("overlaps")
+    );
+
+    let tree_overlap = machine.load_boot_at(
+        BootImages {
+            firmware: None,
+            kernel: Some(&kernel),
+            initrd: None,
+            command_line: "",
+        },
+        BootAddresses {
+            fdt: addresses.kernel,
+            ..addresses
+        },
+    );
+    assert!(
+        tree_overlap
+            .expect_err("FDT overlap")
+            .to_string()
+            .contains("device tree")
+    );
+}
+
+#[test]
+fn compressed_firmware_is_bounded_by_its_load_location() {
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+    encoder.write_all(&[0x13; 64]).expect("compress firmware");
+    let compressed = encoder.finish().expect("gzip firmware");
+    let mut machine = machine(false);
+    let images = BootImages {
+        firmware: Some(&compressed),
+        kernel: None,
+        initrd: None,
+        command_line: "",
+    };
+    let address = RAM_BASE + (64 << 20) - 64;
+    let layout = machine
+        .load_boot_at(
+            images,
+            BootAddresses {
+                firmware: Some(address),
+                ..BootAddresses::default()
+            },
+        )
+        .expect("firmware fits");
+    assert_eq!(layout.firmware_address, Some(address));
+    assert_eq!(
+        machine.read_ram(address, 64).expect("firmware RAM"),
+        &[0x13; 64]
+    );
+
+    let error = machine
+        .load_boot_at(
+            images,
+            BootAddresses {
+                firmware: Some(address + 1),
+                ..BootAddresses::default()
+            },
+        )
+        .expect_err("decompressed firmware exceeds RAM");
+    assert!(error.to_string().contains("firmware does not fit"));
 }
 
 #[test]
@@ -450,7 +570,7 @@ fn framebuffer_snapshot_invalidates_cached_cpu_write_translation() {
         .collect();
     machine
         .load_boot(BootImages {
-            firmware: &firmware,
+            firmware: Some(&firmware),
             kernel: None,
             initrd: None,
             command_line: "",
@@ -493,7 +613,7 @@ fn interrupt_changes_from_guest_mmio_end_the_current_cpu_block() {
     .collect();
     machine
         .load_boot(BootImages {
-            firmware: &firmware,
+            firmware: Some(&firmware),
             kernel: None,
             initrd: None,
             command_line: "",

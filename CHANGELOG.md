@@ -4,6 +4,12 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Switched image deployments and QEMU setup to OpenSBI `fw_dynamic.bin`.
+    The reset ROM supplies dynamic next-stage information. Boot configs may
+    omit firmware for direct M-mode boot and override firmware, kernel, initrd,
+    and device-tree load addresses. Firmware and kernels accept gzip input;
+    initrds remain opaque. The loader rejects out-of-RAM and overlapping
+    image regions before writing them.
 *   Raised the initial HTTP block memory cache limit to 64 MiB and use browser
     `force-cache` for content-hash-named boot and disk assets.
 *   Set the default execution quantum target to 20 ms and split HTTP disk

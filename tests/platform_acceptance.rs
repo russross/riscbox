@@ -41,7 +41,7 @@ impl BlockBackend for ImageBlock {
 #[ignore = "requires ignored Alpine deployment assets and runs a complete guest"]
 fn alpine_reaches_login_and_shuts_down() {
     let directory = acceptance_directory();
-    let firmware = read(&directory.join("fw_jump.bin"));
+    let firmware = read(&directory.join("fw_dynamic.bin"));
     let kernel = read(&directory.join("linux"));
     let disk = read(&directory.join("rootfs.ext4"));
     let mut machine = Machine::new(MachineConfig {
@@ -58,7 +58,7 @@ fn alpine_reaches_login_and_shuts_down() {
     let console = machine.add_console_device(80, 25).expect("console device");
     machine
         .load_boot(BootImages {
-            firmware: &firmware,
+            firmware: Some(&firmware),
             kernel: Some(&kernel),
             initrd: None,
             command_line: "root=/dev/vda rw rootfstype=ext4 console=hvc0 earlycon=sbi",
@@ -127,7 +127,7 @@ fn xv6_boots_over_uart_and_passes_user_tests() {
         .expect("xv6 block device");
     machine
         .load_boot(BootImages {
-            firmware: &kernel,
+            firmware: Some(&kernel),
             kernel: None,
             initrd: None,
             command_line: "",

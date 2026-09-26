@@ -94,15 +94,23 @@ Apply and test various standard tweaks to the Rust WASM build rules to shrink
 the binary and check for performance differences (including optimizing for
 size).
 
-### Support more boot options
+### Bootloader and installation media
 
-Stop using `fw_jump` and switch to `fw_dynamic` with appropriate platform setup changes. Fill out boot-time config options to include optional memory layout controls (kernel load location but also device placement). Make sure common configs are all supported:
+The raw-image loader now supports OpenSBI `fw_dynamic`, direct M-mode boot,
+optional initrds, and configurable payload addresses. Next evaluate an S-mode
+U-Boot image as the next stage at the configured `kernel_address`, using the
+existing `BootImages` and `BootAddresses` loader path. A U-Boot boot test should
+cover block discovery, kernel and initrd loading from attached media, and a
+clean handoff. Keep U-Boot as an external image; do not parse its formats in
+`src/machine.rs`.
 
-* OpenSBI firmware included or not (see xv6 on qemu), compressed or not
-* kernel at default/custom load location, compressed or not
-* initrd included or not, compressed or not
-* U-Boot to support booting ISO images or other plain install media with kernel/initrd in the image (OpenSBI -> U-Boot, which finds the attached image and finds its GRUB or whatever and boots)
-* multiple attached block devices: http drive or plain supplied image, the latter with readonly, CoW, or mutable options
+Supporting installation media also needs a separate storage milestone. Extend
+the typed `DriveConfig` in `src/config.rs` and block-store construction in
+`src/browser_runtime.rs` to distinguish split HTTP manifests from plain image
+assets and to select read-only, session CoW, or mutable behavior. Preserve the
+existing VirtIO block interface and per-drive ordering. Validate multiple
+attached drives, failed fetches, and write behavior in browser tests before
+documenting ISO or installer boot as supported.
 
 ### More controls from the host
 

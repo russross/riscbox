@@ -10,7 +10,7 @@ Files
 *   `riscbox.js` and `riscbox.wasm` are the emulator runtime.
 *   `riscbox.cfg` describes the virtual machine. Boot paths are relative to
     this file.
-*   `fw_jump.bin-HASH` is OpenSBI firmware and `linux-HASH.gz` is the
+*   `fw_dynamic.bin-HASH` is OpenSBI firmware and `linux-HASH.gz` is the
     gzip-compressed guest kernel. The kernel hash identifies the uncompressed
     image.
 *   `drive-HASH/blk.txt` describes the HTTP disk; its
@@ -53,7 +53,7 @@ typical disk-backed VM is:
     version: 1,
     machine: "riscv64",
     memory_size: 256,
-    bios: "fw_jump.bin-81ceef21",
+    bios: "fw_dynamic.bin-81ceef21",
     kernel: "linux-a837bc72.gz",
     cmdline: "root=/dev/vda rw rootfstype=ext4 console=hvc0",
     drive0: { file: "drive-827a7b2f/blk.txt" },
@@ -64,7 +64,14 @@ typical disk-backed VM is:
 The important options are:
 
 *   `memory_size` sets RAM in MiB. `bios`, `kernel`, and optional `initrd`
-    select boot payloads.
+    select boot payloads; at least firmware or kernel is required. Firmware
+    and kernels may be raw or gzip-compressed. The guest interprets initrd
+    compression.
+*   `bios_address`, `kernel_address`, `initrd_address`, and `fdt_address`
+    override physical load addresses. Quoted hexadecimal strings support
+    64-bit addresses. Defaults are RAM base for firmware, RAM base plus 2 MiB
+    for the kernel, kernel address plus half of RAM capped at 512 MiB for the
+    initrd, and a 2 MiB boundary near the end of RAM for the device tree.
 *   `cmdline` is the Linux command line. Use `console=hvc0` with the VirtIO
     console or `console=ttyS0,115200` with the UART.
 *   `console` is `virtio` or `uart`. `uart_output: true` also exposes firmware
@@ -176,5 +183,5 @@ current config with:
     ../../tools/image_deployment.py clean ./dist
 
 The cleaner only considers `drive-HASH`, `linux-HASH`, `linux-HASH.gz`, and
-`fw_jump.bin-HASH` assets. It leaves the active generation and unrelated
+`fw_dynamic.bin-HASH` assets. It leaves the active generation and unrelated
 deployment files intact.

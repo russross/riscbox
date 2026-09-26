@@ -5,7 +5,7 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 IMAGES_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 ROOT_DIR=$(CDPATH= cd -- "$IMAGES_DIR/.." && pwd)
 KERNEL_IMAGE=${KERNEL_IMAGE:-"$ROOT_DIR/kernel/linux"}
-OPENSBI=${OPENSBI:-/usr/lib/riscv64-linux-gnu/opensbi/generic/fw_jump.bin}
+OPENSBI=${OPENSBI:-/usr/lib/riscv64-linux-gnu/opensbi/generic/fw_dynamic.bin}
 
 if [ "$#" -lt 2 ] || [ "$#" -gt 3 ] ||
     { [ "$#" -eq 3 ] && [ "$3" != --erofs ]; }; then
@@ -51,7 +51,7 @@ cleanup() {
 trap cleanup EXIT HUP INT TERM
 
 kernel_name=linux-$(sha256sum "$KERNEL_IMAGE" | cut -c 1-8).gz
-bios_name=fw_jump.bin-$(sha256sum "$OPENSBI" | cut -c 1-8)
+bios_name=fw_dynamic.bin-$(sha256sum "$OPENSBI" | cut -c 1-8)
 gzip -9 -n -c "$KERNEL_IMAGE" > "$stage_dir/$kernel_name"
 chmod 644 "$stage_dir/$kernel_name"
 install -m 644 "$OPENSBI" "$stage_dir/$bios_name"
@@ -106,7 +106,7 @@ for staged_asset in "$stage_dir"/*; do
         esac
     else
         case "$asset_name" in
-            linux-*|fw_jump.bin-*)
+            linux-*|fw_dynamic.bin-*)
                 if [ ! -f "$output_dir/$asset_name" ]; then
                     mv "$staged_asset" "$output_dir/$asset_name"
                 fi

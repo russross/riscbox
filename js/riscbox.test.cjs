@@ -89,7 +89,7 @@ for (const [assetUrl, expectedCache] of [
     ["https://host/drive-abcd1234/blk.txt", "force-cache"],
     ["https://host/drive-abcd1234/blk000000001.bin", "force-cache"],
     ["https://host/linux-a837bc72.gz", "force-cache"],
-    ["https://host/fw_jump.bin-81ceef21", "force-cache"],
+    ["https://host/fw_dynamic.bin-81ceef21", "force-cache"],
     ["https://host/initrd.img", "default"],
 ]) test(`HTTP asset ${assetUrl} uses ${expectedCache}`, async () => {
     const fake = fakeModule();

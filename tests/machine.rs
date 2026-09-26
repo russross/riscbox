@@ -529,6 +529,7 @@ fn machine_exposes_complete_host_time_through_the_rtc() {
 fn timer_deadlines_use_guest_ticks_and_drop_due_compares() {
     let mut machine = machine(false);
     machine.present_guest_clocks(1_000_000, 100_000_000);
+    assert_eq!(machine.next_timer_remaining_guest_ticks(), None);
     machine
         .bus_mut()
         .write(
@@ -551,10 +552,5 @@ fn timer_deadlines_use_guest_ticks_and_drop_due_compares() {
     machine.present_guest_clocks(1_000_002, 100_000_200);
     assert_eq!(machine.next_timer_remaining_guest_ticks(), Some(13));
     machine.present_guest_clocks(1_000_015, 100_001_500);
-    assert!(
-        machine
-            .next_timer_remaining_guest_ticks()
-            .expect("future RTC alarm")
-            > u64::from(u32::MAX)
-    );
+    assert_eq!(machine.next_timer_remaining_guest_ticks(), None);
 }

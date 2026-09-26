@@ -4,6 +4,9 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Excluded disabled CLINT and supervisor timer compares from future-deadline
+    selection, so browser timing diagnostics do not report near-infinite timer
+    intervals while those timers are disabled.
 *   Enabled browser timing diagnostics in the Risclet demo and added a dedicated
     xv6 compile benchmark page with diagnostics enabled. Both static
     distributions can be served from `images/` for browser testing.

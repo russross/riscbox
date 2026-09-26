@@ -769,11 +769,11 @@ impl Machine {
         // Due compares are already reflected in interrupt state by present_guest_clocks.
         let now = self.bus.guest_timer_ticks;
         let mut delay = u64::MAX;
-        if !self.bus.clint.timer_interrupt(now) {
+        if self.bus.clint.timecmp() != u64::MAX && !self.bus.clint.timer_interrupt(now) {
             delay = delay.min(self.bus.clint.timecmp() - now);
         }
         let supervisor = self.cpu.stimecmp();
-        if supervisor > now {
+        if supervisor != u64::MAX && supervisor > now {
             delay = delay.min(supervisor - now);
         }
         if let Some(rtc_delay) = self

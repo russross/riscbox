@@ -20,7 +20,7 @@ cat > /home/test/profile-build.sh <<'EOF'
 #!/bin/sh
 set -eu
 cd /home/test/xv6-riscv
-make -j1 TOOLPREFIX= QEMU=/bin/false kernel/kernel
+time make -j1 TOOLPREFIX= QEMU=/bin/false kernel/kernel
 printf '\nXV6_PROFILE_BUILD_COMPLETE\n'
 doas poweroff
 EOF

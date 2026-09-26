@@ -4,6 +4,11 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Scheduled runnable browser quanta through `MessageChannel` tasks instead of
+    repeated zero-delay timers. A full headless Chrome xv6 compile run fell from
+    156.1 to 121.9 seconds in the same environment, with negligible WFI time
+    during compilation. The profile harness can enable timing logs with
+    `RISCBOX_PROFILE_TIMING=1`.
 *   Excluded disabled CLINT and supervisor timer compares from future-deadline
     selection, so browser timing diagnostics do not report near-infinite timer
     intervals while those timers are disabled.

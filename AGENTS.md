@@ -106,6 +106,8 @@ the complete quantum with a monotonic clock and supplies its elapsed time to
 Rust for calibration. A guest-clock lead delays the next quantum until host
 epoch time catches up. WFI sleeping guests wake at the next timer deadline or
 a 100-millisecond fallback; asynchronous completions can replace that wakeup.
+Runnable quanta continue through `MessageChannel` tasks to avoid browser
+clamping of repeated zero-delay timers; delayed wakeups still use `setTimeout`.
 The C interpreter may pass a requested cycle limit at a code-block boundary,
 and Rust accounts for the actual emulated cycles consumed.
 

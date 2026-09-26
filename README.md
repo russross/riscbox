@@ -86,12 +86,13 @@ runtime.start(new URL("./riscbox.cfg", location.href).href, 256);
 ```
 
 The adapter schedules execution automatically. Runnable guests request an
-immediate next execution quantum; WFI sleeping guests wake at the nearest guest
-timer deadline or after at most 100 milliseconds. A completed asynchronous
-device request can wake a WFI sleeping guest when host time has caught up with
-guest time. Rust calibrates the quantum cycle budget from complete quanta timed
-by JavaScript. Set `targetQuantumMs` in the instantiate options to choose a
-nominal duration greater than zero and at most 100 milliseconds (default 10);
+immediate next execution quantum through a browser task; WFI sleeping guests
+wake at the nearest guest timer deadline or after at most 100 milliseconds.
+A completed asynchronous device request can wake a WFI sleeping guest when
+host time has caught up with guest time. Rust calibrates the quantum cycle
+budget from complete quanta timed by JavaScript. Set `targetQuantumMs` in the
+instantiate options to choose a nominal duration greater than zero and at most
+100 milliseconds (default 10);
 this bounds latency for host input and completed I/O. Set `debugTiming: true`
 to log estimated and active emulated Mcycles/s, CPU runs per quantum, timer
 intervals, WFI sleep time, and catch-up waits. Integrations can also provide

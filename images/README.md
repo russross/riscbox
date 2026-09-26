@@ -29,6 +29,8 @@ historical C WebAssembly runtimes:
 The profiler writes `.cpuprofile` files and guest console logs under
 `images/xv6-profile/build/profiles/` by default. Pass another directory as
 the profiler's sole argument when profiles should be retained elsewhere.
+Set `RISCBOX_PROFILE_TIMING=1` to include periodic emulator timing diagnostics
+in the Riscbox profile log.
 
 The shared helpers under `bin/` download and verify the pinned Alpine
 minirootfs, consume the root-owned `kernel/linux` and Rust WASM build, boot

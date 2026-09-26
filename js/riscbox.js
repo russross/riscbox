@@ -45,6 +45,8 @@
             this.settledHints = 0;
             this.quantumRunning = false;
             this.wakeupTimer = null;
+            this.wakeupToken = 0;
+            this.wakeupChannel = null;
             this.started = false;
         }
 
@@ -153,12 +155,37 @@
                 this.timing.catchUpWaits++;
                 this.timing.catchUpMs += adjusted - delay;
             }
-            if (this.wakeupTimer !== null)
+            this.cancelWakeup();
+            const token = this.wakeupToken;
+            if (adjusted === 0) {
+                // A message is a new browser task without nested timer clamping.
+                if (this.wakeupChannel === null) {
+                    const channel = new MessageChannel();
+                    channel.port1.onmessage = ({ data }) => {
+                        if (data !== this.wakeupToken)
+                            return;
+                        void this.runQuantum().catch((error) => this.options.onError?.(error));
+                    };
+                    channel.port1.unref?.();
+                    channel.port2.unref?.();
+                    this.wakeupChannel = channel;
+                }
+                this.wakeupChannel.port2.postMessage(token);
+            } else {
+                this.wakeupTimer = setTimeout(() => {
+                    this.wakeupTimer = null;
+                    if (token === this.wakeupToken)
+                        void this.runQuantum().catch((error) => this.options.onError?.(error));
+                }, adjusted);
+            }
+        }
+
+        cancelWakeup() {
+            this.wakeupToken++;
+            if (this.wakeupTimer !== null) {
                 clearTimeout(this.wakeupTimer);
-            this.wakeupTimer = setTimeout(() => {
                 this.wakeupTimer = null;
-                void this.runQuantum().catch((error) => this.options.onError?.(error));
-            }, adjusted);
+            }
         }
 
         reportTiming(now) {
@@ -203,10 +230,7 @@
                 this.scheduleWakeup(begin);
                 return;
             }
-            if (this.wakeupTimer !== null) {
-                clearTimeout(this.wakeupTimer);
-                this.wakeupTimer = null;
-            }
+            this.cancelWakeup();
             if (this.timing && this.wfiStartedAt !== undefined) {
                 this.timing.wfiMs += performance.now() - this.wfiStartedAt;
                 this.wfiStartedAt = undefined;

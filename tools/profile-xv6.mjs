@@ -104,6 +104,7 @@ async function runRiscbox() {
     const wasm = await readFile(runtimeArgument);
     const runtime = await Riscbox.instantiate(wasm, {
         fetch: localFetch,
+        debugTiming: process.env.RISCBOX_PROFILE_TIMING === "1",
         consoleWrite,
         onError: (error) => finish(1, String(error)),
     });

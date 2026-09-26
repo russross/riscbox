@@ -298,6 +298,30 @@ test("adapter replaces a WFI wakeup with an immediate quantum", async () => {
     clearTimeout(runtime.wakeupTimer);
 });
 
+test("immediate wakeups use a task and discard replaced requests", async () => {
+    const fake = fakeModule();
+    let runs = 0;
+    fake.exports.riscbox_quantum_run = () => { runs++; return 3; };
+    const runtime = new Riscbox(fake.exports);
+    const originalTimeout = global.setTimeout;
+    let zeroDelayTimers = 0;
+    global.setTimeout = (callback, delay, ...args) => {
+        if (delay === 0) zeroDelayTimers++;
+        return originalTimeout(callback, delay, ...args);
+    };
+    try {
+        runtime.scheduleWakeup(0);
+        runtime.scheduleWakeup(100);
+        runtime.scheduleWakeup(0);
+        await new Promise((resolve) => originalTimeout(resolve, 10));
+        assert.equal(runs, 1);
+        assert.equal(zeroDelayTimers, 0);
+    } finally {
+        global.setTimeout = originalTimeout;
+        runtime.cancelWakeup();
+    }
+});
+
 test("quantum begin receives complete host epoch milliseconds across the ABI", async () => {
     const fake = fakeModule();
     const calls = [];

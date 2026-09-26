@@ -14,8 +14,9 @@ Files
     gzip-compressed guest kernel. The kernel hash identifies the uncompressed
     image.
 *   `drive-HASH/blk.txt` describes the HTTP disk; its
-    `blkNNNNNNNNN.bin` files are 256 KiB blocks. The hashes identify source
-    content, so assets shared by image generations retain stable URLs.
+    `blkNNNNNNNNN.bin` files are 1 MiB blocks. The drive hash identifies both
+    source content and block size, so assets with different layouts have
+    distinct URLs.
 *   `p9/` contains the generated browser-backed 9p server modules and
     declarations.
 

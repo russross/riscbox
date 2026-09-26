@@ -48,7 +48,6 @@ interface RiscboxRuntime {
 
 interface RiscboxOptions {
     readonly debugTiming?: boolean;
-    readonly guestClockSkew?: number;
     readonly p9Servers: ReadonlyMap<string, {
         connect(): {
             request(bytes: Uint8Array, replyCapacity: number): Promise<

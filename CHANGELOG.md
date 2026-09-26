@@ -4,6 +4,14 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Made guest-clock skew adaptive using the exponentially decayed P99 of
+    runnable quantum thresholds. Skew and cycle-rate estimates now share a
+    ten-second half-life. The default quantum target is 50 ms, the custom Linux
+    kernel uses 100 Hz, and split HTTP disks use 1 MiB chunks with layout-aware
+    content names. Timing logs retain cumulative skew percentiles and show the
+    skew applied to the last completed quantum. A full headless Chrome xv6
+    compile completed in 101.6 seconds in the development environment, with
+    32 ms total catch-up delay and a median timer interval near 10 ms.
 *   Added `guestClockSkew` (default `0.20`) to slow guest-clock advancement
     within each quantum while keeping its cycle budget unchanged. Timer
     deadlines use the same integer mapping. Timing diagnostics now report the

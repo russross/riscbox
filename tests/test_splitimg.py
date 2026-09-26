@@ -42,10 +42,22 @@ class SplitImageTests(unittest.TestCase):
         output, _ = splitimg.split_image(source, output_parent, block_kib)
         return output, temporary
 
-    def test_directory_name_uses_image_hash(self) -> None:
-        output, temporary = self.split(b"abc")
-        with temporary:
-            self.assertEqual(output.name, "drive-ba7816bf")
+    def test_directory_name_uses_image_and_block_size_hash(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "disk.img"
+            source.write_bytes(b"abc")
+            first, _ = splitimg.split_image(source, root, 1)
+            second, _ = splitimg.split_image(source, root, 1024)
+            self.assertEqual(first.name, "drive-8c68ad0a")
+            self.assertNotEqual(first, second)
+            self.assertIn("block_size: 1", (first / "blk.txt").read_text())
+            self.assertIn("block_size: 1024", (second / "blk.txt").read_text())
+
+    def test_default_block_size_is_one_mib(self) -> None:
+        self.assertEqual(splitimg.DEFAULT_BLOCK_KIB, 1024)
+        options = splitimg.parse_args(["disk.img", "blocks"])
+        self.assertEqual(options.block_size_kib, 1024)
 
     def test_empty_image(self) -> None:
         output, temporary = self.split(b"")

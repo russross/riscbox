@@ -52,7 +52,7 @@ fn complete_quantum_resumes_after_host_action_and_updates_rate() {
         br#"{version:1,machine:"riscv64",memory_size:32,bios:"fw.bin",console:"uart"}"#,
     );
     runtime
-        .configure_quantum(1.0, 0.20, true)
+        .configure_quantum(1.0, true)
         .expect("timing configuration");
     assert_eq!(runtime.begin_quantum(1_000_000), QuantumStart::Ready);
     assert_eq!(

@@ -95,11 +95,13 @@ same guest address; decompressed output is bounded by the boot layout. Image
 deployments gzip the kernel while naming it from the uncompressed hash. HTTP
 disk writes are session-local.
 Rust sizes each execution quantum from a measured emulated cycle rate and a
-target duration, ten milliseconds by default. Each quantum locks its rate and
-maps consumed cycles to 10 MHz guest timer ticks using integer arithmetic. A
-configurable guest-clock skew defaults to 20% and slows the within-quantum
-cycle-to-tick mapping without reducing its cycle budget. The next quantum
-starts from host epoch time, subject to the guest-clock floor.
+target duration, fifty milliseconds by default. Each quantum locks its rate
+and maps consumed cycles to 10 MHz guest timer ticks using integer arithmetic.
+An adaptive guest-clock skew uses the exponentially decayed P99 threshold from
+runnable quanta. Its ten-second half-life is shared with the cycle-rate estimate.
+The skew slows the within-quantum cycle-to-tick mapping without reducing its
+cycle budget. The next quantum starts from host epoch time, subject to the
+guest-clock floor.
 Timer writes exit the C loop so Rust can size the next CPU run to the earliest CLINT,
 supervisor, or RTC deadline. C also exits after MMIO requests for 9p or HTTP
 block work; Rust releases the exclusive CPU-run borrow before JavaScript

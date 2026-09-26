@@ -100,12 +100,8 @@ pub extern "C" fn riscbox_network_carrier(up: u32) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn riscbox_configure_quantum(
-    target_quantum_ms: f64,
-    guest_clock_skew: f64,
-    diagnostics: u32,
-) -> i32 {
-    browser_abi::riscbox_configure_quantum(target_quantum_ms, guest_clock_skew, diagnostics)
+pub extern "C" fn riscbox_configure_quantum(target_quantum_ms: f64, diagnostics: u32) -> i32 {
+    browser_abi::riscbox_configure_quantum(target_quantum_ms, diagnostics)
 }
 
 #[unsafe(no_mangle)]

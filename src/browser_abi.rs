@@ -175,15 +175,11 @@ fn u64_from_parts(low: u32, high: u32) -> u64 {
 }
 
 #[must_use]
-pub extern "C" fn riscbox_configure_quantum(
-    target_quantum_ms: f64,
-    guest_clock_skew: f64,
-    diagnostics: u32,
-) -> i32 {
+pub extern "C" fn riscbox_configure_quantum(target_quantum_ms: f64, diagnostics: u32) -> i32 {
     STATE.with_borrow_mut(|state| {
         state
             .runtime
-            .configure_quantum(target_quantum_ms, guest_clock_skew, diagnostics != 0)
+            .configure_quantum(target_quantum_ms, diagnostics != 0)
             .map_or(-1, |()| 0)
     })
 }

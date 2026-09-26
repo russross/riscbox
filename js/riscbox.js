@@ -25,18 +25,14 @@
                 throw new TypeError("Riscbox WASM has an incompatible run interface");
             if (Object.hasOwn(options, "timesliceMs"))
                 throw new TypeError("timesliceMs has been renamed to targetQuantumMs");
-            const targetQuantumMs = options.targetQuantumMs ?? 10;
+            const targetQuantumMs = options.targetQuantumMs ?? 50;
             if (!Number.isFinite(targetQuantumMs) || targetQuantumMs <= 0 || targetQuantumMs > 100)
                 throw new RangeError("targetQuantumMs must be greater than zero and at most 100");
-            const guestClockSkew = options.guestClockSkew ?? 0.20;
-            if (!Number.isFinite(guestClockSkew) || guestClockSkew < 0 || guestClockSkew >= 1)
-                throw new RangeError("guestClockSkew must be at least zero and less than one");
+            if (Object.hasOwn(options, "guestClockSkew"))
+                throw new TypeError("guestClockSkew is now adaptive and cannot be configured");
             this.exports = exports;
             this.options = options;
-            this.guestClockSkew = guestClockSkew;
-            if (exports.riscbox_configure_quantum(
-                targetQuantumMs, guestClockSkew, options.debugTiming ? 1 : 0,
-            ) !== 0)
+            if (exports.riscbox_configure_quantum(targetQuantumMs, options.debugTiming ? 1 : 0) !== 0)
                 throw new Error("Riscbox WASM timing configuration failed");
             this.timing = options.debugTiming ? {
                 nextReport: performance.now() + 1_000,
@@ -217,7 +213,7 @@
                 medianTimerIntervalMs: medianTicks / GUEST_TICKS_PER_MILLISECOND,
                 wfiQuanta: timing.wfiQuanta, wfiMs: timing.wfiMs,
                 catchUpWaits: timing.catchUpWaits, catchUpMs: timing.catchUpMs,
-                guestClockSkewPercent: this.guestClockSkew * 100,
+                adaptiveGuestClockSkewPercent: this.exports.riscbox_timing_stat(6) * 100,
                 intervalNoCatchUpSkewPercent: timing.intervalNoCatchUpSkew * 100,
                 sessionPotentialCatchUpSkewP50Percent: skewPercentile(0.50),
                 sessionPotentialCatchUpSkewP90Percent: skewPercentile(0.90),

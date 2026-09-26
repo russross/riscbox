@@ -14,7 +14,7 @@ import hashlib
 from pathlib import Path
 import sys
 
-DEFAULT_BLOCK_KIB = 256
+DEFAULT_BLOCK_KIB = 1024
 
 
 def positive_integer(value: str) -> int:
@@ -28,9 +28,10 @@ def positive_integer(value: str) -> int:
     return parsed
 
 
-def image_hash(source: Path) -> str:
-    """Return the abbreviated SHA-256 content identifier for source."""
+def image_hash(source: Path, block_kib: int) -> str:
+    """Return a content identifier that also distinguishes the split layout."""
     digest = hashlib.sha256()
+    digest.update(f"block_size_kib={block_kib}\n".encode("ascii"))
     with source.open("rb") as image:
         while block := image.read(1024 * 1024):
             digest.update(block)
@@ -44,7 +45,7 @@ def split_image(source: Path, output_parent: Path, block_kib: int) -> tuple[Path
     if not output_parent.is_dir():
         raise ValueError(f"output is not a directory: {output_parent}")
 
-    output = output_parent / f"drive-{image_hash(source)}"
+    output = output_parent / f"drive-{image_hash(source, block_kib)}"
     output.mkdir(exist_ok=True)
 
     block_size = block_kib * 1024

@@ -342,7 +342,7 @@ test("quantum begin receives complete host epoch milliseconds across the ABI", a
         Math.floor(1_730_000_000_123 / 0x1_0000_0000) >>> 0]]);
 });
 
-test("configured quantum duration and guest clock skew are passed to WASM", () => {
+test("configured quantum duration and diagnostics are passed to WASM", () => {
     const fake = fakeModule();
     const calls = [];
     fake.exports.riscbox_configure_quantum = (...args) => {
@@ -350,18 +350,17 @@ test("configured quantum duration and guest clock skew are passed to WASM", () =
         return 0;
     };
     new Riscbox(fake.exports, { targetQuantumMs: 5, debugTiming: true });
-    new Riscbox(fake.exports, { guestClockSkew: 0.35 });
-    assert.deepEqual(calls, [[5, 0.20, 1], [10, 0.35, 0]]);
+    new Riscbox(fake.exports);
+    assert.deepEqual(calls, [[5, 1], [50, 0]]);
     assert.throws(() => new Riscbox(fake.exports, { targetQuantumMs: 0 }), /targetQuantumMs/);
-    assert.throws(() => new Riscbox(fake.exports, { guestClockSkew: 1 }), /guestClockSkew/);
-    assert.throws(() => new Riscbox(fake.exports, { guestClockSkew: -0.01 }), /guestClockSkew/);
+    assert.throws(() => new Riscbox(fake.exports, { guestClockSkew: 0.2 }), /adaptive/);
     assert.throws(() => new Riscbox(fake.exports, { timesliceMs: 5 }), /renamed to targetQuantumMs/);
 });
 
 test("timing diagnostics report skew thresholds from zero-skew catch-up samples", async () => {
     const fake = fakeModule();
     fake.exports.riscbox_quantum_run = () => 0;
-    fake.exports.riscbox_timing_stat = (kind) => kind === 5 ? 0.25 : 0;
+    fake.exports.riscbox_timing_stat = (kind) => kind === 5 ? 0.25 : kind === 6 ? 0.20 : 0;
     const runtime = new Riscbox(fake.exports, { debugTiming: true });
     runtime.scheduleWakeup = () => {};
     await runtime.runQuantum();
@@ -376,7 +375,7 @@ test("timing diagnostics report skew thresholds from zero-skew catch-up samples"
     } finally {
         console.log = originalLog;
     }
-    assert.equal(report.guestClockSkewPercent, 20);
+    assert.equal(report.adaptiveGuestClockSkewPercent, 20);
     assert.equal(report.intervalNoCatchUpSkewPercent, 25);
     assert.equal(report.sessionPotentialCatchUpSkewP50Percent, 20);
     assert.equal(report.sessionPotentialCatchUpSkewP90Percent, 30);

@@ -93,7 +93,10 @@ adapter loads configuration, firmware, kernels, initrds, and split HTTP disks
 relative to the configuration URL. Raw and gzip-compressed kernels load at the
 same guest address; decompressed output is bounded by the boot layout. Image
 deployments gzip the kernel while naming it from the uncompressed hash. HTTP
-disk writes are session-local.
+disk writes are session-local. The browser adapter uses `force-cache` for
+content-hash-named boot and disk assets and `no-store` for the configuration.
+HTTP block stores start with a 64 MiB in-memory cache limit that grows to
+cover a single request when needed.
 Rust sizes each execution quantum from a measured emulated cycle rate and a
 target duration, twenty milliseconds by default. Each quantum locks its rate
 and maps consumed cycles to 10 MHz guest timer ticks using integer arithmetic.

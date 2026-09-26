@@ -1086,7 +1086,7 @@ impl BrowserRuntime {
             let (url, bytes) = manifest.expect("each drive manifest is loaded in order");
             let source = String::from_utf8(bytes)
                 .map_err(|_| RuntimeError::InvalidConfig("drive manifest is not UTF-8".into()))?;
-            let store = HttpBlockStore::from_manifest(&url, &source, 16 << 20)
+            let store = HttpBlockStore::from_manifest(&url, &source, 64 << 20)
                 .map_err(|error| RuntimeError::Machine(error.to_string()))?;
             let mut id = [0; 20];
             let name = format!("riscbox-http-{index}");

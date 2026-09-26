@@ -4,6 +4,8 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Raised the initial HTTP block memory cache limit to 64 MiB and use browser
+    `force-cache` for content-hash-named boot and disk assets.
 *   Set the default execution quantum target to 20 ms and split HTTP disk
     chunks to 512 KiB. Risclet and xv6 profile now convert their completed ext4
     setup images to read-only EROFS distributions, with tmpfs-backed `/tmp`,

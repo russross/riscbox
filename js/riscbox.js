@@ -334,7 +334,9 @@
                     const fetchRequest = this.options.fetch ?? globalThis.fetch;
                     if (typeof fetchRequest !== "function")
                         throw new Error("Riscbox HTTP fetch is not available");
-                    const cache = url === this.configUrl ? "no-store" : "default";
+                    const hashedPath = /(?:^|\/)[^/?#]*-[0-9a-f]{8,64}(?:\.|\/|[?#]|$)/i.test(url);
+                    const cache = url === this.configUrl ? "no-store"
+                        : hashedPath ? "force-cache" : "default";
                     Promise.resolve(fetchRequest(url, { cache })).then(async (response) => {
                         const data = new Uint8Array(await response.arrayBuffer());
                         const status = response.status ?? 200;

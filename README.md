@@ -215,7 +215,9 @@ The distribution builder splits the disk into HTTP-loadable blocks, compresses
 the kernel with `gzip -9`, and gives boot and disk assets content-derived names.
 The `.gz` kernel name uses the uncompressed kernel's hash. Publish new assets
 first and `riscbox.cfg` last so each VM start sees one complete generation.
-Static hosting needs ordinary `GET` requests, the `application/wasm` MIME type,
+The adapter fetches hash-named boot assets and disk chunks with `force-cache`
+and the configuration with `no-store`. Static hosting needs ordinary `GET`
+requests, the `application/wasm` MIME type,
 and CORS when assets cross origins; range requests and a server application are
 unnecessary.
 See [images/README.md](images/README.md) for image layout and

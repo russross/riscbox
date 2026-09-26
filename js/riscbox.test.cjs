@@ -85,9 +85,15 @@ test("HTTP actions complete requests and continue draining startup", async () =>
     assert.equal(started, 1);
 });
 
-test("non-configuration HTTP actions retain normal content caching", async () => {
+for (const [assetUrl, expectedCache] of [
+    ["https://host/drive-abcd1234/blk.txt", "force-cache"],
+    ["https://host/drive-abcd1234/blk000000001.bin", "force-cache"],
+    ["https://host/linux-a837bc72.gz", "force-cache"],
+    ["https://host/fw_jump.bin-81ceef21", "force-cache"],
+    ["https://host/initrd.img", "default"],
+]) test(`HTTP asset ${assetUrl} uses ${expectedCache}`, async () => {
     const fake = fakeModule();
-    const url = Buffer.from("https://host/runQuantum-abcd1234/blk.txt");
+    const url = Buffer.from(assetUrl);
     new Uint8Array(fake.exports.memory.buffer, 64, url.length).set(url);
     const actions = [1, 0];
     fake.exports.riscbox_next_action = () => actions.shift();
@@ -97,7 +103,7 @@ test("non-configuration HTTP actions retain normal content caching", async () =>
     fake.exports.riscbox_http_complete = () => 0;
     const runtime = new Riscbox(fake.exports, {
         fetch: async (_requestUrl, options) => {
-            assert.deepEqual(options, { cache: "default" });
+            assert.deepEqual(options, { cache: expectedCache });
             return { status: 200, arrayBuffer: async () => new ArrayBuffer(0) };
         },
     });

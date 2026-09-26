@@ -476,6 +476,16 @@ impl GoldfishRtc {
         let alarm_delay = self.alarm.saturating_sub(self.count(host_nanoseconds)) / 1_000_000;
         delay_ms.min(u32::try_from(alarm_delay).unwrap_or(u32::MAX))
     }
+
+    /// Returns the active alarm's remaining time rounded up to guest ticks.
+    #[must_use]
+    pub fn alarm_delay_ticks(&self, host_nanoseconds: u64) -> Option<u64> {
+        if !self.alarm_running {
+            return None;
+        }
+        let nanoseconds = self.alarm.saturating_sub(self.count(host_nanoseconds));
+        Some(nanoseconds.div_ceil(100))
+    }
 }
 
 fn low_u32(value: u64) -> u32 {

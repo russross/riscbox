@@ -87,9 +87,14 @@ runtime.start(new URL("./riscbox.cfg", location.href).href, 256);
 
 The adapter schedules execution automatically. Runnable guests request an
 immediate next turn; waiting guests sleep until the nearest guest timer deadline,
-up to ten milliseconds. A completed asynchronous device request wakes a waiting
-guest immediately. Integrations can also provide `networkWrite`,
-`framebufferRefresh`, and `p9Servers`. Host input methods are
+up to 100 milliseconds. A completed asynchronous device request wakes a waiting
+guest when guest time has caught up with wall time. The adapter calibrates its
+cycle budget from complete browser turns. Set `timesliceMs` in the instantiate
+options to choose a turn duration from greater than zero through 100 milliseconds
+(default 10); this bounds latency for host input and completed I/O. Set
+`debugTiming: true` to log cycle rate, approximate MIPS, calls per turn, timer
+intervals, idle time, and clock catch-up delays. Integrations can also provide
+`networkWrite`, `framebufferRefresh`, and `p9Servers`. Host input methods are
 `consoleInput(bytes)`, `consoleResize(columns, rows)`, `keyEvent()`,
 `pointerEvent()`, `wheelEvent()`, `networkInput()`, and `networkCarrier()`.
 Framebuffer callbacks receive a zero-copy WASM view plus `x`, `y`, `width`,
@@ -333,6 +338,7 @@ reference.
 
 The active `tinyemu-core/` contains a freestanding subset of the archived C
 CPU, SoftFP, and physical memory implementation. Rust owns the platform,
-devices, browser requests, and C allocations. A timeslice enters C once and
-calls Rust for device accesses. The historical `c/` tree is not built.
+devices, browser requests, and C allocations. A browser turn may enter C
+multiple times to inject guest time at a timer deadline or process host work;
+C calls Rust for device accesses. The historical `c/` tree is not built.
 Project history is recorded in [CHANGELOG.md](CHANGELOG.md).

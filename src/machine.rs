@@ -245,6 +245,7 @@ pub struct PlatformBus {
     timer_ticks: u64,
     host_nanoseconds: u64,
     host_attention: bool,
+    timer_attention: bool,
 }
 
 impl PlatformBus {
@@ -311,6 +312,7 @@ impl PlatformBus {
             timer_ticks: 0,
             host_nanoseconds: 0,
             host_attention: false,
+            timer_attention: false,
         })
     }
 
@@ -365,8 +367,13 @@ impl PlatformBus {
             self.finisher
                 .write(offset(address, FINISHER_BASE)?, value32);
         } else if (RTC_BASE..RTC_BASE + 0x1000).contains(&address) && width == AccessWidth::Word {
+            let device_offset = offset(address, RTC_BASE)?;
             self.rtc
-                .write(offset(address, RTC_BASE)?, value32, self.host_nanoseconds);
+                .write(device_offset, value32, self.host_nanoseconds);
+            if matches!(device_offset, 0 | 4 | 8 | 0x0c | 0x14) {
+                self.host_attention = true;
+                self.timer_attention = true;
+            }
         } else if (CLINT_BASE..CLINT_BASE + 0x1_0000).contains(&address)
             && matches!(width, AccessWidth::Word | AccessWidth::DoubleWord)
         {
@@ -374,6 +381,10 @@ impl PlatformBus {
             self.clint.write(device_offset, value32);
             if width == AccessWidth::DoubleWord {
                 self.clint.write(device_offset + 4, (value >> 32) as u32);
+            }
+            if matches!(device_offset, 0x4000 | 0x4004) {
+                self.host_attention = true;
+                self.timer_attention = true;
             }
         } else if (PLIC_BASE..PLIC_BASE + 0x400_0000).contains(&address)
             && width == AccessWidth::Word
@@ -770,8 +781,29 @@ impl Machine {
         delay.min(timer_delay_ms(self.cpu.stimecmp(), now))
     }
 
+    #[must_use]
+    pub fn next_timer_delay_ticks(&mut self) -> u32 {
+        // Due compares are already reflected in interrupt state by update_time.
+        let now = self.bus.timer_ticks;
+        let mut delay = u64::MAX;
+        if !self.bus.clint.timer_interrupt(now) {
+            delay = delay.min(self.bus.clint.timecmp() - now);
+        }
+        let supervisor = self.cpu.stimecmp();
+        if supervisor > now {
+            delay = delay.min(supervisor - now);
+        }
+        if let Some(rtc_delay) = self.bus.rtc.alarm_delay_ticks(self.bus.host_nanoseconds)
+            && rtc_delay > 0
+        {
+            delay = delay.min(rtc_delay);
+        }
+        u32::try_from(delay).unwrap_or(u32::MAX)
+    }
+
     pub fn run(&mut self, cycles: u32) -> RunOutcome {
         self.bus.host_attention = false;
+        self.bus.timer_attention = false;
         self.sync_interrupts();
         let result = self.cpu.run_host(cycles, &mut self.bus);
         self.sync_interrupts();
@@ -779,7 +811,9 @@ impl Machine {
             cycles: result.cycles,
             state: match result.reason {
                 1 => RunState::Waiting,
+                2 if self.bus.timer_attention => RunState::TimerChanged,
                 2 => RunState::HostAttention,
+                3 => RunState::TimerChanged,
                 _ => RunState::Running,
             },
         }

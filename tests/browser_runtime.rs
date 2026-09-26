@@ -391,6 +391,6 @@ fn waiting_guest_uses_bounded_sleep() {
     let outcome = runtime
         .run(&mut BrowserController::default(), 0, 0, 3_000_000)
         .expect("waiting slice");
-    assert_eq!(outcome.expect("running VM").delay_ms, 10);
+    assert_eq!(outcome.expect("running VM").delay_ms, 100);
     assert_eq!(runtime.next_action(), None);
 }

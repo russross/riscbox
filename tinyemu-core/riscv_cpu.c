@@ -1142,6 +1142,8 @@ static CSRWriteResult csr_write(RISCVCPUState *s, uint32_t csr,
             return CSR_WRITE_ERROR;
         s->stimecmp = val;
         update_stimecmp_irq(s);
+        s->host_attention = TRUE;
+        s->timer_attention = TRUE;
         return CSR_WRITE_INTERRUPT;
     case 0x180:
         /* no ASID implemented */
@@ -1196,6 +1198,10 @@ static CSRWriteResult csr_write(RISCVCPUState *s, uint32_t csr,
             update_stimecmp_irq(s);
         else
             s->mip &= ~MIP_STIP;
+        if ((s->menvcfg ^ old) & MENVCFG_STCE) {
+            s->host_attention = TRUE;
+            s->timer_attention = TRUE;
+        }
         if ((s->menvcfg ^ old) & (MENVCFG_ADUE | MENVCFG_PBMTE)) {
             tlb_flush_all(s);
             return CSR_WRITE_FLUSH_TLB;

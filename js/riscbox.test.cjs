@@ -20,7 +20,7 @@ function fakeModule() {
         riscbox_next_action() { return 0; },
         riscbox_run() { return 3; },
         riscbox_run_cycles() { return 0; },
-        riscbox_run_delay_ms() { return 0; },
+        riscbox_next_timer_delay_ticks() { return -1; },
         riscbox_action_value() { return 0; },
         riscbox_action_data_address() { return 0; },
         riscbox_action_data_length() { return 0; },
@@ -287,7 +287,7 @@ test("adapter replaces a sleeping timer with one immediate turn", async () => {
     assert.equal(runs, 1);
 });
 
-test("run passes complete epoch milliseconds across the 32-bit WASM ABI", () => {
+test("run passes complete epoch ticks across the 32-bit WASM ABI", () => {
     const fake = fakeModule();
     const calls = [];
     fake.exports.riscbox_run = (low, high, budget) => {
@@ -301,7 +301,123 @@ test("run passes complete epoch milliseconds across the 32-bit WASM ABI", () => 
     } finally {
         Date.now = originalNow;
     }
-    assert.deepEqual(calls, [[0xcc09_147b, 0x192, 2_995_904]]);
+    const ticks = 1_730_000_000_123n * 10_000n;
+    assert.deepEqual(calls, [[Number(ticks & 0xffff_ffffn), Number(ticks >> 32n), 3_000_000]]);
+});
+
+test("configured turn duration sets the initial cycle budget", async () => {
+    const fake = fakeModule();
+    let budget;
+    fake.exports.riscbox_run = (_low, _high, cycles) => { budget = cycles; return 3; };
+    const runtime = new Riscbox(fake.exports, { timesliceMs: 5 });
+    await runtime.run();
+    assert.equal(budget, 1_500_000);
+    assert.throws(() => new Riscbox(fake.exports, { timesliceMs: 0 }), /timesliceMs/);
+});
+
+test("timer deadline ends a CPU call on the first matching guest tick", async () => {
+    const fake = fakeModule();
+    const calls = [];
+    let queries = 0;
+    fake.exports.riscbox_next_timer_delay_ticks = () => ++queries === 1 ? 1 : 0xffff_ffff;
+    fake.exports.riscbox_run = (low, high, budget) => {
+        calls.push([low, high, budget]);
+        return 0;
+    };
+    fake.exports.riscbox_run_cycles = () => calls.at(-1)[2];
+    const runtime = new Riscbox(fake.exports);
+    runtime.schedule = () => {};
+    await runtime.run();
+    assert.equal(calls[0][2], 30);
+    assert.equal(calls[1][2], 3_000_000 - 30);
+    const first = (BigInt(calls[0][1]) << 32n) | BigInt(calls[0][0]);
+    const second = (BigInt(calls[1][1]) << 32n) | BigInt(calls[1][0]);
+    assert.equal(second - first, 1n);
+});
+
+test("deadline inversion never stops one cycle before the tick", () => {
+    const runtime = new Riscbox(fakeModule().exports);
+    for (const rate of [1_000_000, 300_000_000, 1_123_456_789]) {
+        for (const ticks of [1, 2, 997, 10_001]) {
+            const target = runtime.timerCycleTarget(ticks, rate);
+            assert.ok(runtime.ticksForCycles(target, rate) >= ticks);
+            if (target > 1)
+                assert.ok(runtime.ticksForCycles(target - 1, rate) < ticks);
+        }
+    }
+});
+
+test("one complete turn replaces the startup rate and later turns decay it", () => {
+    const runtime = new Riscbox(fakeModule().exports);
+    runtime.updateRate(100_000, 10);
+    assert.equal(runtime.cycleRate, 10_000_000);
+    runtime.updateRate(50_000, 10);
+    assert.ok(runtime.cycleRate < 10_000_000);
+    assert.ok(runtime.cycleRate > 5_000_000);
+    const measured = runtime.cycleRate;
+    runtime.updateRate(0, 100);
+    assert.equal(runtime.cycleRate, measured);
+});
+
+test("the guest time lead sets a floor for every scheduled turn", () => {
+    const runtime = new Riscbox(fakeModule().exports);
+    const originalNow = Date.now;
+    const originalTimeout = global.setTimeout;
+    let delay;
+    Date.now = () => 1_000;
+    global.setTimeout = (_callback, milliseconds) => { delay = milliseconds; return 1; };
+    try {
+        runtime.guestFloorTicks = 10_050_000n;
+        runtime.schedule(0);
+        assert.equal(delay, 5);
+        runtime.schedule(10);
+        assert.equal(delay, 10);
+    } finally {
+        Date.now = originalNow;
+        global.setTimeout = originalTimeout;
+    }
+});
+
+test("a direct run waits for an outstanding guest time lead", async () => {
+    const fake = fakeModule();
+    let calls = 0;
+    fake.exports.riscbox_run = () => { calls++; return 3; };
+    const runtime = new Riscbox(fake.exports);
+    runtime.guestFloorTicks = 10_050_000n;
+    const originalNow = Date.now;
+    Date.now = () => 1_000;
+    let scheduled = false;
+    runtime.schedule = () => { scheduled = true; };
+    try {
+        await runtime.run();
+    } finally {
+        Date.now = originalNow;
+    }
+    assert.equal(calls, 0);
+    assert.equal(scheduled, true);
+});
+
+test("WFI at a reached timer deadline schedules an immediate continuation", async () => {
+    const fake = fakeModule();
+    let queries = 0;
+    fake.exports.riscbox_next_timer_delay_ticks = () => ++queries === 1 ? 1 : 0xffff_ffff;
+    fake.exports.riscbox_run = () => 1;
+    fake.exports.riscbox_run_cycles = () => 30;
+    const runtime = new Riscbox(fake.exports);
+    let delay;
+    runtime.schedule = (value) => { delay = value; };
+    await runtime.run();
+    assert.equal(delay, 0);
+});
+
+test("repeated timer exits without cycles fail instead of spinning", async () => {
+    const fake = fakeModule();
+    let calls = 0;
+    fake.exports.riscbox_run = () => { calls++; return 4; };
+    const runtime = new Riscbox(fake.exports);
+    runtime.schedule = () => {};
+    await assert.rejects(runtime.run(), /repeatedly exited without consuming cycles/);
+    assert.equal(calls, 2);
 });
 
 test("hint wait resets after each delivered response", async () => {

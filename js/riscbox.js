@@ -3,12 +3,17 @@
 
     const encoder = new TextEncoder();
     const decoder = new TextDecoder();
-    const TURN_CYCLES = 3_000_000;
-    // C checks its budget at code block boundaries, so reserve one page of slack.
-    const CPU_OVERRUN_GUARD = 4_096;
+    // The platform clock and every timer deadline use 100-nanosecond ticks.
+    const TICKS_PER_SECOND = 10_000_000;
+    const TICKS_PER_MILLISECOND = 10_000;
+    const START_RATE = 300_000_000;
+    const SAMPLE_HALFLIFE_MS = 5_000;
+    const MAX_IDLE_MS = 100;
+    const MAX_CORE_BUDGET = 0x7fff_ffff;
     const RUN_WAITING = 1;
     const RUN_HOST_ATTENTION = 2;
     const RUN_IDLE = 3;
+    const RUN_TIMER_CHANGED = 4;
 
     class Riscbox {
         constructor(exports, options = {}) {
@@ -16,10 +21,26 @@
                 throw new TypeError("Riscbox WASM must export memory");
             if (typeof exports.riscbox_run !== "function" ||
                 typeof exports.riscbox_run_cycles !== "function" ||
-                typeof exports.riscbox_run_delay_ms !== "function")
+                typeof exports.riscbox_next_timer_delay_ticks !== "function")
                 throw new TypeError("Riscbox WASM has an incompatible run interface");
+            const timesliceMs = options.timesliceMs ?? 10;
+            if (!Number.isFinite(timesliceMs) || timesliceMs <= 0 || timesliceMs > 100)
+                throw new RangeError("timesliceMs must be greater than zero and at most 100");
             this.exports = exports;
             this.options = options;
+            this.timesliceMs = timesliceMs;
+            // Calibration discounts active turn time and cycles together.
+            this.cycleRate = START_RATE;
+            this.sampleCycles = 0;
+            this.sampleMilliseconds = 0;
+            this.guestFloorTicks = 0n;
+            this.timing = options.debugTiming ? {
+                nextReport: performance.now() + 1_000,
+                turns: 0, calls: 0, cycles: 0, activeMs: 0,
+                timerExits: 0, idleTurns: 0, idleMs: 0,
+                catchupCount: 0, catchupMs: 0,
+                timerIntervals: [],
+            } : null;
             this.p9Sessions = new Map();
             this.p9Requests = new Map();
             this.hints = new Set();
@@ -127,9 +148,18 @@
         }
 
         schedule(delay) {
-            // A newly completed device request replaces any outstanding WFI timer.
+            // Every wakeup waits until wall time reaches the last guest tick.
             if (this.driving)
                 return;
+            const wallTicks = BigInt(Date.now()) * BigInt(TICKS_PER_MILLISECOND);
+            const gapTicks = this.guestFloorTicks > wallTicks
+                ? this.guestFloorTicks - wallTicks : 0n;
+            const catchupMs = Number((gapTicks + 9_999n) / 10_000n);
+            if (this.timing && catchupMs > delay) {
+                this.timing.catchupCount++;
+                this.timing.catchupMs += catchupMs - delay;
+            }
+            delay = Math.max(delay, catchupMs);
             if (this.timer !== null)
                 clearTimeout(this.timer);
             this.timer = setTimeout(() => {
@@ -138,41 +168,142 @@
             }, delay);
         }
 
+        ticksForCycles(cycles, rate) {
+            return Math.floor(cycles * TICKS_PER_SECOND / rate);
+        }
+
+        timerCycleTarget(ticks, rate) {
+            // Check the inverse against the forward mapping at the exact boundary.
+            let cycles = Math.max(1, Math.ceil(ticks * rate / TICKS_PER_SECOND));
+            while (this.ticksForCycles(cycles, rate) < ticks)
+                cycles++;
+            while (cycles > 1 && this.ticksForCycles(cycles - 1, rate) >= ticks)
+                cycles--;
+            return cycles;
+        }
+
+        updateRate(cycles, milliseconds) {
+            // One completed turn supplies one sample, including its host work.
+            if (cycles === 0 || milliseconds <= 0)
+                return;
+            const decay = 2 ** (-milliseconds / SAMPLE_HALFLIFE_MS);
+            this.sampleCycles = this.sampleCycles * decay + cycles;
+            this.sampleMilliseconds = this.sampleMilliseconds * decay + milliseconds;
+            this.cycleRate = this.sampleCycles * 1_000 / this.sampleMilliseconds;
+        }
+
+        reportTiming(now) {
+            // Only diagnostic mode accumulates and formats interval statistics.
+            const timing = this.timing;
+            if (!timing || now < timing.nextReport)
+                return;
+            const callsPerTurn = timing.turns ? timing.calls / timing.turns : 0;
+            const activeMips = timing.activeMs ? timing.cycles / timing.activeMs / 1_000 : 0;
+            const intervals = timing.timerIntervals;
+            const medianTicks = intervals.length
+                ? intervals.slice().sort((a, b) => a - b)[Math.floor(intervals.length / 2)] : 0;
+            console.log("Riscbox timing", {
+                estimatedMcyclesPerSecond: this.cycleRate / 1_000_000,
+                approximateMips: activeMips,
+                callsPerTurn, timerExits: timing.timerExits,
+                medianTimerIntervalMs: medianTicks / TICKS_PER_MILLISECOND,
+                idleTurns: timing.idleTurns, idleMs: timing.idleMs,
+                catchupCount: timing.catchupCount, catchupMs: timing.catchupMs,
+            });
+            timing.nextReport = now + 5_000;
+            timing.turns = timing.calls = timing.cycles = timing.activeMs = 0;
+            timing.timerExits = timing.idleTurns = timing.idleMs = 0;
+            timing.catchupCount = timing.catchupMs = 0;
+            timing.timerIntervals = [];
+        }
+
         async drive() {
             // The timer only starts a turn; this loop owns every continuation in it.
             if (this.driving)
                 return;
+            const wallTicks = BigInt(Date.now()) * BigInt(TICKS_PER_MILLISECOND);
+            if (wallTicks < this.guestFloorTicks) {
+                this.schedule(0);
+                return;
+            }
             if (this.timer !== null) {
                 clearTimeout(this.timer);
                 this.timer = null;
             }
+            if (this.timing && this.idleStartedAt !== undefined) {
+                this.timing.idleMs += performance.now() - this.idleStartedAt;
+                this.idleStartedAt = undefined;
+            }
             this.driving = true;
-            let remaining = TURN_CYCLES;
+            const startedAt = performance.now();
+            const rate = this.cycleRate;
+            const budget = Math.max(1, Math.min(MAX_CORE_BUDGET,
+                Math.round(rate * this.timesliceMs / 1_000)));
+            // A turn retains this rate and time anchor across all C calls.
+            const startTicks = wallTicks > this.guestFloorTicks ? wallTicks : this.guestFloorTicks;
+            let used = 0;
+            let calls = 0;
+            let stalledCalls = 0;
             let nextDelay = 0;
+            let waiting = false;
+            let recordTimerInterval = false;
             try {
-                while (remaining > CPU_OVERRUN_GUARD) {
-                    // Refresh guest-visible time on each entry and subtract actual C cycles.
-                    const now = Date.now();
+                while (used < budget) {
+                    const nowTicks = startTicks + BigInt(this.ticksForCycles(used, rate));
+                    const low = Number(nowTicks & 0xffff_ffffn);
+                    const high = Number(nowTicks >> 32n);
+                    const deadline = this.exports.riscbox_next_timer_delay_ticks(low, high) >>> 0;
+                    let callBudget = Math.min(budget - used, MAX_CORE_BUDGET);
+                    if (deadline !== 0xffff_ffff) {
+                        // Stop at the first cycle that reaches the next timer tick.
+                        const targetTicks = this.ticksForCycles(used, rate) + deadline;
+                        callBudget = Math.min(callBudget,
+                            Math.max(1, this.timerCycleTarget(targetTicks, rate) - used));
+                        if (recordTimerInterval && this.timing &&
+                            this.timing.timerIntervals.length < 10_000)
+                            this.timing.timerIntervals.push(deadline);
+                    }
+                    recordTimerInterval = false;
                     const reason = this.exports.riscbox_run(
-                        now >>> 0, Math.floor(now / 0x1_0000_0000) >>> 0,
-                        remaining - CPU_OVERRUN_GUARD,
+                        low, high, callBudget,
                     );
+                    calls++;
                     if (reason < 0)
                         throw new Error("Riscbox WASM run failed");
-                    if (reason > RUN_IDLE)
+                    if (reason > RUN_TIMER_CHANGED)
                         throw new Error(`Riscbox WASM returned invalid run reason ${reason}`);
                     const cycles = this.exports.riscbox_run_cycles();
-                    if (cycles > remaining)
-                        throw new Error(`Riscbox WASM used ${cycles} cycles from a ${remaining}-cycle budget`);
+                    if (!Number.isInteger(cycles) || cycles < 0 || cycles > MAX_CORE_BUDGET)
+                        throw new Error(`Riscbox WASM reported invalid cycle count ${cycles}`);
                     if (reason === 0 && cycles === 0)
                         throw new Error("Riscbox WASM made no progress in a runnable turn");
-                    remaining -= cycles;
+                    stalledCalls = cycles === 0 ? stalledCalls + 1 : 0;
+                    if (stalledCalls > 1 && reason !== RUN_WAITING && reason !== RUN_IDLE)
+                        throw new Error("Riscbox WASM repeatedly exited without consuming cycles");
+                    used += cycles;
                     this.drainActions();
                     if (reason === RUN_IDLE)
                         return;
                     if (reason === RUN_WAITING) {
-                        nextDelay = this.exports.riscbox_run_delay_ms();
+                        // A deadline reached by the WFI call can already be pending.
+                        waiting = true;
+                        const endTicks = startTicks + BigInt(this.ticksForCycles(used, rate));
+                        const nextTicks = this.exports.riscbox_next_timer_delay_ticks(
+                            Number(endTicks & 0xffff_ffffn), Number(endTicks >> 32n)) >>> 0;
+                        const reachedDeadline = deadline !== 0xffff_ffff &&
+                            endTicks >= nowTicks + BigInt(deadline);
+                        if (!reachedDeadline) {
+                            const idleTicks = Math.min(nextTicks, MAX_IDLE_MS * TICKS_PER_MILLISECOND);
+                            const dueTicks = endTicks + BigInt(idleTicks);
+                            const wallNow = BigInt(Date.now()) * BigInt(TICKS_PER_MILLISECOND);
+                            nextDelay = Number((dueTicks > wallNow
+                                ? dueTicks - wallNow + 9_999n : 0n) / 10_000n);
+                        }
                         break;
+                    }
+                    if (reason === RUN_TIMER_CHANGED) {
+                        recordTimerInterval = true;
+                        if (this.timing) this.timing.timerExits++;
                     }
                     if (reason === RUN_HOST_ATTENTION) {
                         // Each settled hinted reply restarts the dry-yield allowance.
@@ -188,7 +319,20 @@
                 }
             } finally {
                 this.driving = false;
+                this.guestFloorTicks = startTicks + BigInt(this.ticksForCycles(used, rate));
+                const elapsed = performance.now() - startedAt;
+                this.updateRate(used, elapsed);
+                if (this.timing) {
+                    this.timing.turns++;
+                    this.timing.calls += calls;
+                    this.timing.cycles += used;
+                    this.timing.activeMs += elapsed;
+                    if (waiting) this.timing.idleTurns++;
+                    this.reportTiming(performance.now());
+                }
             }
+            if (waiting && this.timing)
+                this.idleStartedAt = performance.now();
             this.schedule(nextDelay);
         }
 

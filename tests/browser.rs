@@ -101,7 +101,8 @@ fn browser_network_ingress_is_bounded_and_recovers_after_drain() {
 }
 
 #[test]
-fn run_policy_preserves_the_guest_cycle_yield_boundary() {
+fn run_policy_allows_the_driver_to_choose_the_guest_cycle_budget() {
     let policy = RunPolicy::default();
-    assert_eq!(policy.yield_cycles, 3_000_000);
+    assert_eq!(policy.yield_cycles, i32::MAX as u32);
+    assert_eq!(policy.maximum_delay_ms, 100);
 }

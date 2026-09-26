@@ -27,7 +27,6 @@ struct AbiState {
     runtime: BrowserRuntime,
     action: Option<HostAction>,
     run_cycles: u32,
-    run_delay_ms: u32,
 }
 
 thread_local! {
@@ -172,36 +171,26 @@ pub extern "C" fn riscbox_network_carrier(up: u32) -> i32 {
 }
 
 #[must_use]
-pub extern "C" fn riscbox_run(
-    now_milliseconds_low: u32,
-    now_milliseconds_high: u32,
-    budget: u32,
-) -> i32 {
+pub extern "C" fn riscbox_run(now_ticks_low: u32, now_ticks_high: u32, budget: u32) -> i32 {
     STATE.with_borrow_mut(|state| {
-        let milliseconds = milliseconds_from_parts(now_milliseconds_low, now_milliseconds_high);
+        let ticks = u64_from_parts(now_ticks_low, now_ticks_high);
         let AbiState {
             runtime,
             controller,
             ..
         } = state;
-        match runtime.run(
-            controller,
-            milliseconds.saturating_mul(10_000),
-            milliseconds.saturating_mul(1_000_000),
-            budget,
-        ) {
+        match runtime.run(controller, ticks, ticks.saturating_mul(100), budget) {
             Ok(Some(result)) => {
                 state.run_cycles = result.cycles;
-                state.run_delay_ms = result.delay_ms;
                 match result.state {
                     RunState::Running => 0,
                     RunState::Waiting => 1,
                     RunState::HostAttention => 2,
+                    RunState::TimerChanged => 4,
                 }
             }
             Ok(None) => {
                 state.run_cycles = 0;
-                state.run_delay_ms = 0;
                 3
             }
             Err(_) => -1,
@@ -214,13 +203,17 @@ pub extern "C" fn riscbox_run_cycles() -> u32 {
     STATE.with_borrow(|state| state.run_cycles)
 }
 
-#[must_use]
-pub extern "C" fn riscbox_run_delay_ms() -> u32 {
-    STATE.with_borrow(|state| state.run_delay_ms)
+fn u64_from_parts(low: u32, high: u32) -> u64 {
+    u64::from(low) | (u64::from(high) << 32)
 }
 
-fn milliseconds_from_parts(low: u32, high: u32) -> u64 {
-    u64::from(low) | (u64::from(high) << 32)
+#[must_use]
+pub extern "C" fn riscbox_next_timer_delay_ticks(now_low: u32, now_high: u32) -> u32 {
+    STATE.with_borrow_mut(|state| {
+        state
+            .runtime
+            .next_timer_delay_ticks(u64_from_parts(now_low, now_high))
+    })
 }
 
 #[must_use]
@@ -438,13 +431,13 @@ fn framebuffer_action(value: impl FnOnce(&crate::machine::FramebufferUpdate) -> 
 
 #[cfg(test)]
 mod tests {
-    use super::milliseconds_from_parts;
+    use super::u64_from_parts;
 
     #[test]
-    fn reconstructs_epoch_milliseconds_without_truncation() {
+    fn reconstructs_epoch_ticks_without_truncation() {
         assert_eq!(
-            milliseconds_from_parts(0xcc09_147b, 0x0000_0192),
-            1_730_000_000_123,
+            u64_from_parts(0x2345_6789, 0x0123_4567),
+            0x0123_4567_2345_6789,
         );
     }
 }

@@ -214,13 +214,16 @@ TinyemuRunResult tinyemu_core_run(TinyemuCore *core, uint32_t budget,
 {
     core->host = host;
     core->cpu->host_attention = FALSE;
+    core->cpu->timer_attention = FALSE;
     uint64_t before = riscv_cpu_get_cycles(core->cpu);
     riscv_cpu_interp(core->cpu, (int)budget);
     core->host = NULL;
+    uint32_t reason = core->cpu->timer_attention ? 3u :
+                      core->cpu->host_attention ? 2u :
+                      riscv_cpu_get_power_down(core->cpu) ? 1u : 0u;
     TinyemuRunResult result = {
         (uint32_t)(riscv_cpu_get_cycles(core->cpu) - before),
-        core->cpu->host_attention ? 2u :
-            (riscv_cpu_get_power_down(core->cpu) ? 1u : 0u)
+        reason
     };
     return result;
 }

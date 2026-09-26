@@ -114,8 +114,8 @@ pub extern "C" fn riscbox_run_cycles() -> u32 {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn riscbox_run_delay_ms() -> u32 {
-    browser_abi::riscbox_run_delay_ms()
+pub extern "C" fn riscbox_next_timer_delay_ticks(now_low: u32, now_high: u32) -> u32 {
+    browser_abi::riscbox_next_timer_delay_ticks(now_low, now_high)
 }
 
 #[unsafe(no_mangle)]

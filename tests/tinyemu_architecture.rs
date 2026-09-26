@@ -150,6 +150,8 @@ fn tinyemu_sstc_timer_wakes_waiting_hart() {
             0x1050_0073,
         ],
     );
+    assert_eq!(core.run(20).reason, 3);
+    assert_eq!(core.run(20).reason, 3);
     core.run(20);
     assert_eq!(core.run(1).reason, 1);
     core.set_time(10);

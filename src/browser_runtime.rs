@@ -520,6 +520,18 @@ impl BrowserRuntime {
         }))
     }
 
+    #[must_use]
+    pub fn next_timer_delay_ticks(&mut self, ticks: u64) -> u32 {
+        // Querying at the driver's current tick also updates pending interrupts.
+        let State::Running(running) = &mut self.state else {
+            return u32::MAX;
+        };
+        running
+            .machine
+            .update_time(ticks, ticks.saturating_mul(100));
+        running.machine.next_timer_delay_ticks()
+    }
+
     pub fn next_action(&mut self) -> Option<HostAction> {
         self.actions.pop_front()
     }

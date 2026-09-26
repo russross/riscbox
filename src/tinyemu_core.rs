@@ -10,6 +10,7 @@ pub enum RunState {
     Running,
     Waiting,
     HostAttention,
+    TimerChanged,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

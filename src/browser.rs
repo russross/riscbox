@@ -185,8 +185,8 @@ pub struct RunPolicy {
 impl Default for RunPolicy {
     fn default() -> Self {
         Self {
-            yield_cycles: 3_000_000,
-            maximum_delay_ms: 10,
+            yield_cycles: i32::MAX as u32,
+            maximum_delay_ms: 100,
         }
     }
 }

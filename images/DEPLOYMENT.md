@@ -14,9 +14,10 @@ Files
     gzip-compressed guest kernel. The kernel hash identifies the uncompressed
     image.
 *   `drive-HASH/blk.txt` describes the HTTP disk; its
-    `blkNNNNNNNNN.bin` files are 1 MiB blocks. The drive hash identifies both
-    source content and block size, so assets with different layouts have
-    distinct URLs.
+    `blkNNNNNNNNN.bin` files are 512 KiB blocks by default. The drive hash
+    identifies source content and block size, so assets with different layouts have
+    distinct URLs. Risclet and xv6 profile distribute EROFS roots; Alpine
+    distributes ext4.
 *   `p9/` contains the generated browser-backed 9p server modules and
     declarations.
 

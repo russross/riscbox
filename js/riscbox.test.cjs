@@ -351,7 +351,7 @@ test("configured quantum duration and diagnostics are passed to WASM", () => {
     };
     new Riscbox(fake.exports, { targetQuantumMs: 5, debugTiming: true });
     new Riscbox(fake.exports);
-    assert.deepEqual(calls, [[5, 1], [50, 0]]);
+    assert.deepEqual(calls, [[5, 1], [20, 0]]);
     assert.throws(() => new Riscbox(fake.exports, { targetQuantumMs: 0 }), /targetQuantumMs/);
     assert.throws(() => new Riscbox(fake.exports, { guestClockSkew: 0.2 }), /adaptive/);
     assert.throws(() => new Riscbox(fake.exports, { timesliceMs: 5 }), /renamed to targetQuantumMs/);

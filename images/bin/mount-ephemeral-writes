@@ -1,0 +1,14 @@
+#!/bin/sh
+set -eu
+
+# The disk root stays read-only. Temporary files use their own tmpfs, while
+# overlays retain the prepared /var and /home trees for each VM session.
+mount -t tmpfs -o mode=1777 tmpfs /tmp
+mkdir -p /run/riscbox-overlay
+for directory in var home; do
+    upper="/run/riscbox-overlay/$directory/upper"
+    work="/run/riscbox-overlay/$directory/work"
+    mkdir -p "$upper" "$work"
+    mount -t overlay overlay \
+        -o "lowerdir=/$directory,upperdir=$upper,workdir=$work" "/$directory"
+done

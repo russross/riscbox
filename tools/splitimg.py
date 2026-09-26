@@ -14,7 +14,7 @@ import hashlib
 from pathlib import Path
 import sys
 
-DEFAULT_BLOCK_KIB = 1024
+DEFAULT_BLOCK_KIB = 512
 
 
 def positive_integer(value: str) -> int:

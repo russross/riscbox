@@ -7,8 +7,9 @@ ROOT_DIR=$(CDPATH= cd -- "$IMAGES_DIR/.." && pwd)
 KERNEL_IMAGE=${KERNEL_IMAGE:-"$ROOT_DIR/kernel/linux"}
 OPENSBI=${OPENSBI:-/usr/lib/riscv64-linux-gnu/opensbi/generic/fw_jump.bin}
 
-if [ "$#" -ne 2 ]; then
-    echo "usage: $0 IMAGE_DIRECTORY ROOTFS.ext4" >&2
+if [ "$#" -lt 2 ] || [ "$#" -gt 3 ] ||
+    { [ "$#" -eq 3 ] && [ "$3" != --erofs ]; }; then
+    echo "usage: $0 IMAGE_DIRECTORY ROOTFS.ext4 [--erofs]" >&2
     exit 2
 fi
 
@@ -24,6 +25,13 @@ for required_file in "$image_dir/riscbox.cfg" "$rootfs_image" \
         exit 1
     fi
 done
+
+if [ "${3:-}" = --erofs ]; then
+    distribution_image="$image_dir/build/rootfs.erofs"
+    "$SCRIPT_DIR/create-erofs-from-ext4" "$rootfs_image" "$distribution_image"
+else
+    distribution_image=$rootfs_image
+fi
 
 make -C "$ROOT_DIR" wasm js
 
@@ -72,7 +80,7 @@ fi
 if [ -d "$image_dir/examples" ]; then
     cp -R "$image_dir/examples" "$stage_dir/examples"
 fi
-split_result=$("$ROOT_DIR/tools/splitimg.py" "$rootfs_image" "$stage_dir")
+split_result=$("$ROOT_DIR/tools/splitimg.py" "$distribution_image" "$stage_dir")
 drive_name=${split_result%% *}
 "$ROOT_DIR/tools/image_deployment.py" rewrite \
     "$image_dir/riscbox.cfg" "$stage_dir/riscbox.cfg" \

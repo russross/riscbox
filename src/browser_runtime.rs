@@ -461,7 +461,7 @@ impl Default for BrowserRuntime {
             next_request_id: 1,
             actions: VecDeque::new(),
             entropy: None,
-            target_quantum_ms: 50.0,
+            target_quantum_ms: 20.0,
             adaptive_skew: AdaptiveSkew::default(),
             diagnostics: false,
             cycle_rate_estimate: RateEstimate::default(),
@@ -1239,7 +1239,7 @@ mod tests {
     fn adaptive_skew_uses_decayed_runnable_quantum_percentiles() {
         let mut runtime = BrowserRuntime::default();
         assert!((runtime.adaptive_skew.fraction - 0.20).abs() < f64::EPSILON);
-        assert!((runtime.target_quantum_ms - 50.0).abs() < f64::EPSILON);
+        assert!((runtime.target_quantum_ms - 20.0).abs() < f64::EPSILON);
         runtime
             .configure_quantum(25.0, false)
             .expect("custom duration");

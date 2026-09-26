@@ -26,5 +26,6 @@ printf '%s  %s\n' "$RISCLET_SHA256" "$RISCLET_BINARY" | \
 
 "$BIN_DIR/create-alpine-ext4" 64 "$ROOTFS_IMAGE"
 "$BIN_DIR/run-image-setup" \
-    "$ROOTFS_IMAGE" "$IMAGE_DIR/setup.sh" "$RISCLET_BINARY"
-"$BIN_DIR/build-distribution" "$IMAGE_DIR" "$ROOTFS_IMAGE"
+    "$ROOTFS_IMAGE" "$IMAGE_DIR/setup.sh" "$RISCLET_BINARY" \
+    "$BIN_DIR/mount-ephemeral-writes"
+"$BIN_DIR/build-distribution" "$IMAGE_DIR" "$ROOTFS_IMAGE" --erofs

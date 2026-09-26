@@ -92,7 +92,7 @@ A completed asynchronous device request can wake a WFI sleeping guest when
 host time has caught up with guest time. Rust calibrates the quantum cycle
 budget from complete quanta timed by JavaScript. Set `targetQuantumMs` in the
 instantiate options to choose a nominal duration greater than zero and at most
-100 milliseconds (default 50); this bounds latency for host input and
+100 milliseconds (default 20); this bounds latency for host input and
 completed I/O. Rust adapts the within-quantum guest-clock skew from a decayed
 P99 of all runnable quantum samples, including zero-skew samples. It uses the
 same ten-second half-life as the
@@ -204,8 +204,11 @@ images/my-image/
 
 Use `images/bin/create-alpine-ext4` to create the filesystem,
 `images/bin/run-image-setup` to customize it under QEMU, and
-`images/bin/build-distribution` to produce the browser deployment. The existing
-build scripts show the exact call order. Keep downloads and generated files
+`images/bin/build-distribution` to produce the browser deployment. Risclet and
+xv6 profile use its `--erofs` mode to convert the completed ext4 setup image
+to a read-only EROFS disk, with session-local writable `/tmp`, `/var`, and
+`/home` mounts. Other image definitions can continue distributing ext4. The
+existing build scripts show the exact call order. Keep downloads and generated files
 under `build/`; the final ignored output belongs in `dist/`.
 
 The distribution builder splits the disk into HTTP-loadable blocks, compresses

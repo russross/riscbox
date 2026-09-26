@@ -5,7 +5,8 @@ Each subdirectory is a complete image definition. Its tracked `build.sh`,
 `setup.sh`, `riscbox.cfg`, and optional `web/` directory are inputs. Running
 `build.sh` creates two ignored outputs:
 
-*   `build/rootfs.ext4` is the writable image used for native testing.
+*   `build/rootfs.ext4` is the writable setup image used under QEMU.
+    Risclet and xv6 profile also create `build/rootfs.erofs` for distribution.
 *   `dist/` is the self-contained browser deployment. It retains hashed boot
     and chunked-disk generations until the operator cleans them.
 
@@ -31,6 +32,13 @@ The profiler writes `.cpuprofile` files and guest console logs under
 the profiler's sole argument when profiles should be retained elsewhere.
 Set `RISCBOX_PROFILE_TIMING=1` to include periodic emulator timing diagnostics
 in the Riscbox profile log.
+
+Risclet and xv6 profile finish setup on ext4, then mount it read-only and use
+`mkfs.erofs` to create their distribution disks. Install `erofs-utils` and
+ensure passwordless `sudo` can mount the ext4 image and run `mkfs.erofs` for
+these builds. Their guest roots mount read-only; tmpfs supplies `/tmp` and the
+upper layers for `/var` and `/home`. The Alpine definition still distributes
+ext4. Split HTTP disks use 512 KiB chunks by default.
 
 The shared helpers under `bin/` download and verify the pinned Alpine
 minirootfs, consume the root-owned `kernel/linux` and Rust WASM build, boot
@@ -85,7 +93,8 @@ Create a directory with these inputs:
 Keep downloads and generated files under `build/`. A normal build should leave
 only intentional image inputs visible to Git.
 
-The distribution builder compresses the kernel with `gzip -9` and writes
+The distribution builder accepts `--erofs` for completed ext4 setup images,
+compresses the kernel with `gzip -9`, and writes
 content-addressed boot and disk assets. The kernel name uses the uncompressed
 kernel's hash with a `.gz` suffix. It replaces `dist/riscbox.cfg` last. Remove
 superseded generations when appropriate

@@ -25,7 +25,7 @@
                 throw new TypeError("Riscbox WASM has an incompatible run interface");
             if (Object.hasOwn(options, "timesliceMs"))
                 throw new TypeError("timesliceMs has been renamed to targetQuantumMs");
-            const targetQuantumMs = options.targetQuantumMs ?? 50;
+            const targetQuantumMs = options.targetQuantumMs ?? 20;
             if (!Number.isFinite(targetQuantumMs) || targetQuantumMs <= 0 || targetQuantumMs > 100)
                 throw new RangeError("targetQuantumMs must be greater than zero and at most 100");
             if (Object.hasOwn(options, "guestClockSkew"))

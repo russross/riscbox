@@ -4,6 +4,12 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Set the default execution quantum target to 20 ms and split HTTP disk
+    chunks to 512 KiB. Risclet and xv6 profile now convert their completed ext4
+    setup images to read-only EROFS distributions, with tmpfs-backed `/tmp`,
+    `/var`, and `/home` writes. Enabled EROFS, OverlayFS, and tmpfs xattrs in
+    the custom kernel. The xv6 profile page follows console output. A full
+    headless Chrome compile on the EROFS image completed in 102.4 seconds.
 *   Made guest-clock skew adaptive using the exponentially decayed P99 of
     runnable quantum thresholds. Skew and cycle-rate estimates now share a
     ten-second half-life. The default quantum target is 50 ms, the custom Linux

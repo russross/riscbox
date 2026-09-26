@@ -2,6 +2,8 @@
 set -eu
 
 apk add --no-cache alpine-base build-base doas git
+install -m 755 /mnt/setup/mount-ephemeral-writes /sbin/mount-ephemeral-writes
+sed -i 's|^/dev/vda  /         ext4   defaults,noatime|/dev/vda  /         erofs  ro,noatime|' /etc/fstab
 ln -sf /usr/share/zoneinfo/UTC /etc/localtime
 printf 'UTC\n' > /etc/timezone
 
@@ -34,6 +36,7 @@ mount -t sysfs sysfs /sys
 mkdir -p /dev/pts /run
 mount -t devpts devpts /dev/pts
 mount -t tmpfs tmpfs /run
+/sbin/mount-ephemeral-writes
 hostname riscbox-profile
 ip link set lo up 2>/dev/null || true
 exec su - test -c /home/test/profile-build.sh

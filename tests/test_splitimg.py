@@ -54,10 +54,10 @@ class SplitImageTests(unittest.TestCase):
             self.assertIn("block_size: 1", (first / "blk.txt").read_text())
             self.assertIn("block_size: 1024", (second / "blk.txt").read_text())
 
-    def test_default_block_size_is_one_mib(self) -> None:
-        self.assertEqual(splitimg.DEFAULT_BLOCK_KIB, 1024)
+    def test_default_block_size_is_512_kib(self) -> None:
+        self.assertEqual(splitimg.DEFAULT_BLOCK_KIB, 512)
         options = splitimg.parse_args(["disk.img", "blocks"])
-        self.assertEqual(options.block_size_kib, 1024)
+        self.assertEqual(options.block_size_kib, 512)
 
     def test_empty_image(self) -> None:
         output, temporary = self.split(b"")

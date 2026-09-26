@@ -95,7 +95,7 @@ same guest address; decompressed output is bounded by the boot layout. Image
 deployments gzip the kernel while naming it from the uncompressed hash. HTTP
 disk writes are session-local.
 Rust sizes each execution quantum from a measured emulated cycle rate and a
-target duration, fifty milliseconds by default. Each quantum locks its rate
+target duration, twenty milliseconds by default. Each quantum locks its rate
 and maps consumed cycles to 10 MHz guest timer ticks using integer arithmetic.
 An adaptive guest-clock skew uses the exponentially decayed P99 threshold from
 runnable quanta. Its ten-second half-life is shared with the cycle-rate estimate.
@@ -115,6 +115,10 @@ Runnable quanta continue through `MessageChannel` tasks to avoid browser
 clamping of repeated zero-delay timers; delayed wakeups still use `setTimeout`.
 The C interpreter may pass a requested cycle limit at a code-block boundary,
 and Rust accounts for the actual emulated cycles consumed.
+Risclet and xv6 profile image setup boots writable ext4 under QEMU, then
+converts the finished filesystem to a read-only EROFS distribution image.
+Their guests mount tmpfs at `/tmp` and session-local tmpfs-backed overlays at
+`/var` and `/home`. Split HTTP disks use 512 KiB chunks by default.
 
 Timing and execution lexicon
 ----------------------------

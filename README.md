@@ -88,8 +88,8 @@ runtime.start(new URL("./riscbox.cfg", location.href).href, 256);
 The adapter schedules execution automatically. Runnable guests request an
 immediate next turn; waiting guests sleep until the nearest guest timer deadline,
 up to 100 milliseconds. A completed asynchronous device request wakes a waiting
-guest when guest time has caught up with wall time. The adapter calibrates its
-cycle budget from complete browser turns. Set `timesliceMs` in the instantiate
+guest when guest time has caught up with wall time. Rust calibrates the cycle
+budget from complete browser turns timed by JavaScript. Set `timesliceMs` in the instantiate
 options to choose a turn duration from greater than zero through 100 milliseconds
 (default 10); this bounds latency for host input and completed I/O. Set
 `debugTiming: true` to log cycle rate, approximate MIPS, calls per turn, timer

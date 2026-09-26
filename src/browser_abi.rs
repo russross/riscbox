@@ -3,8 +3,9 @@
 use std::cell::RefCell;
 
 use crate::browser::{BrowserController, NetworkInputResult};
-use crate::browser_runtime::{BrowserRuntime, EntropyCallback, HostAction, RuntimeStart};
-use crate::tinyemu_core::RunState;
+use crate::browser_runtime::{
+    BrowserRuntime, EntropyCallback, HostAction, RuntimeStart, TurnExit, TurnStart,
+};
 use crate::virtio_devices::{
     NinePEndpointId, NinePGeneration, NinePOutcome, NinePRequestId, NinePTransportAction,
 };
@@ -26,7 +27,6 @@ struct AbiState {
     start: Option<StartRequest>,
     runtime: BrowserRuntime,
     action: Option<HostAction>,
-    run_cycles: u32,
 }
 
 thread_local! {
@@ -170,50 +170,75 @@ pub extern "C" fn riscbox_network_carrier(up: u32) -> i32 {
     0
 }
 
+fn u64_from_parts(low: u32, high: u32) -> u64 {
+    u64::from(low) | (u64::from(high) << 32)
+}
+
 #[must_use]
-pub extern "C" fn riscbox_run(now_ticks_low: u32, now_ticks_high: u32, budget: u32) -> i32 {
+pub extern "C" fn riscbox_configure_timing(timeslice_ms: f64, diagnostics: u32) -> i32 {
     STATE.with_borrow_mut(|state| {
-        let ticks = u64_from_parts(now_ticks_low, now_ticks_high);
+        state
+            .runtime
+            .configure_timing(timeslice_ms, diagnostics != 0)
+            .map_or(-1, |()| 0)
+    })
+}
+
+#[must_use]
+pub extern "C" fn riscbox_wake_delay_ms(now_low: u32, now_high: u32, requested: u32) -> u32 {
+    STATE.with_borrow(|state| {
+        state
+            .runtime
+            .wake_delay_ms(u64_from_parts(now_low, now_high), requested)
+    })
+}
+
+#[must_use]
+pub extern "C" fn riscbox_turn_begin(now_low: u32, now_high: u32) -> i32 {
+    STATE.with_borrow_mut(|state| {
+        match state.runtime.begin_turn(u64_from_parts(now_low, now_high)) {
+            TurnStart::Ready => 0,
+            TurnStart::Delay(delay) => i32::try_from(delay).unwrap_or(i32::MAX),
+            TurnStart::Idle => -1,
+        }
+    })
+}
+
+#[must_use]
+pub extern "C" fn riscbox_turn_advance() -> i32 {
+    STATE.with_borrow_mut(|state| {
         let AbiState {
             runtime,
             controller,
             ..
         } = state;
-        match runtime.run(controller, ticks, ticks.saturating_mul(100), budget) {
-            Ok(Some(result)) => {
-                state.run_cycles = result.cycles;
-                match result.state {
-                    RunState::Running => 0,
-                    RunState::Waiting => 1,
-                    RunState::HostAttention => 2,
-                    RunState::TimerChanged => 4,
-                }
-            }
-            Ok(None) => {
-                state.run_cycles = 0;
-                3
-            }
+        match runtime.advance_turn(controller) {
+            Ok(TurnExit::Finished) => 0,
+            Ok(TurnExit::Waiting) => 1,
+            Ok(TurnExit::HostActions) => 2,
+            Ok(TurnExit::Idle) => 3,
             Err(_) => -1,
         }
     })
 }
 
 #[must_use]
-pub extern "C" fn riscbox_run_cycles() -> u32 {
-    STATE.with_borrow(|state| state.run_cycles)
-}
-
-fn u64_from_parts(low: u32, high: u32) -> u64 {
-    u64::from(low) | (u64::from(high) << 32)
-}
-
-#[must_use]
-pub extern "C" fn riscbox_next_timer_delay_ticks(now_low: u32, now_high: u32) -> u32 {
+pub extern "C" fn riscbox_turn_finish(elapsed_ms: f64, now_low: u32, now_high: u32) -> i32 {
     STATE.with_borrow_mut(|state| {
         state
             .runtime
-            .next_timer_delay_ticks(u64_from_parts(now_low, now_high))
+            .finish_turn(elapsed_ms, u64_from_parts(now_low, now_high))
+            .map_or(-1, |delay| i32::try_from(delay).unwrap_or(i32::MAX))
     })
+}
+
+pub extern "C" fn riscbox_turn_abort() {
+    STATE.with_borrow_mut(|state| state.runtime.abort_turn());
+}
+
+#[must_use]
+pub extern "C" fn riscbox_timing_stat(kind: u32) -> f64 {
+    STATE.with_borrow(|state| state.runtime.timing_stat(kind))
 }
 
 #[must_use]

@@ -782,7 +782,7 @@ impl Machine {
     }
 
     #[must_use]
-    pub fn next_timer_delay_ticks(&mut self) -> u32 {
+    pub fn next_timer_delay_ticks(&self) -> Option<u64> {
         // Due compares are already reflected in interrupt state by update_time.
         let now = self.bus.timer_ticks;
         let mut delay = u64::MAX;
@@ -798,7 +798,12 @@ impl Machine {
         {
             delay = delay.min(rtc_delay);
         }
-        u32::try_from(delay).unwrap_or(u32::MAX)
+        (delay != u64::MAX).then_some(delay)
+    }
+
+    #[must_use]
+    pub fn is_waiting(&self) -> bool {
+        self.cpu.is_waiting()
     }
 
     pub fn run(&mut self, cycles: u32) -> RunOutcome {

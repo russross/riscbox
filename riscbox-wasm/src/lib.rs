@@ -100,22 +100,38 @@ pub extern "C" fn riscbox_network_carrier(up: u32) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn riscbox_run(
-    now_milliseconds_low: u32,
-    now_milliseconds_high: u32,
-    budget: u32,
-) -> i32 {
-    browser_abi::riscbox_run(now_milliseconds_low, now_milliseconds_high, budget)
+pub extern "C" fn riscbox_configure_timing(timeslice_ms: f64, diagnostics: u32) -> i32 {
+    browser_abi::riscbox_configure_timing(timeslice_ms, diagnostics)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn riscbox_run_cycles() -> u32 {
-    browser_abi::riscbox_run_cycles()
+pub extern "C" fn riscbox_wake_delay_ms(now_low: u32, now_high: u32, requested: u32) -> u32 {
+    browser_abi::riscbox_wake_delay_ms(now_low, now_high, requested)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn riscbox_next_timer_delay_ticks(now_low: u32, now_high: u32) -> u32 {
-    browser_abi::riscbox_next_timer_delay_ticks(now_low, now_high)
+pub extern "C" fn riscbox_turn_begin(now_low: u32, now_high: u32) -> i32 {
+    browser_abi::riscbox_turn_begin(now_low, now_high)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn riscbox_turn_advance() -> i32 {
+    browser_abi::riscbox_turn_advance()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn riscbox_turn_finish(elapsed_ms: f64, now_low: u32, now_high: u32) -> i32 {
+    browser_abi::riscbox_turn_finish(elapsed_ms, now_low, now_high)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn riscbox_turn_abort() {
+    browser_abi::riscbox_turn_abort();
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn riscbox_timing_stat(kind: u32) -> f64 {
+    browser_abi::riscbox_timing_stat(kind)
 }
 
 #[unsafe(no_mangle)]

@@ -565,15 +565,15 @@ fn timer_deadlines_use_guest_ticks_and_drop_due_compares() {
         .bus_mut()
         .write(GuestAddress(CLINT_BASE + 0x4004), AccessWidth::Word, 0)
         .expect("CLINT compare high");
-    assert_eq!(machine.next_timer_delay_ticks(), 15);
+    assert_eq!(machine.next_timer_delay_ticks(), Some(15));
 
     machine
         .bus_mut()
         .write(GuestAddress(RTC_BASE + 8), AccessWidth::Word, 100_000_101)
         .expect("RTC alarm low");
-    assert_eq!(machine.next_timer_delay_ticks(), 2);
+    assert_eq!(machine.next_timer_delay_ticks(), Some(2));
     machine.update_time(1_000_002, 100_000_200);
-    assert_eq!(machine.next_timer_delay_ticks(), 13);
+    assert_eq!(machine.next_timer_delay_ticks(), Some(13));
     machine.update_time(1_000_015, 100_001_500);
-    assert_eq!(machine.next_timer_delay_ticks(), u32::MAX);
+    assert!(machine.next_timer_delay_ticks().expect("future RTC alarm") > u64::from(u32::MAX));
 }

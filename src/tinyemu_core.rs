@@ -66,6 +66,7 @@ mod ffi {
         fn tinyemu_core_clear_dirty(core: *mut CoreState, region: i32, offset: u64) -> i32;
         fn tinyemu_core_set_time(core: *mut CoreState, ticks: u64);
         fn tinyemu_core_stimecmp(core: *const CoreState) -> u64;
+        fn tinyemu_core_is_waiting(core: *const CoreState) -> u32;
         fn tinyemu_core_set_interrupts(core: *mut CoreState, mask: u32);
         fn tinyemu_core_run(core: *mut CoreState, budget: u32, host: *mut c_void) -> RunResult;
         fn tinyemu_core_pc(core: *const CoreState) -> u64;
@@ -205,6 +206,12 @@ mod ffi {
         pub fn stimecmp(&self) -> u64 {
             // SAFETY: this reads the live core while no interpreter call is active.
             unsafe { tinyemu_core_stimecmp(self.state.as_ptr()) }
+        }
+
+        #[must_use]
+        pub fn is_waiting(&self) -> bool {
+            // SAFETY: this reads the live core while no interpreter call is active.
+            unsafe { tinyemu_core_is_waiting(self.state.as_ptr()) != 0 }
         }
 
         pub fn set_interrupts(&mut self, mask: u32) {

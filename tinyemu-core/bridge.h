@@ -28,6 +28,7 @@ int tinyemu_core_take_dirty(TinyemuCore *core, int region,
 int tinyemu_core_clear_dirty(TinyemuCore *core, int region, uint64_t offset);
 void tinyemu_core_set_time(TinyemuCore *core, uint64_t ticks);
 uint64_t tinyemu_core_stimecmp(const TinyemuCore *core);
+uint32_t tinyemu_core_is_waiting(const TinyemuCore *core);
 void tinyemu_core_set_interrupts(TinyemuCore *core, uint32_t mask);
 TinyemuRunResult tinyemu_core_run(TinyemuCore *core, uint32_t budget,
                                    void *host);

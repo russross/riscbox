@@ -1,6 +1,6 @@
 use riscbox::browser::BrowserController;
 use riscbox::browser_runtime::{
-    BrowserNineP, BrowserRuntime, HostAction, RuntimeError, RuntimeStart,
+    BrowserNineP, BrowserRuntime, HostAction, RuntimeError, RuntimeStart, TurnExit, TurnStart,
 };
 use riscbox::virtio_devices::{
     NinePBackend, NinePEndpointId, NinePGeneration, NinePRequestId, NinePTransportAction,
@@ -43,6 +43,25 @@ fn start_uart_writer(config: &[u8]) -> BrowserRuntime {
     assert_eq!(runtime.next_action(), Some(HostAction::Started));
     assert_eq!(runtime.next_action(), None);
     runtime
+}
+
+#[test]
+fn complete_turn_resumes_after_host_action_and_updates_rate() {
+    let mut runtime = start_uart_writer(
+        br#"{version:1,machine:"riscv64",memory_size:32,bios:"fw.bin",console:"uart"}"#,
+    );
+    runtime.configure_timing(1.0, true).expect("timing configuration");
+    assert_eq!(runtime.begin_turn(1_000_000), TurnStart::Ready);
+    let mut controller = BrowserController::default();
+    assert_eq!(runtime.advance_turn(&mut controller).expect("first advance"), TurnExit::HostActions);
+    assert!(matches!(runtime.next_action(), Some(HostAction::Console(_))));
+    assert_eq!(runtime.next_action(), None);
+    assert_eq!(runtime.advance_turn(&mut controller).expect("remaining budget"), TurnExit::Finished);
+    assert_eq!(runtime.finish_turn(2.0, 1_000_002).expect("finish"), 0);
+    assert!(runtime.timing_stat(0) > 0.0);
+    assert!(runtime.timing_stat(1) >= 1.0);
+    assert_eq!(runtime.begin_turn(1_000_002), TurnStart::Ready);
+    runtime.abort_turn();
 }
 
 #[test]

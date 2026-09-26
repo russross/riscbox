@@ -4,6 +4,11 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Moved browser turn budgets, cycle-rate calibration, exact timer deadline
+    arithmetic, and repeated CPU calls into Rust. JavaScript now supplies wall
+    time and whole-turn elapsed time, dispatches host actions between WASM
+    calls, and schedules browser wakeups. The raw WASM ABI now exposes turn
+    begin, advance, finish, abort, wake-delay, and diagnostic operations.
 *   Calibrated browser turn budgets from complete-turn cycle and elapsed-time
     samples with a five-second active-time half-life. Guest time now advances
     in 10 MHz ticks from cycles at a fixed rate within each turn; timer writes
@@ -11,9 +16,7 @@ Unreleased
     Configurable turn duration defaults to 10 ms, waiting wakeups cap at 100 ms,
     and a guest clock lead delays the next turn until wall time catches up.
     Added opt-in timing diagnostics for rate, call counts, timer intervals,
-    idle time, and catch-up waits. The raw WASM run interface now accepts
-    10 MHz ticks and exposes a tick deadline query in place of its millisecond
-    run-delay export.
+    idle time, and catch-up waits.
 *   Added an early host-attention exit after guest MMIO requests for 9p and
     HTTP block work. The JavaScript driver now owns bounded guest turns,
     resumes unused cycles after resident 9p replies, and replaces WFI timers

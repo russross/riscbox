@@ -47,6 +47,7 @@ interface RiscboxRuntime {
 }
 
 interface RiscboxOptions {
+    readonly debugTiming?: boolean;
     readonly p9Servers: ReadonlyMap<string, {
         connect(): {
             request(bytes: Uint8Array, replyCapacity: number): Promise<
@@ -508,6 +509,7 @@ class VmController {
                 throw new Error(`WASM request failed with status ${response.status}`);
             }
             const runtime = await window.Riscbox.instantiate(await response.arrayBuffer(), {
+                debugTiming: true,
                 p9Servers: new Map([["default", target.filesystem]]),
                 consoleWrite: (text: string | Uint8Array): void => {
                     if (generation === this.generation) {

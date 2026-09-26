@@ -46,6 +46,20 @@ dependencies live under `risclet/ui/`. The distribution build installs them
 when needed, runs the type checker, and bundles the CodeMirror, xterm.js,
 Split.js, and CommonMark frontend into `dist/bundle.js`.
 
+Browser timing tests
+--------------------
+
+After building `images/risclet` and `images/xv6-profile`, serve the repository's
+`images/` directory:
+
+    python3 -m http.server 8000 --bind 127.0.0.1 --directory images
+
+Open `http://127.0.0.1:8000/risclet/dist/` and click **Boot VM**. Open
+`http://127.0.0.1:8000/xv6-profile/dist/` to run the xv6 compile benchmark;
+it starts automatically and shuts down after reporting
+`XV6_PROFILE_BUILD_COMPLETE`. Both pages enable timing diagnostics. Read the
+periodic `Riscbox timing` entries in the browser developer console.
+
 Shared image-preparation artifacts are kept under `images/build/`; per-image
 work and output are kept under that image's `build/` and `dist/`. None is
 tracked. Kernel sources and build products live under `kernel/`, outside the

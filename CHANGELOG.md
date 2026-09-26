@@ -4,6 +4,9 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Enabled browser timing diagnostics in the Risclet demo and added a dedicated
+    xv6 compile benchmark page with diagnostics enabled. Both static
+    distributions can be served from `images/` for browser testing.
 *   Standardized browser scheduling names across C, Rust, the raw WASM ABI,
     JavaScript, tests, and documentation. An execution quantum contains one or
     more CPU runs and may cross host-service boundaries. Renamed the public

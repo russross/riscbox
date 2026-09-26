@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Riscbox xv6 compile benchmark</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: ui-monospace, "Cascadia Mono", monospace;
+    }
+
+    body {
+      margin: 0;
+      background: #111;
+      color: #ddd;
+    }
+
+    main {
+      max-width: 80rem;
+      margin: auto;
+      padding: 1rem;
+    }
+
+    h1 {
+      font: inherit;
+      font-weight: bold;
+    }
+
+    #terminal {
+      min-height: 32rem;
+      overflow: auto;
+      padding: 1rem;
+      border: 1px solid #444;
+      outline: none;
+      white-space: pre-wrap;
+    }
+
+    #terminal:focus {
+      border-color: #999;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>xv6 compile benchmark</h1>
+    <p id="status" role="status">Loading emulator…</p>
+    <pre id="terminal" tabindex="0" aria-label="Virtual machine console"></pre>
+  </main>
+
+  <script src="./riscbox.js"></script>
+  <script>
+    const statusElement = document.querySelector("#status");
+    const terminalElement = document.querySelector("#terminal");
+    const parameters = new URLSearchParams(location.search);
+    const configParameter = parameters.get("config");
+    const configUrl = new URL(configParameter ?? "riscbox.cfg", location.href).href;
+    const memoryMiB = Number.parseInt(parameters.get("memory") ?? "512", 10);
+    const inputEncoder = new TextEncoder();
+    const specialKeys = new Map([
+      ["Enter", "\r"],
+      ["Backspace", "\x7f"],
+      ["Tab", "\t"],
+      ["Escape", "\x1b"],
+      ["ArrowUp", "\x1b[A"],
+      ["ArrowDown", "\x1b[B"],
+      ["ArrowRight", "\x1b[C"],
+      ["ArrowLeft", "\x1b[D"],
+      ["Home", "\x1b[H"],
+      ["End", "\x1b[F"],
+      ["Delete", "\x1b[3~"],
+    ]);
+
+    const term = {
+      write(text) {
+        terminalElement.append(document.createTextNode(text));
+        terminalElement.scrollTop = terminalElement.scrollHeight;
+      },
+      getSize() {
+        return [80, 25];
+      },
+    };
+    let runtime = null;
+
+    const keyText = (event) => {
+      if (event.ctrlKey && !event.altKey && !event.metaKey && event.key.length === 1)
+        return String.fromCharCode(event.key.toUpperCase().charCodeAt(0) & 31);
+
+      return specialKeys.get(event.key) ??
+        (!event.altKey && !event.metaKey && event.key.length === 1 ? event.key : null);
+    };
+
+    terminalElement.addEventListener("keydown", (event) => {
+      const text = keyText(event);
+      if (text === null || runtime === null)
+        return;
+      event.preventDefault();
+      runtime.consoleInput(inputEncoder.encode(text));
+    });
+
+    const start = async () => {
+      if (!Number.isInteger(memoryMiB) || memoryMiB <= 0) {
+        statusElement.textContent = "The memory parameter must be a positive integer";
+        return;
+      }
+      try {
+        const response = await fetch("./riscbox.wasm", { cache: "no-cache" });
+        if (!response.ok)
+          throw new Error(`WASM request failed with status ${response.status}`);
+        runtime = await Riscbox.instantiate(await response.arrayBuffer(), {
+          debugTiming: true,
+          consoleWrite: (text) => term.write(text),
+          onVmStarted: () => {
+            statusElement.textContent = "Running";
+            terminalElement.focus();
+          },
+          onError: (error) => {
+            statusElement.textContent = String(error);
+            console.error(error);
+          },
+        });
+        statusElement.textContent = "Loading VM assets…";
+        if (runtime.start(configUrl, memoryMiB) !== 0)
+          throw new Error("Riscbox rejected the VM configuration");
+      } catch (error) {
+        statusElement.textContent = String(error);
+        console.error(error);
+      }
+    };
+
+    start();
+  </script>
+</body>
+</html>

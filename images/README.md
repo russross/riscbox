@@ -61,6 +61,9 @@ Open `http://127.0.0.1:8000/risclet/dist/` and click **Boot VM**. Open
 it starts automatically and shuts down after reporting
 `XV6_PROFILE_BUILD_COMPLETE`. Both pages enable timing diagnostics. Read the
 periodic `Riscbox timing` entries in the browser developer console.
+Append `?guestClockSkew=0` or another fraction below `1` to the xv6 URL to
+compare skew settings without rebuilding the distribution; the default is
+`0.20`.
 
 Shared image-preparation artifacts are kept under `images/build/`; per-image
 work and output are kept under that image's `build/` and `dist/`. None is

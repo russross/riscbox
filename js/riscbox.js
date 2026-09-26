@@ -28,9 +28,15 @@
             const targetQuantumMs = options.targetQuantumMs ?? 10;
             if (!Number.isFinite(targetQuantumMs) || targetQuantumMs <= 0 || targetQuantumMs > 100)
                 throw new RangeError("targetQuantumMs must be greater than zero and at most 100");
+            const guestClockSkew = options.guestClockSkew ?? 0.20;
+            if (!Number.isFinite(guestClockSkew) || guestClockSkew < 0 || guestClockSkew >= 1)
+                throw new RangeError("guestClockSkew must be at least zero and less than one");
             this.exports = exports;
             this.options = options;
-            if (exports.riscbox_configure_quantum(targetQuantumMs, options.debugTiming ? 1 : 0) !== 0)
+            this.guestClockSkew = guestClockSkew;
+            if (exports.riscbox_configure_quantum(
+                targetQuantumMs, guestClockSkew, options.debugTiming ? 1 : 0,
+            ) !== 0)
                 throw new Error("Riscbox WASM timing configuration failed");
             this.timing = options.debugTiming ? {
                 nextReport: performance.now() + 1_000,
@@ -38,6 +44,8 @@
                 timerReprogrammingExits: 0, wfiQuanta: 0, wfiMs: 0,
                 catchUpWaits: 0, catchUpMs: 0,
                 timerIntervals: [],
+                intervalNoCatchUpSkew: 0,
+                sessionCatchUpSkews: [],
             } : null;
             this.p9Sessions = new Map();
             this.p9Requests = new Map();
@@ -199,6 +207,9 @@
             const intervals = timing.timerIntervals;
             const medianTicks = intervals.length
                 ? intervals.slice().sort((a, b) => a - b)[Math.floor(intervals.length / 2)] : 0;
+            const skews = timing.sessionCatchUpSkews.slice().sort((a, b) => a - b);
+            const skewPercentile = (fraction) => skews.length
+                ? skews[Math.ceil(fraction * skews.length) - 1] * 100 : 0;
             console.log("Riscbox timing", {
                 estimatedEmulatedMCyclesPerSecond: this.exports.riscbox_timing_stat(0) / 1_000_000,
                 activeEmulatedMCyclesPerSecond: activeMCyclesPerSecond,
@@ -206,12 +217,18 @@
                 medianTimerIntervalMs: medianTicks / GUEST_TICKS_PER_MILLISECOND,
                 wfiQuanta: timing.wfiQuanta, wfiMs: timing.wfiMs,
                 catchUpWaits: timing.catchUpWaits, catchUpMs: timing.catchUpMs,
+                guestClockSkewPercent: this.guestClockSkew * 100,
+                intervalNoCatchUpSkewPercent: timing.intervalNoCatchUpSkew * 100,
+                sessionPotentialCatchUpSkewP50Percent: skewPercentile(0.50),
+                sessionPotentialCatchUpSkewP90Percent: skewPercentile(0.90),
+                sessionPotentialCatchUpSkewP99Percent: skewPercentile(0.99),
             });
             timing.nextReport = now + 5_000;
             timing.quanta = timing.cpuRuns = timing.cycles = timing.activeMs = 0;
             timing.timerReprogrammingExits = timing.wfiQuanta = timing.wfiMs = 0;
             timing.catchUpWaits = timing.catchUpMs = 0;
             timing.timerIntervals = [];
+            timing.intervalNoCatchUpSkew = 0;
         }
 
         async runQuantum() {
@@ -282,6 +299,15 @@
                     const interval = this.exports.riscbox_timing_stat(3);
                     if (interval > 0 && timing.timerIntervals.length < 10_000)
                         timing.timerIntervals.push(interval);
+                    if (!wfiSleep && !vmInactive) {
+                        const requiredSkew = this.exports.riscbox_timing_stat(5);
+                        if (requiredSkew > 0) {
+                            timing.intervalNoCatchUpSkew = Math.max(
+                                timing.intervalNoCatchUpSkew, requiredSkew,
+                            );
+                            timing.sessionCatchUpSkews.push(requiredSkew);
+                        }
+                    }
                     timing.activeMs += performance.now() - startedAt;
                     if (wfiSleep) timing.wfiQuanta++;
                     this.reportTiming(performance.now());

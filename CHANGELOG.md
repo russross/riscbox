@@ -4,6 +4,11 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Added `guestClockSkew` (default `0.20`) to slow guest-clock advancement
+    within each quantum while keeping its cycle budget unchanged. Timer
+    deadlines use the same integer mapping. Timing diagnostics now report the
+    interval maximum and boot-to-current 50th, 90th, and 99th percentiles of
+    the skew needed to avoid potential zero-skew catch-up waits.
 *   Scheduled runnable browser quanta through `MessageChannel` tasks instead of
     repeated zero-delay timers. A full headless Chrome xv6 compile run fell from
     156.1 to 121.9 seconds in the same environment, with negligible WFI time

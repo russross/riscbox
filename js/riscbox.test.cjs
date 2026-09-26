@@ -342,7 +342,7 @@ test("quantum begin receives complete host epoch milliseconds across the ABI", a
         Math.floor(1_730_000_000_123 / 0x1_0000_0000) >>> 0]]);
 });
 
-test("configured duration is passed to WASM", () => {
+test("configured quantum duration and guest clock skew are passed to WASM", () => {
     const fake = fakeModule();
     const calls = [];
     fake.exports.riscbox_configure_quantum = (...args) => {
@@ -350,9 +350,37 @@ test("configured duration is passed to WASM", () => {
         return 0;
     };
     new Riscbox(fake.exports, { targetQuantumMs: 5, debugTiming: true });
-    assert.deepEqual(calls, [[5, 1]]);
+    new Riscbox(fake.exports, { guestClockSkew: 0.35 });
+    assert.deepEqual(calls, [[5, 0.20, 1], [10, 0.35, 0]]);
     assert.throws(() => new Riscbox(fake.exports, { targetQuantumMs: 0 }), /targetQuantumMs/);
+    assert.throws(() => new Riscbox(fake.exports, { guestClockSkew: 1 }), /guestClockSkew/);
+    assert.throws(() => new Riscbox(fake.exports, { guestClockSkew: -0.01 }), /guestClockSkew/);
     assert.throws(() => new Riscbox(fake.exports, { timesliceMs: 5 }), /renamed to targetQuantumMs/);
+});
+
+test("timing diagnostics report skew thresholds from zero-skew catch-up samples", async () => {
+    const fake = fakeModule();
+    fake.exports.riscbox_quantum_run = () => 0;
+    fake.exports.riscbox_timing_stat = (kind) => kind === 5 ? 0.25 : 0;
+    const runtime = new Riscbox(fake.exports, { debugTiming: true });
+    runtime.scheduleWakeup = () => {};
+    await runtime.runQuantum();
+    assert.deepEqual(runtime.timing.sessionCatchUpSkews, [0.25]);
+    runtime.timing.sessionCatchUpSkews.push(0.05, 0.10, 0.20, 0.30);
+    runtime.timing.nextReport = 0;
+    const originalLog = console.log;
+    let report;
+    console.log = (_label, value) => { report = value; };
+    try {
+        runtime.reportTiming(performance.now());
+    } finally {
+        console.log = originalLog;
+    }
+    assert.equal(report.guestClockSkewPercent, 20);
+    assert.equal(report.intervalNoCatchUpSkewPercent, 25);
+    assert.equal(report.sessionPotentialCatchUpSkewP50Percent, 20);
+    assert.equal(report.sessionPotentialCatchUpSkewP90Percent, 30);
+    assert.equal(report.sessionPotentialCatchUpSkewP99Percent, 30);
 });
 
 test("WASM chooses the scheduled wake delay", () => {

@@ -93,9 +93,16 @@ host time has caught up with guest time. Rust calibrates the quantum cycle
 budget from complete quanta timed by JavaScript. Set `targetQuantumMs` in the
 instantiate options to choose a nominal duration greater than zero and at most
 100 milliseconds (default 10);
-this bounds latency for host input and completed I/O. Set `debugTiming: true`
-to log estimated and active emulated Mcycles/s, CPU runs per quantum, timer
-intervals, WFI sleep time, and catch-up waits. Integrations can also provide
+this bounds latency for host input and completed I/O. Set `guestClockSkew` to
+the fraction by which guest time advances more slowly than host time within a
+quantum (default `0.20`, range `0` to less than `1`). The cycle budget stays
+based on the target duration; the next quantum starts from host time and may
+jump forward. Set `debugTiming: true` to log estimated and active emulated
+Mcycles/s, CPU runs per quantum, timer intervals, WFI sleep time, and catch-up
+waits. The skew fields report the maximum needed to avoid a zero-skew catch-up
+wait in the latest interval and the 50th, 90th, and 99th percentiles across
+all such potential waits since boot. Quanta requiring no skew are excluded from
+those percentiles. Integrations can also provide
 `networkWrite`, `framebufferRefresh`, and `p9Servers`. Host input methods are
 `consoleInput(bytes)`, `consoleResize(columns, rows)`, `keyEvent()`,
 `pointerEvent()`, `wheelEvent()`, `networkInput()`, and `networkCarrier()`.

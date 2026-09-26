@@ -1,7 +1,7 @@
 //! Rust implementation of the browser-focused Riscbox virtual machine.
 
-pub mod browser;
 pub mod browser_abi;
+pub mod browser_input;
 pub mod browser_runtime;
 pub mod browser_storage;
 pub mod config;

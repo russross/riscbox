@@ -6,17 +6,17 @@ pub enum BusError {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RunState {
-    Running,
-    Waiting,
-    HostAttention,
-    TimerChanged,
+pub enum CpuRunExitReason {
+    CycleLimitReached,
+    WfiSleep,
+    HostServiceRequested,
+    TimerReprogrammed,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RunOutcome {
-    pub cycles: u32,
-    pub state: RunState,
+pub struct CpuRunResult {
+    pub consumed_cycles: u32,
+    pub state: CpuRunExitReason,
 }
 
 #[allow(unsafe_code)]
@@ -36,8 +36,8 @@ mod ffi {
 
     #[repr(C)]
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-    pub struct RunResult {
-        pub cycles: u32,
+    pub struct CoreRunResult {
+        pub consumed_cycles: u32,
         pub reason: u32,
     }
 
@@ -64,11 +64,15 @@ mod ffi {
             count: usize,
         ) -> i32;
         fn tinyemu_core_clear_dirty(core: *mut CoreState, region: i32, offset: u64) -> i32;
-        fn tinyemu_core_set_time(core: *mut CoreState, ticks: u64);
+        fn tinyemu_core_set_guest_timer_ticks(core: *mut CoreState, ticks: u64);
         fn tinyemu_core_stimecmp(core: *const CoreState) -> u64;
-        fn tinyemu_core_is_waiting(core: *const CoreState) -> u32;
+        fn tinyemu_core_is_wfi_sleeping(core: *const CoreState) -> u32;
         fn tinyemu_core_set_interrupts(core: *mut CoreState, mask: u32);
-        fn tinyemu_core_run(core: *mut CoreState, budget: u32, host: *mut c_void) -> RunResult;
+        fn tinyemu_core_run_cpu(
+            core: *mut CoreState,
+            cycle_limit_cycles: u32,
+            platform: *mut c_void,
+        ) -> CoreRunResult;
         fn tinyemu_core_pc(core: *const CoreState) -> u64;
         fn tinyemu_core_register(core: *const CoreState, index: u32) -> u64;
         fn tinyemu_core_mcause(core: *const CoreState) -> u64;
@@ -84,7 +88,7 @@ mod ffi {
         state: NonNull<CoreState>,
     }
 
-    pub trait HostCallbacks {
+    pub trait PlatformCallbacks {
         /// Reads one device register.
         ///
         /// # Errors
@@ -96,13 +100,13 @@ mod ffi {
         /// Returns an access fault for an invalid device operation.
         fn write(&mut self, address: u64, width: u32, value: u32) -> Result<(), BusError>;
         fn interrupts(&self) -> u32;
-        fn host_attention(&self) -> bool {
+        fn host_service_requested(&self) -> bool {
             false
         }
     }
 
-    struct HostContext<'a> {
-        host: &'a mut dyn HostCallbacks,
+    struct PlatformContext<'a> {
+        platform: &'a mut dyn PlatformCallbacks,
     }
 
     impl CoreHandle {
@@ -197,9 +201,9 @@ mod ffi {
             CoreHandle { state: self.state }
         }
 
-        pub fn set_time(&mut self, ticks: u64) {
+        pub fn set_guest_timer_ticks(&mut self, ticks: u64) {
             // SAFETY: self owns a live C core.
-            unsafe { tinyemu_core_set_time(self.state.as_ptr(), ticks) };
+            unsafe { tinyemu_core_set_guest_timer_ticks(self.state.as_ptr(), ticks) };
         }
 
         #[must_use]
@@ -209,9 +213,9 @@ mod ffi {
         }
 
         #[must_use]
-        pub fn is_waiting(&self) -> bool {
+        pub fn is_wfi_sleeping(&self) -> bool {
             // SAFETY: this reads the live core while no interpreter call is active.
-            unsafe { tinyemu_core_is_waiting(self.state.as_ptr()) != 0 }
+            unsafe { tinyemu_core_is_wfi_sleeping(self.state.as_ptr()) != 0 }
         }
 
         pub fn set_interrupts(&mut self, mask: u32) {
@@ -219,26 +223,30 @@ mod ffi {
             unsafe { tinyemu_core_set_interrupts(self.state.as_ptr(), mask) };
         }
 
-        pub fn run(&mut self, budget: u32) -> RunResult {
+        pub fn run_cpu(&mut self, cycle_limit_cycles: u32) -> CoreRunResult {
             // SAFETY: The core and RAM remain stable for the complete call. The
             // callbacks currently reject MMIO and do not reenter the core.
             unsafe {
-                tinyemu_core_run(
+                tinyemu_core_run_cpu(
                     self.state.as_ptr(),
-                    budget.min(i32::MAX as u32),
+                    cycle_limit_cycles.min(i32::MAX as u32),
                     core::ptr::null_mut(),
                 )
             }
         }
 
-        pub fn run_host(&mut self, budget: u32, host: &mut dyn HostCallbacks) -> RunResult {
-            let mut context = HostContext { host };
+        pub fn run_cpu_with_platform(
+            &mut self,
+            cycle_limit_cycles: u32,
+            platform: &mut dyn PlatformCallbacks,
+        ) -> CoreRunResult {
+            let mut context = PlatformContext { platform };
             // SAFETY: C uses the stack context only during this synchronous call.
             // Its callbacks do not retain slices or reenter the CPU interpreter.
             unsafe {
-                tinyemu_core_run(
+                tinyemu_core_run_cpu(
                     self.state.as_ptr(),
-                    budget.min(i32::MAX as u32),
+                    cycle_limit_cycles.min(i32::MAX as u32),
                     (&raw mut context).cast::<c_void>(),
                 )
             }
@@ -277,18 +285,18 @@ mod ffi {
     }
 
     #[unsafe(no_mangle)]
-    pub extern "C" fn tinyemu_host_read(
-        host: *mut c_void,
+    pub extern "C" fn tinyemu_platform_read(
+        platform: *mut c_void,
         address: u64,
         width: u32,
         value: *mut u32,
     ) -> i32 {
-        if host.is_null() || value.is_null() {
+        if platform.is_null() || value.is_null() {
             return -1;
         }
-        // SAFETY: run_host passes a live HostContext for the call duration.
-        let context = unsafe { &mut *host.cast::<HostContext<'_>>() };
-        match context.host.read(address, width) {
+        // SAFETY: run_cpu_with_platform passes a live PlatformContext for the call duration.
+        let context = unsafe { &mut *platform.cast::<PlatformContext<'_>>() };
+        match context.platform.read(address, width) {
             Ok(result) => {
                 // SAFETY: C passes the address of its local output value.
                 unsafe { value.write(result) };
@@ -299,38 +307,41 @@ mod ffi {
     }
 
     #[unsafe(no_mangle)]
-    pub extern "C" fn tinyemu_host_write(
-        host: *mut c_void,
+    pub extern "C" fn tinyemu_platform_write(
+        platform: *mut c_void,
         address: u64,
         width: u32,
         value: u32,
     ) -> i32 {
-        if host.is_null() {
+        if platform.is_null() {
             return -1;
         }
-        // SAFETY: run_host passes a live HostContext for the call duration.
-        let context = unsafe { &mut *host.cast::<HostContext<'_>>() };
-        context.host.write(address, width, value).map_or(-1, |()| 0)
+        // SAFETY: run_cpu_with_platform passes a live PlatformContext for the call duration.
+        let context = unsafe { &mut *platform.cast::<PlatformContext<'_>>() };
+        context
+            .platform
+            .write(address, width, value)
+            .map_or(-1, |()| 0)
     }
 
     #[unsafe(no_mangle)]
-    pub extern "C" fn tinyemu_host_interrupts(host: *mut c_void) -> u32 {
-        if host.is_null() {
+    pub extern "C" fn tinyemu_platform_interrupts(platform: *mut c_void) -> u32 {
+        if platform.is_null() {
             return 0;
         }
-        // SAFETY: run_host passes a live HostContext for the call duration.
-        let context = unsafe { &*host.cast::<HostContext<'_>>() };
-        context.host.interrupts()
+        // SAFETY: run_cpu_with_platform passes a live PlatformContext for the call duration.
+        let context = unsafe { &*platform.cast::<PlatformContext<'_>>() };
+        context.platform.interrupts()
     }
 
     #[unsafe(no_mangle)]
-    pub extern "C" fn tinyemu_host_attention(host: *mut c_void) -> u32 {
-        if host.is_null() {
+    pub extern "C" fn tinyemu_platform_service_requested(platform: *mut c_void) -> u32 {
+        if platform.is_null() {
             return 0;
         }
         // SAFETY: The interpreter retains this context only during run_host.
-        let context = unsafe { &*host.cast::<HostContext<'_>>() };
-        u32::from(context.host.host_attention())
+        let context = unsafe { &*platform.cast::<PlatformContext<'_>>() };
+        u32::from(context.platform.host_service_requested())
     }
 
     #[unsafe(no_mangle)]
@@ -394,4 +405,4 @@ mod ffi {
 }
 
 pub(crate) use ffi::CoreHandle;
-pub use ffi::{Core, HostCallbacks, RunResult};
+pub use ffi::{Core, CoreRunResult, PlatformCallbacks};

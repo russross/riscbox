@@ -100,33 +100,41 @@ pub extern "C" fn riscbox_network_carrier(up: u32) -> i32 {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn riscbox_configure_timing(timeslice_ms: f64, diagnostics: u32) -> i32 {
-    browser_abi::riscbox_configure_timing(timeslice_ms, diagnostics)
+pub extern "C" fn riscbox_configure_quantum(target_quantum_ms: f64, diagnostics: u32) -> i32 {
+    browser_abi::riscbox_configure_quantum(target_quantum_ms, diagnostics)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn riscbox_wake_delay_ms(now_low: u32, now_high: u32, requested: u32) -> u32 {
-    browser_abi::riscbox_wake_delay_ms(now_low, now_high, requested)
+pub extern "C" fn riscbox_wake_delay_ms(
+    host_epoch_ms_low: u32,
+    host_epoch_ms_high: u32,
+    requested: u32,
+) -> u32 {
+    browser_abi::riscbox_wake_delay_ms(host_epoch_ms_low, host_epoch_ms_high, requested)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn riscbox_turn_begin(now_low: u32, now_high: u32) -> i32 {
-    browser_abi::riscbox_turn_begin(now_low, now_high)
+pub extern "C" fn riscbox_quantum_begin(host_epoch_ms_low: u32, host_epoch_ms_high: u32) -> i32 {
+    browser_abi::riscbox_quantum_begin(host_epoch_ms_low, host_epoch_ms_high)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn riscbox_turn_advance() -> i32 {
-    browser_abi::riscbox_turn_advance()
+pub extern "C" fn riscbox_quantum_run() -> i32 {
+    browser_abi::riscbox_quantum_run()
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn riscbox_turn_finish(elapsed_ms: f64, now_low: u32, now_high: u32) -> i32 {
-    browser_abi::riscbox_turn_finish(elapsed_ms, now_low, now_high)
+pub extern "C" fn riscbox_quantum_finish(
+    host_elapsed_ms: f64,
+    host_epoch_ms_low: u32,
+    host_epoch_ms_high: u32,
+) -> i32 {
+    browser_abi::riscbox_quantum_finish(host_elapsed_ms, host_epoch_ms_low, host_epoch_ms_high)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn riscbox_turn_abort() {
-    browser_abi::riscbox_turn_abort();
+pub extern "C" fn riscbox_quantum_abort() {
+    browser_abi::riscbox_quantum_abort();
 }
 
 #[unsafe(no_mangle)]

@@ -59,7 +59,7 @@ fn tinyemu_executes_rv64_integer_and_multiply_divide_instructions() {
             0x1050_0073,
         ],
     );
-    assert_eq!(core.run(20).cycles, 7);
+    assert_eq!(core.run_cpu(20).consumed_cycles, 7);
     assert_eq!(core.register(1), u64::MAX - 7);
     assert_eq!(core.register(3), u64::MAX - 4);
     assert_eq!(core.register(4), u64::MAX - 10);
@@ -92,9 +92,9 @@ fn tinyemu_returns_to_supervisor_then_records_precise_illegal_instruction_trap()
             0x3020_0073,
         ],
     );
-    core.run(10);
+    core.run_cpu(10);
     assert_eq!(core.pc(), 0x2000);
-    core.run(1);
+    core.run_cpu(1);
     assert_eq!(core.machine_cause(), 2);
     assert_eq!(core.machine_trap_value(), 0xffff_ffff);
 }
@@ -125,13 +125,13 @@ fn tinyemu_enforces_pmp_on_supervisor_data_access() {
             store(2, 5, 3, 0),
         ],
     );
-    core.run(20);
+    core.run_cpu(20);
     assert_eq!(core.machine_cause(), 7);
     assert_eq!(core.machine_trap_value(), 0x8000);
 }
 
 #[test]
-fn tinyemu_sstc_timer_wakes_waiting_hart() {
+fn tinyemu_sstc_timer_wakes_wfi_sleeping_hart() {
     let mut core = core();
     put(
         &mut core,
@@ -150,12 +150,12 @@ fn tinyemu_sstc_timer_wakes_waiting_hart() {
             0x1050_0073,
         ],
     );
-    assert_eq!(core.run(20).reason, 3);
-    assert_eq!(core.run(20).reason, 3);
-    core.run(20);
-    assert_eq!(core.run(1).reason, 1);
-    core.set_time(10);
-    core.run(1);
+    assert_eq!(core.run_cpu(20).reason, 3);
+    assert_eq!(core.run_cpu(20).reason, 3);
+    core.run_cpu(20);
+    assert_eq!(core.run_cpu(1).reason, 1);
+    core.set_guest_timer_ticks(10);
+    core.run_cpu(1);
     assert_eq!(core.machine_cause(), (1_u64 << 63) | 5);
 }
 
@@ -232,7 +232,7 @@ fn sv39_probe(
     }
     instructions.extend([load(2, 1, 3, 0), 0x1050_0073]);
     put(&mut core, CODE, &instructions);
-    core.run(40);
+    core.run_cpu(40);
     core
 }
 
@@ -334,7 +334,7 @@ fn tinyemu_atomic_word_and_doubleword_operations_return_old_values() {
             0x1050_0073,
         ],
     );
-    core.run(20);
+    core.run_cpu(20);
     assert_eq!(core.register(3), u64::MAX - 1);
     assert_eq!(core.register(4), 3);
     assert_eq!(read_u64(&mut core, 0x8000), 9);
@@ -357,7 +357,7 @@ fn tinyemu_lr_sc_tracks_reservation_address_and_width() {
             0x1050_0073,
         ],
     );
-    core.run(20);
+    core.run_cpu(20);
     assert_eq!(core.register(3), 0xffff_ffff_8000_0000);
     assert_eq!(core.register(4), 0);
     assert_eq!(core.register(5), 1);
@@ -372,7 +372,7 @@ fn tinyemu_compressed_reserved_encoding_traps() {
     core.ram_range(CODE + 8, 2, true)
         .expect("compressed instruction range should be guest RAM")
         .copy_from_slice(&0_u16.to_le_bytes());
-    core.run(10);
+    core.run_cpu(10);
     assert_eq!(core.machine_cause(), 2);
     assert_eq!(core.machine_trap_value(), 0);
 }
@@ -419,7 +419,7 @@ fn tinyemu_compressed_control_and_stack_memory_use_two_byte_steps() {
         ],
     );
     put_mixed(&mut core, 0x2002, &[&word(0x1050_0073)]);
-    core.run(40);
+    core.run_cpu(40);
     assert_eq!(core.register(1), 32);
     assert_eq!(core.register(4), 0xffff_ffff_8123_4567);
     assert_eq!(core.pc(), 0x2006);
@@ -446,7 +446,7 @@ fn tinyemu_zcb_unary_multiply_and_byte_memory_operations_execute() {
             &halfword(0x9002), // c.ebreak
         ],
     );
-    core.run(30);
+    core.run_cpu(30);
     assert_eq!(core.register(8), 0xab);
     assert_eq!(core.register(10), 0x8000);
     assert_eq!(core.machine_cause(), 3);
@@ -472,13 +472,13 @@ fn tinyemu_compressed_mops_and_lui_hints_preserve_state() {
                 &word(0x1050_0073),
             ],
         );
-        core.run(20);
+        core.run_cpu(20);
         assert_eq!(core.register(4), 0x1234);
     }
 
     let mut core = core();
     put_mixed(&mut core, CODE, &[&halfword(0x6005), &word(0x1050_0073)]);
-    core.run(10);
+    core.run_cpu(10);
     assert_eq!(core.pc(), CODE + 6);
 }
 
@@ -509,7 +509,7 @@ fn tinyemu_advertises_b_and_executes_address_and_bit_manipulation() {
             0x1050_0073,
         ],
     );
-    core.run(30);
+    core.run_cpu(30);
     assert_eq!(core.register(3), 0x1e5);
     assert_eq!(core.register(4), 0x8000_0000_0000_00f9);
     assert_eq!(core.register(5), 0x8000_0000_0000_00f1);
@@ -541,7 +541,7 @@ fn tinyemu_executes_word_address_bit_and_conditional_operations() {
             0x1050_0073,
         ],
     );
-    core.run(30);
+    core.run_cpu(30);
     assert_eq!(core.register(3), 0x8000_0005);
     assert_eq!(core.register(4), 0x1_0000_0006);
     assert_eq!(core.register(5), 1);
@@ -571,7 +571,7 @@ fn tinyemu_executes_mops_waits_and_supervisor_invalidation() {
             0x9002_0000, // reserved instruction traps after tested sequence
         ],
     );
-    running.run(30);
+    running.run_cpu(30);
     assert_eq!(running.register(3), 0);
     assert_eq!(running.machine_cause(), 2);
 
@@ -582,7 +582,7 @@ fn tinyemu_executes_mops_waits_and_supervisor_invalidation() {
         CODE,
         &[0x0000_92b7, csrrw(CSR_MTVEC, 5), 0x8000_41f3],
     );
-    invalid.run(10);
+    invalid.run_cpu(10);
     assert_eq!(invalid.machine_cause(), 2);
     assert_eq!(invalid.machine_trap_value(), 0x8000_41f3);
 }
@@ -601,7 +601,7 @@ fn tinyemu_csr_read_set_traps_when_source_register_is_nonzero() {
             0xf112_21f3, // csrrs x3, mvendorid, x4
         ],
     );
-    core.run(10);
+    core.run_cpu(10);
     assert_eq!(core.machine_cause(), 2);
 }
 
@@ -632,7 +632,7 @@ fn tinyemu_enforces_cache_block_controls_and_zeroes_whole_blocks() {
             0x9002_0000,
         ],
     );
-    core.run(30);
+    core.run_cpu(30);
     assert_eq!(core.register(4) & 0xf0, 0xc0);
     assert_eq!(core.register(6), 1 << 7);
     assert!(
@@ -675,7 +675,7 @@ fn tinyemu_checks_supervisor_cache_block_permission() {
             0x3020_0073,
         ],
     );
-    core.run(40);
+    core.run_cpu(40);
     assert_eq!(core.machine_cause(), 2);
 }
 
@@ -718,7 +718,7 @@ fn tinyemu_loads_stores_and_runs_basic_single_and_double_fp_operations() {
         0x1050_0073,
     ]);
     put(&mut core, CODE, &instructions);
-    core.run(30);
+    core.run_cpu(30);
     assert_eq!(read_u32(&mut core, 0x8010), 3.0_f32.to_bits());
     assert_eq!(read_u64(&mut core, 0x8018), 5.0625_f64.to_bits());
 }
@@ -743,7 +743,7 @@ fn tinyemu_fp_csrs_nan_boxing_and_extension_bits_follow_architecture() {
         0x1050_0073,
     ]);
     put(&mut core, CODE, &instructions);
-    core.run(30);
+    core.run_cpu(30);
     assert_eq!(core.register(20) & ((1 << 3) | (1 << 5)), 0x28);
     assert_eq!(core.register(7), 3);
     assert_eq!(core.register(8), 0x1b);
@@ -777,7 +777,7 @@ fn tinyemu_sign_compare_class_and_conversion_instructions_cover_both_formats() {
     // Capture integer comparison/class/conversion results as guest memory.
     *instructions.last_mut().expect("store placeholder") = store(4, 1, 2, 32);
     put(&mut core, CODE, &instructions);
-    core.run(40);
+    core.run_cpu(40);
     assert_eq!(read_u32(&mut core, 0x8010), 1.5_f32.to_bits());
     assert_eq!(read_u64(&mut core, 0x8018), 1.5_f64.to_bits());
     assert_eq!(core.register(4), 1);
@@ -822,7 +822,7 @@ fn tinyemu_fused_sqrt_min_max_and_compressed_double_memory_execute() {
     bytes.extend_from_slice(&halfword(0xa02a)); // c.fsdsp f10,0(sp)
     bytes.extend_from_slice(&word(0x1050_0073));
     put_mixed(&mut core, CODE, &[&bytes]);
-    core.run(60);
+    core.run_cpu(60);
     assert_eq!(read_u64(&mut core, 0x8018), 10.0_f64.to_bits());
     assert_eq!(read_u64(&mut core, 0x8020), 2.0_f64.to_bits());
     assert_eq!(read_u64(&mut core, 0x8028), 2.0_f64.to_bits());
@@ -840,7 +840,7 @@ fn tinyemu_traps_when_fp_is_disabled_or_dynamic_rounding_is_reserved() {
         CODE,
         &[0x0000_92b7, csrrw(CSR_MTVEC, 5), fp(0x00, 2, 1, 0, 3)],
     );
-    disabled.run(10);
+    disabled.run_cpu(10);
     assert_eq!(disabled.machine_cause(), 2);
 
     let mut reserved = core();
@@ -849,7 +849,7 @@ fn tinyemu_traps_when_fp_is_disabled_or_dynamic_rounding_is_reserved() {
     enable_fp(&mut instructions);
     instructions.extend([addi(6, 0, 5), csrrw(0x002, 6), fp(0x00, 2, 1, 7, 3)]);
     put(&mut reserved, CODE, &instructions);
-    reserved.run(20);
+    reserved.run_cpu(20);
     assert_eq!(reserved.machine_cause(), 2);
 }
 
@@ -878,7 +878,7 @@ fn tinyemu_fused_arithmetic_preserves_tiny_products_and_cancellation() {
         0x1050_0073,
     ]);
     put(&mut core, CODE, &instructions);
-    core.run(40);
+    core.run_cpu(40);
     assert_eq!(read_u64(&mut core, 0x8030), 0x0df0_0000_0000_0000);
     assert_eq!(read_u64(&mut core, 0x8038), 0xb970_0000_0000_0000);
 }
@@ -905,7 +905,7 @@ fn tinyemu_fp_rounding_modes_and_sticky_exception_flags_are_observable() {
         0x1050_0073,
     ]);
     put(&mut core, CODE, &instructions);
-    core.run(40);
+    core.run_cpu(40);
     assert_eq!(read_u32(&mut core, 0x8010), 1.0_f32.to_bits());
     assert_eq!(read_u32(&mut core, 0x8014), 1.0_f32.to_bits() + 1);
     assert_eq!(read_u32(&mut core, 0x8018), f32::INFINITY.to_bits());
@@ -935,7 +935,7 @@ fn tinyemu_nan_comparisons_minimum_and_classification_follow_riscv() {
         0x1050_0073,
     ]);
     put(&mut core, CODE, &instructions);
-    core.run(40);
+    core.run_cpu(40);
     assert_eq!(read_u32(&mut core, 0x8010), 1.0_f32.to_bits());
     assert_eq!(read_u32(&mut core, 0x8014), 1.0_f32.to_bits());
     assert_eq!(core.register(6), 0);
@@ -959,7 +959,7 @@ fn tinyemu_double_division_normalizes_subnormal_operands() {
         0x1050_0073,
     ]);
     put(&mut core, CODE, &instructions);
-    core.run(30);
+    core.run_cpu(30);
     assert_eq!(read_u64(&mut core, 0x8010), 0x3caf_ffff_ffff_fffe);
 }
 
@@ -987,7 +987,7 @@ fn tinyemu_float_integer_and_format_conversions_cover_rounding_boundaries() {
         0x1050_0073,
     ]);
     put(&mut core, CODE, &instructions);
-    core.run(40);
+    core.run_cpu(40);
     assert_eq!(core.register(4), 2);
     assert_eq!(core.register(5), 3);
     assert_eq!(read_u32(&mut core, 0x8010), 1.5_f32.to_bits());

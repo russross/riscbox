@@ -604,7 +604,7 @@ int target_write_slow(RISCVCPUState *s, target_ulong addr,
             }
         }
     }
-    return s->host_attention ? 1 : 0;
+    return s->host_service_requested ? 1 : 0;
 device_write_fault:
     s->pending_tval = addr;
     s->pending_exception = CAUSE_FAULT_STORE;
@@ -1142,8 +1142,8 @@ static CSRWriteResult csr_write(RISCVCPUState *s, uint32_t csr,
             return CSR_WRITE_ERROR;
         s->stimecmp = val;
         update_stimecmp_irq(s);
-        s->host_attention = TRUE;
-        s->timer_attention = TRUE;
+        s->host_service_requested = TRUE;
+        s->timer_reprogrammed = TRUE;
         return CSR_WRITE_INTERRUPT;
     case 0x180:
         /* no ASID implemented */
@@ -1199,8 +1199,8 @@ static CSRWriteResult csr_write(RISCVCPUState *s, uint32_t csr,
         else
             s->mip &= ~MIP_STIP;
         if ((s->menvcfg ^ old) & MENVCFG_STCE) {
-            s->host_attention = TRUE;
-            s->timer_attention = TRUE;
+            s->host_service_requested = TRUE;
+            s->timer_reprogrammed = TRUE;
         }
         if ((s->menvcfg ^ old) & (MENVCFG_ADUE | MENVCFG_PBMTE)) {
             tlb_flush_all(s);
@@ -1456,7 +1456,7 @@ static void glue(riscv_cpu_interp, MAX_XLEN)(RISCVCPUState *s, int n_cycles)
     uint64_t timeout;
 
     timeout = s->elapsed_cycles + n_cycles;
-    while (!s->power_down_flag && !s->host_attention &&
+    while (!s->power_down_flag && !s->host_service_requested &&
            (int)(timeout - s->elapsed_cycles) > 0) {
         n_cycles = timeout - s->elapsed_cycles;
         riscv_cpu_interp_x64(s, n_cycles);

@@ -2,9 +2,9 @@
 
 use std::cell::RefCell;
 
-use crate::browser::{BrowserController, NetworkInputResult};
+use crate::browser_input::{BrowserInputQueue, NetworkInputResult};
 use crate::browser_runtime::{
-    BrowserRuntime, EntropyCallback, HostAction, RuntimeStart, TurnExit, TurnStart,
+    BrowserRuntime, EntropyCallback, HostAction, QuantumOutcome, QuantumStart, RuntimeStart,
 };
 use crate::virtio_devices::{
     NinePEndpointId, NinePGeneration, NinePOutcome, NinePRequestId, NinePTransportAction,
@@ -23,7 +23,7 @@ pub struct StartRequest {
 #[derive(Default)]
 struct AbiState {
     allocations: Vec<Box<[u8]>>,
-    controller: BrowserController,
+    input_queue: BrowserInputQueue,
     start: Option<StartRequest>,
     runtime: BrowserRuntime,
     action: Option<HostAction>,
@@ -117,7 +117,7 @@ pub extern "C" fn riscbox_console_input(address: u32, length: u32) -> u32 {
         let Some(bytes) = allocated_bytes(state, address, length).map(<[u8]>::to_vec) else {
             return 0;
         };
-        u32::try_from(state.controller.queue_console(&bytes)).unwrap_or(0)
+        u32::try_from(state.input_queue.queue_console(&bytes)).unwrap_or(0)
     })
 }
 
@@ -126,7 +126,7 @@ pub extern "C" fn riscbox_console_resize(columns: u32, rows: u32) -> i32 {
     let (Ok(columns), Ok(rows)) = (u16::try_from(columns), u16::try_from(rows)) else {
         return -1;
     };
-    STATE.with_borrow_mut(|state| state.controller.resize(columns, rows));
+    STATE.with_borrow_mut(|state| state.input_queue.resize(columns, rows));
     0
 }
 
@@ -135,19 +135,19 @@ pub extern "C" fn riscbox_key_event(pressed: u32, code: u32) -> i32 {
     let Ok(code) = u16::try_from(code) else {
         return -1;
     };
-    STATE.with_borrow_mut(|state| state.controller.key_event(pressed != 0, code));
+    STATE.with_borrow_mut(|state| state.input_queue.key_event(pressed != 0, code));
     0
 }
 
 #[must_use]
 pub extern "C" fn riscbox_pointer_event(x: u32, y: u32, buttons: u32) -> i32 {
-    STATE.with_borrow_mut(|state| state.controller.pointer_event(x, y, buttons));
+    STATE.with_borrow_mut(|state| state.input_queue.pointer_event(x, y, buttons));
     0
 }
 
 #[must_use]
 pub extern "C" fn riscbox_wheel_event(delta: i32) -> i32 {
-    STATE.with_borrow_mut(|state| state.controller.wheel_event(delta));
+    STATE.with_borrow_mut(|state| state.input_queue.wheel_event(delta));
     0
 }
 
@@ -157,7 +157,7 @@ pub extern "C" fn riscbox_network_input(address: u32, length: u32) -> i32 {
         let Some(bytes) = allocated_bytes(state, address, length).map(<[u8]>::to_vec) else {
             return -1;
         };
-        match state.controller.network_packet(&bytes) {
+        match state.input_queue.network_packet(&bytes) {
             NetworkInputResult::Accepted => 0,
             NetworkInputResult::Dropped => 1,
         }
@@ -166,7 +166,7 @@ pub extern "C" fn riscbox_network_input(address: u32, length: u32) -> i32 {
 
 #[must_use]
 pub extern "C" fn riscbox_network_carrier(up: u32) -> i32 {
-    STATE.with_borrow_mut(|state| state.controller.network_carrier(up != 0));
+    STATE.with_borrow_mut(|state| state.input_queue.network_carrier(up != 0));
     0
 }
 
@@ -175,65 +175,81 @@ fn u64_from_parts(low: u32, high: u32) -> u64 {
 }
 
 #[must_use]
-pub extern "C" fn riscbox_configure_timing(timeslice_ms: f64, diagnostics: u32) -> i32 {
+pub extern "C" fn riscbox_configure_quantum(target_quantum_ms: f64, diagnostics: u32) -> i32 {
     STATE.with_borrow_mut(|state| {
         state
             .runtime
-            .configure_timing(timeslice_ms, diagnostics != 0)
+            .configure_quantum(target_quantum_ms, diagnostics != 0)
             .map_or(-1, |()| 0)
     })
 }
 
 #[must_use]
-pub extern "C" fn riscbox_wake_delay_ms(now_low: u32, now_high: u32, requested: u32) -> u32 {
+pub extern "C" fn riscbox_wake_delay_ms(
+    host_epoch_ms_low: u32,
+    host_epoch_ms_high: u32,
+    requested: u32,
+) -> u32 {
     STATE.with_borrow(|state| {
-        state
-            .runtime
-            .wake_delay_ms(u64_from_parts(now_low, now_high), requested)
+        state.runtime.wake_delay_ms(
+            u64_from_parts(host_epoch_ms_low, host_epoch_ms_high),
+            requested,
+        )
     })
 }
 
 #[must_use]
-pub extern "C" fn riscbox_turn_begin(now_low: u32, now_high: u32) -> i32 {
+pub extern "C" fn riscbox_quantum_begin(host_epoch_ms_low: u32, host_epoch_ms_high: u32) -> i32 {
     STATE.with_borrow_mut(|state| {
-        match state.runtime.begin_turn(u64_from_parts(now_low, now_high)) {
-            TurnStart::Ready => 0,
-            TurnStart::Delay(delay) => i32::try_from(delay).unwrap_or(i32::MAX),
-            TurnStart::Idle => -1,
+        match state
+            .runtime
+            .begin_quantum(u64_from_parts(host_epoch_ms_low, host_epoch_ms_high))
+        {
+            QuantumStart::Ready => 0,
+            QuantumStart::CatchUpDelayMs(delay) => i32::try_from(delay).unwrap_or(i32::MAX),
+            QuantumStart::VmInactive => -1,
+            QuantumStart::AlreadyActive => -2,
         }
     })
 }
 
 #[must_use]
-pub extern "C" fn riscbox_turn_advance() -> i32 {
+pub extern "C" fn riscbox_quantum_run() -> i32 {
     STATE.with_borrow_mut(|state| {
         let AbiState {
             runtime,
-            controller,
+            input_queue,
             ..
         } = state;
-        match runtime.advance_turn(controller) {
-            Ok(TurnExit::Finished) => 0,
-            Ok(TurnExit::Waiting) => 1,
-            Ok(TurnExit::HostActions) => 2,
-            Ok(TurnExit::Idle) => 3,
+        match runtime.run_quantum(input_queue) {
+            Ok(QuantumOutcome::BudgetReached) => 0,
+            Ok(QuantumOutcome::WfiSleep) => 1,
+            Ok(QuantumOutcome::HostServiceRequired) => 2,
+            Ok(QuantumOutcome::VmInactive) => 3,
             Err(_) => -1,
         }
     })
 }
 
 #[must_use]
-pub extern "C" fn riscbox_turn_finish(elapsed_ms: f64, now_low: u32, now_high: u32) -> i32 {
+pub extern "C" fn riscbox_quantum_finish(
+    host_elapsed_ms: f64,
+    host_epoch_ms_low: u32,
+    host_epoch_ms_high: u32,
+) -> i32 {
     STATE.with_borrow_mut(|state| {
         state
             .runtime
-            .finish_turn(elapsed_ms, u64_from_parts(now_low, now_high))
+            .finish_quantum(
+                host_elapsed_ms,
+                u64_from_parts(host_epoch_ms_low, host_epoch_ms_high),
+            )
             .map_or(-1, |delay| i32::try_from(delay).unwrap_or(i32::MAX))
     })
 }
 
-pub extern "C" fn riscbox_turn_abort() {
-    STATE.with_borrow_mut(|state| state.runtime.abort_turn());
+pub extern "C" fn riscbox_quantum_abort() {
+    STATE.with_borrow_mut(|state| state.runtime.abort_quantum());
 }
 
 #[must_use]
@@ -404,10 +420,6 @@ pub extern "C" fn riscbox_p9_complete(
 #[must_use]
 pub fn take_start_request() -> Option<StartRequest> {
     STATE.with_borrow_mut(|state| state.start.take())
-}
-
-pub fn with_controller<T>(callback: impl FnOnce(&mut BrowserController) -> T) -> T {
-    STATE.with_borrow_mut(|state| callback(&mut state.controller))
 }
 
 fn allocated_bytes(state: &AbiState, address: u32, length: u32) -> Option<&[u8]> {

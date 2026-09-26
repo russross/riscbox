@@ -19,16 +19,16 @@ function fakeModule() {
             calls.push(["free", ptr, length]);
         },
         riscbox_next_action() { return 0; },
-        riscbox_configure_timing() { return 0; },
+        riscbox_configure_quantum() { return 0; },
         riscbox_wake_delay_ms(_low, _high, delay) { return delay; },
-        riscbox_turn_begin() {
+        riscbox_quantum_begin() {
             if (begun) return -1;
             begun = true;
             return 0;
         },
-        riscbox_turn_advance() { return 3; },
-        riscbox_turn_finish() { return 0; },
-        riscbox_turn_abort() {},
+        riscbox_quantum_run() { return 3; },
+        riscbox_quantum_finish() { return 0; },
+        riscbox_quantum_abort() {},
         riscbox_timing_stat() { return 0; },
         riscbox_action_value() { return 0; },
         riscbox_action_data_address() { return 0; },
@@ -87,7 +87,7 @@ test("HTTP actions complete requests and continue draining startup", async () =>
 
 test("non-configuration HTTP actions retain normal content caching", async () => {
     const fake = fakeModule();
-    const url = Buffer.from("https://host/drive-abcd1234/blk.txt");
+    const url = Buffer.from("https://host/runQuantum-abcd1234/blk.txt");
     new Uint8Array(fake.exports.memory.buffer, 64, url.length).set(url);
     const actions = [1, 0];
     fake.exports.riscbox_next_action = () => actions.shift();
@@ -285,23 +285,23 @@ test("9p registration is validated before later startup actions", () => {
     assert.deepEqual(actions, [2]);
 });
 
-test("adapter replaces a sleeping timer with one immediate turn", async () => {
+test("adapter replaces a WFI wakeup with an immediate quantum", async () => {
     const fake = fakeModule();
     let runs = 0;
-    fake.exports.riscbox_turn_advance = () => { runs++; return 3; };
-    fake.exports.riscbox_turn_finish = () => 100;
+    fake.exports.riscbox_quantum_run = () => { runs++; return 3; };
+    fake.exports.riscbox_quantum_finish = () => 100;
     const runtime = new Riscbox(fake.exports);
-    runtime.schedule(100);
-    runtime.schedule(0);
+    runtime.scheduleWakeup(100);
+    runtime.scheduleWakeup(0);
     await new Promise((resolve) => setTimeout(resolve, 10));
     assert.equal(runs, 1);
-    clearTimeout(runtime.timer);
+    clearTimeout(runtime.wakeupTimer);
 });
 
-test("turn begin receives complete epoch milliseconds across the ABI", async () => {
+test("quantum begin receives complete host epoch milliseconds across the ABI", async () => {
     const fake = fakeModule();
     const calls = [];
-    fake.exports.riscbox_turn_begin = (low, high) => {
+    fake.exports.riscbox_quantum_begin = (low, high) => {
         calls.push([low, high]);
         return 0;
     };
@@ -309,8 +309,8 @@ test("turn begin receives complete epoch milliseconds across the ABI", async () 
     Date.now = () => 1_730_000_000_123;
     try {
         const runtime = new Riscbox(fake.exports);
-        runtime.schedule = () => {};
-        await runtime.run();
+        runtime.scheduleWakeup = () => {};
+        await runtime.runQuantum();
     } finally {
         Date.now = originalNow;
     }
@@ -321,13 +321,14 @@ test("turn begin receives complete epoch milliseconds across the ABI", async () 
 test("configured duration is passed to WASM", () => {
     const fake = fakeModule();
     const calls = [];
-    fake.exports.riscbox_configure_timing = (...args) => {
+    fake.exports.riscbox_configure_quantum = (...args) => {
         calls.push(args);
         return 0;
     };
-    new Riscbox(fake.exports, { timesliceMs: 5, debugTiming: true });
+    new Riscbox(fake.exports, { targetQuantumMs: 5, debugTiming: true });
     assert.deepEqual(calls, [[5, 1]]);
-    assert.throws(() => new Riscbox(fake.exports, { timesliceMs: 0 }), /timesliceMs/);
+    assert.throws(() => new Riscbox(fake.exports, { targetQuantumMs: 0 }), /targetQuantumMs/);
+    assert.throws(() => new Riscbox(fake.exports, { timesliceMs: 5 }), /renamed to targetQuantumMs/);
 });
 
 test("WASM chooses the scheduled wake delay", () => {
@@ -338,32 +339,38 @@ test("WASM chooses the scheduled wake delay", () => {
     let delay;
     global.setTimeout = (_callback, milliseconds) => { delay = milliseconds; return 1; };
     try {
-        runtime.schedule(0);
+        runtime.scheduleWakeup(0);
         assert.equal(delay, 5);
-        runtime.schedule(10);
+        runtime.scheduleWakeup(10);
         assert.equal(delay, 10);
     } finally {
         global.setTimeout = originalTimeout;
     }
 });
 
-test("a delayed turn does not enter the CPU", async () => {
+test("a catch-up wait does not start a CPU run", async () => {
     const fake = fakeModule();
     let calls = 0;
-    fake.exports.riscbox_turn_begin = () => 5;
-    fake.exports.riscbox_turn_advance = () => { calls++; return 3; };
+    fake.exports.riscbox_quantum_begin = () => 5;
+    fake.exports.riscbox_quantum_run = () => { calls++; return 3; };
     const runtime = new Riscbox(fake.exports);
     let scheduled;
-    runtime.schedule = (delay) => { scheduled = delay; };
-    await runtime.run();
+    runtime.scheduleWakeup = (delay) => { scheduled = delay; };
+    await runtime.runQuantum();
     assert.equal(calls, 0);
     assert.equal(scheduled, 5);
+});
+
+test("an already active quantum reports an error", async () => {
+    const fake = fakeModule();
+    fake.exports.riscbox_quantum_begin = () => -2;
+    await assert.rejects(new Riscbox(fake.exports).runQuantum(), /could not begin a quantum/);
 });
 
 test("hint wait resets after each delivered response", async () => {
     const fake = fakeModule();
     let runs = 0;
-    fake.exports.riscbox_turn_advance = () => ++runs === 1 ? 2 : 3;
+    fake.exports.riscbox_quantum_run = () => ++runs === 1 ? 2 : 3;
     const runtime = new Riscbox(fake.exports);
     runtime.hints.add("first");
     runtime.hints.add("second");
@@ -383,7 +390,7 @@ test("hint wait resets after each delivered response", async () => {
     const errors = [];
     console.error = (...args) => errors.push(args);
     try {
-        await runtime.run();
+        await runtime.runQuantum();
     } finally {
         console.error = originalError;
     }
@@ -394,14 +401,14 @@ test("hint wait resets after each delivered response", async () => {
 test("unsettled response hint logs after 20 empty yields and resumes", async () => {
     const fake = fakeModule();
     let runs = 0;
-    fake.exports.riscbox_turn_advance = () => ++runs === 1 ? 2 : 3;
+    fake.exports.riscbox_quantum_run = () => ++runs === 1 ? 2 : 3;
     const runtime = new Riscbox(fake.exports);
     runtime.hints.add("1:1:7");
     const originalError = console.error;
     const errors = [];
     console.error = (...args) => errors.push(args);
     try {
-        await runtime.run();
+        await runtime.runQuantum();
     } finally {
         console.error = originalError;
     }
@@ -410,7 +417,7 @@ test("unsettled response hint logs after 20 empty yields and resumes", async () 
     assert.deepEqual(errors[0][1], ["1:1:7"]);
 });
 
-test("resident 9p reply completes before the same turn resumes", async () => {
+test("resident 9p reply completes before the same quantum resumes", async () => {
     const fake = fakeModule();
     const actions = [
         { kind: 7, bytes: Buffer.from("shared") },
@@ -434,7 +441,7 @@ test("resident 9p reply completes before the same turn resumes", async () => {
         return 0;
     };
     let runs = 0;
-    fake.exports.riscbox_turn_advance = () => {
+    fake.exports.riscbox_quantum_run = () => {
         runs++;
         if (runs === 2) assert.equal(fake.calls.filter((call) => call === "reply").length, 1);
         return runs === 1 ? 2 : 3;
@@ -451,11 +458,11 @@ test("resident 9p reply completes before the same turn resumes", async () => {
         },
     };
     const runtime = new Riscbox(fake.exports, { p9Servers: new Map([["shared", server]]) });
-    await runtime.run();
+    await runtime.runQuantum();
     assert.equal(runs, 2);
 });
 
-test("host attention starts HTTP work before the unused CPU budget resumes", async () => {
+test("host service starts HTTP work before the unused quantum budget resumes", async () => {
     const fake = fakeModule();
     const url = Buffer.from("https://host/block.bin");
     new Uint8Array(fake.exports.memory.buffer, 64, url.length).set(url);
@@ -466,7 +473,7 @@ test("host attention starts HTTP work before the unused CPU budget resumes", asy
     fake.exports.riscbox_action_data_length = () => url.length;
     let fetches = 0;
     let runs = 0;
-    fake.exports.riscbox_turn_advance = () => {
+    fake.exports.riscbox_quantum_run = () => {
         runs++;
         if (runs === 2) assert.equal(fetches, 1);
         return runs === 1 ? 2 : 3;
@@ -477,7 +484,7 @@ test("host attention starts HTTP work before the unused CPU budget resumes", asy
             return new Promise(() => {});
         },
     });
-    await runtime.run();
+    await runtime.runQuantum();
     assert.equal(runs, 2);
 });
 

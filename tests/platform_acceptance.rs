@@ -68,11 +68,11 @@ fn alpine_reaches_login_and_shuts_down() {
     let mut transcript = Vec::new();
     let mut logged_in = false;
     let mut shutdown_sent = false;
-    for slice in 0..10_000_u64 {
-        let ticks = slice * 10_000;
-        machine.update_time(ticks, ticks * 100);
+    for batch in 0..10_000_u64 {
+        let ticks = batch * 10_000;
+        machine.present_guest_clocks(ticks, ticks * 100);
         for _ in 0..15 {
-            let _ = machine.run(200_000);
+            let _ = machine.run_cpu(200_000);
         }
         let output = machine.take_console_output();
         trace_guest_output(&output);
@@ -136,11 +136,11 @@ fn xv6_boots_over_uart_and_passes_user_tests() {
 
     let mut transcript = Vec::new();
     let mut tests_started = false;
-    for slice in 0..20_000_u64 {
-        let ticks = slice * 1_000_000;
-        machine.update_time(ticks, ticks * 100);
+    for batch in 0..20_000_u64 {
+        let ticks = batch * 1_000_000;
+        machine.present_guest_clocks(ticks, ticks * 100);
         for _ in 0..15 {
-            let _ = machine.run(200_000);
+            let _ = machine.run_cpu(200_000);
         }
         let output = machine.take_console_output();
         trace_guest_output(&output);

@@ -1,4 +1,4 @@
-use riscbox::tinyemu_core::{BusError, Core, HostCallbacks};
+use riscbox::tinyemu_core::{BusError, Core, PlatformCallbacks};
 
 #[derive(Default)]
 struct Device {
@@ -7,7 +7,7 @@ struct Device {
     attention: bool,
 }
 
-impl HostCallbacks for Device {
+impl PlatformCallbacks for Device {
     fn read(&mut self, address: u64, width: u32) -> Result<u32, BusError> {
         self.reads.push((address, width));
         Ok(0x1234_5678)
@@ -22,7 +22,7 @@ impl HostCallbacks for Device {
         0
     }
 
-    fn host_attention(&self) -> bool {
+    fn host_service_requested(&self) -> bool {
         self.attention && !self.writes.is_empty()
     }
 }
@@ -45,11 +45,14 @@ fn c_core_exits_after_the_mmio_store_retires_and_resumes_the_unused_budget() {
         attention: true,
         ..Device::default()
     };
-    let first = core.run_host(20, &mut device);
-    assert_eq!((first.cycles, first.reason, core.pc()), (3, 2, 0x100c));
+    let first = core.run_cpu_with_platform(20, &mut device);
+    assert_eq!(
+        (first.consumed_cycles, first.reason, core.pc()),
+        (3, 2, 0x100c)
+    );
     assert_eq!(device.writes, [(0x1000_0000, 4, 42)]);
-    let second = core.run_host(20 - first.cycles, &mut device);
-    assert_eq!((second.cycles, second.reason), (1, 1));
+    let second = core.run_cpu_with_platform(20 - first.consumed_cycles, &mut device);
+    assert_eq!((second.consumed_cycles, second.reason), (1, 1));
 }
 
 #[test]
@@ -60,8 +63,8 @@ fn c_core_reports_code_block_overrun_to_the_driver() {
         .expect("code page")
         .chunks_exact_mut(2)
         .for_each(|bytes| bytes.copy_from_slice(&0x0001_u16.to_le_bytes()));
-    let result = core.run(1);
-    assert!(result.cycles > 1);
+    let result = core.run_cpu(1);
+    assert!(result.consumed_cycles > 1);
 }
 
 #[test]
@@ -72,14 +75,14 @@ fn c_core_executes_from_owned_ram_and_waits() {
     bytes[..4].copy_from_slice(&0x02a0_0093_u32.to_le_bytes());
     bytes[4..].copy_from_slice(&0x1050_0073_u32.to_le_bytes());
 
-    let result = core.run(10);
+    let result = core.run_cpu(10);
     assert_eq!(core.register(1), 42);
     assert_eq!(result.reason, 1);
-    assert!(result.cycles >= 2);
+    assert!(result.consumed_cycles >= 2);
 }
 
 #[test]
-fn c_core_routes_device_accesses_without_leaving_the_slice() {
+fn c_core_routes_device_accesses_within_one_cpu_run() {
     let mut core = Core::new().expect("C core allocation");
     core.register_ram(0, 0x2000, 0).expect("reset RAM");
     core.register_device(0x1000_0000, 0x1000, 4)
@@ -94,7 +97,7 @@ fn c_core_routes_device_accesses_without_leaving_the_slice() {
     }
     let mut device = Device::default();
 
-    let outcome = core.run_host(20, &mut device);
+    let outcome = core.run_cpu_with_platform(20, &mut device);
 
     assert_eq!(outcome.reason, 1);
     assert_eq!(core.register(1), 0x1234_5678);

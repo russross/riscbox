@@ -92,8 +92,8 @@ fn goldfish_rtc_latches_time_and_alarm_interrupts() {
     );
     rtc.write(0x10, 1, now);
     assert!(!rtc.irq());
-    assert_eq!(rtc.limit_delay_ms(10, now), 2);
-    assert_eq!(rtc.limit_delay_ms(10, alarm), 10);
+    assert_eq!(rtc.alarm_remaining_guest_ticks(now), Some(20_000));
+    rtc.refresh_alarm(alarm);
     assert!(rtc.irq());
     rtc.write(0x1c, 0, now);
     assert!(!rtc.irq());

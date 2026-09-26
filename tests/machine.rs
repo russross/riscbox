@@ -6,7 +6,7 @@ use riscbox::machine::{
     RTC_BASE, RedrawSpan, VIRTIO_BASE,
 };
 use riscbox::platform::FinishStatus;
-use riscbox::tinyemu_core::RunState;
+use riscbox::tinyemu_core::CpuRunExitReason;
 use riscbox::virtio_devices::{DeviceError, NetworkBackend, NetworkIngress};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -85,7 +85,7 @@ fn cpu_reads_virtio_config_bytes_through_the_c_device_aperture() {
         })
         .expect("boot image");
 
-    machine.run(30);
+    machine.run_cpu(30);
 
     assert_eq!(machine.cpu().register(5), 80);
 }
@@ -105,9 +105,9 @@ fn guest_clint_compare_write_exits_for_timer_replanning() {
             command_line: "",
         })
         .expect("boot image");
-    let outcome = machine.run(30);
-    assert_eq!(outcome.state, RunState::TimerChanged);
-    assert!(outcome.cycles > 0);
+    let outcome = machine.run_cpu(30);
+    assert_eq!(outcome.state, CpuRunExitReason::TimerReprogrammed);
+    assert!(outcome.consumed_cycles > 0);
 }
 
 #[test]
@@ -125,7 +125,10 @@ fn guest_rtc_alarm_write_exits_for_timer_replanning() {
             command_line: "",
         })
         .expect("boot image");
-    assert_eq!(machine.run(30).state, RunState::TimerChanged);
+    assert_eq!(
+        machine.run_cpu(30).state,
+        CpuRunExitReason::TimerReprogrammed
+    );
 }
 
 #[test]
@@ -454,7 +457,7 @@ fn framebuffer_snapshot_invalidates_cached_cpu_write_translation() {
         })
         .expect("boot image");
 
-    machine.run(1_000);
+    machine.run_cpu(1_000);
     assert_eq!(
         machine.take_redraw_spans().expect("first dirty snapshot"),
         [RedrawSpan { y: 0, height: 2 }]
@@ -466,7 +469,7 @@ fn framebuffer_snapshot_invalidates_cached_cpu_write_translation() {
             .is_empty()
     );
 
-    machine.run(1_000);
+    machine.run_cpu(1_000);
     assert_eq!(
         machine.take_redraw_spans().expect("second dirty snapshot"),
         [RedrawSpan { y: 0, height: 2 }]
@@ -498,7 +501,7 @@ fn interrupt_changes_from_guest_mmio_end_the_current_cpu_block() {
         .expect("boot image");
 
     for _ in 0..3 {
-        machine.run(100);
+        machine.run_cpu(100);
     }
     assert_eq!(machine.cpu().register(5) & (1 << 3), 1 << 3);
     assert_eq!(machine.cpu().register(6) & (1 << 3), 0);
@@ -509,7 +512,7 @@ fn machine_exposes_complete_host_time_through_the_rtc() {
     let mut machine = machine(false);
     let milliseconds = 1_730_000_000_123_u64;
     let nanoseconds = milliseconds * 1_000_000;
-    machine.update_time(milliseconds * 10_000, nanoseconds);
+    machine.present_guest_clocks(milliseconds * 10_000, nanoseconds);
 
     let low = machine
         .bus_mut()
@@ -523,36 +526,9 @@ fn machine_exposes_complete_host_time_through_the_rtc() {
 }
 
 #[test]
-fn waiting_delay_tracks_clint_and_rtc_deadlines() {
-    let mut machine = machine(false);
-    machine.update_time(1_000_000, 100_000_000);
-    machine
-        .bus_mut()
-        .write(
-            GuestAddress(CLINT_BASE + 0x4000),
-            AccessWidth::Word,
-            1_050_000,
-        )
-        .expect("CLINT compare");
-    machine
-        .bus_mut()
-        .write(GuestAddress(CLINT_BASE + 0x4004), AccessWidth::Word, 0)
-        .expect("CLINT compare high");
-    assert_eq!(machine.sleep_duration_ms(10), 5);
-
-    machine
-        .bus_mut()
-        .write(GuestAddress(RTC_BASE + 8), AccessWidth::Word, 103_000_000)
-        .expect("RTC alarm");
-    assert_eq!(machine.sleep_duration_ms(10), 3);
-    machine.update_time(1_030_000, 103_000_000);
-    assert_eq!(machine.sleep_duration_ms(10), 2);
-}
-
-#[test]
 fn timer_deadlines_use_guest_ticks_and_drop_due_compares() {
     let mut machine = machine(false);
-    machine.update_time(1_000_000, 100_000_000);
+    machine.present_guest_clocks(1_000_000, 100_000_000);
     machine
         .bus_mut()
         .write(
@@ -565,15 +541,20 @@ fn timer_deadlines_use_guest_ticks_and_drop_due_compares() {
         .bus_mut()
         .write(GuestAddress(CLINT_BASE + 0x4004), AccessWidth::Word, 0)
         .expect("CLINT compare high");
-    assert_eq!(machine.next_timer_delay_ticks(), Some(15));
+    assert_eq!(machine.next_timer_remaining_guest_ticks(), Some(15));
 
     machine
         .bus_mut()
         .write(GuestAddress(RTC_BASE + 8), AccessWidth::Word, 100_000_101)
         .expect("RTC alarm low");
-    assert_eq!(machine.next_timer_delay_ticks(), Some(2));
-    machine.update_time(1_000_002, 100_000_200);
-    assert_eq!(machine.next_timer_delay_ticks(), Some(13));
-    machine.update_time(1_000_015, 100_001_500);
-    assert!(machine.next_timer_delay_ticks().expect("future RTC alarm") > u64::from(u32::MAX));
+    assert_eq!(machine.next_timer_remaining_guest_ticks(), Some(2));
+    machine.present_guest_clocks(1_000_002, 100_000_200);
+    assert_eq!(machine.next_timer_remaining_guest_ticks(), Some(13));
+    machine.present_guest_clocks(1_000_015, 100_001_500);
+    assert!(
+        machine
+            .next_timer_remaining_guest_ticks()
+            .expect("future RTC alarm")
+            > u64::from(u32::MAX)
+    );
 }

@@ -42,7 +42,6 @@ interface FramebufferGeometry {
 
 interface RiscboxRuntime {
     start(configUrl: string, memoryMiB: number): number;
-    run(): void;
     consoleInput(bytes: Uint8Array): void;
     consoleResize(columns: number, rows: number): void;
 }
@@ -60,7 +59,6 @@ interface RiscboxOptions {
     readonly consoleWrite: (text: string | Uint8Array) => void;
     readonly onVmStarted: () => void;
     readonly onError: (error: unknown) => void;
-    readonly schedule: (milliseconds: number) => void;
     readonly framebufferRefresh?: (bytes: Uint8Array, geometry: FramebufferGeometry) => void;
 }
 
@@ -422,7 +420,6 @@ class VmController {
     private readonly terminal: Terminal;
     private runtime: RiscboxRuntime | undefined;
     private target: ExampleState | undefined;
-    private timer: number | undefined;
     private generation = 0;
     private state: "ready" | "loading" | "running" | "failed" = "ready";
 
@@ -481,10 +478,6 @@ class VmController {
 
     private stop(): void {
         this.generation += 1;
-        if (this.timer !== undefined) {
-            window.clearTimeout(this.timer);
-        }
-        this.timer = undefined;
         this.runtime = undefined;
         this.state = "ready";
     }
@@ -536,20 +529,6 @@ class VmController {
                     if (generation === this.generation) {
                         this.fail(error instanceof Error ? error.message : String(error));
                     }
-                },
-                schedule: (milliseconds: number): void => {
-                    if (generation !== this.generation) {
-                        return;
-                    }
-                    if (this.timer !== undefined) {
-                        window.clearTimeout(this.timer);
-                    }
-                    this.timer = window.setTimeout((): void => {
-                        this.timer = undefined;
-                        if (generation === this.generation) {
-                            runtime.run();
-                        }
-                    }, milliseconds);
                 },
             });
             if (generation !== this.generation) {

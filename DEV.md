@@ -113,7 +113,7 @@ Audit and improve hooks for the host app to control the guest:
 * Suspend/resume
 * Shutdown request (signals OS so it can flush buffers and shut down gracefully), then frees up resources
 * Hard kill
-* Lower CPU use mode (sleep delays between timeslices), with ability for the host to adjust it
+* Lower CPU use mode (sleep delays between execution quanta), with ability for the host to adjust it
 
 ### WASI integration
 

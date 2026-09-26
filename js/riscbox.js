@@ -3,44 +3,48 @@
 
     const encoder = new TextEncoder();
     const decoder = new TextDecoder();
-    // The platform clock and every timer deadline use 100-nanosecond ticks.
-    const TICKS_PER_MILLISECOND = 10_000;
-    const TURN_WAITING = 1;
-    const TURN_HOST_ACTIONS = 2;
-    const TURN_IDLE = 3;
+    // Guest timer deadlines use 10 MHz ticks; host wakeup delays use milliseconds.
+    const GUEST_TICKS_PER_MILLISECOND = 10_000;
+    const QUANTUM_BUDGET_REACHED = 0;
+    const QUANTUM_WFI_SLEEP = 1;
+    const QUANTUM_HOST_SERVICE_REQUIRED = 2;
+    const QUANTUM_VM_INACTIVE = 3;
+    const QUANTUM_START_VM_INACTIVE = -1;
 
     class Riscbox {
         constructor(exports, options = {}) {
             if (!(exports.memory instanceof WebAssembly.Memory))
                 throw new TypeError("Riscbox WASM must export memory");
-            if (typeof exports.riscbox_configure_timing !== "function" ||
+            if (typeof exports.riscbox_configure_quantum !== "function" ||
                 typeof exports.riscbox_wake_delay_ms !== "function" ||
-                typeof exports.riscbox_turn_begin !== "function" ||
-                typeof exports.riscbox_turn_advance !== "function" ||
-                typeof exports.riscbox_turn_finish !== "function" ||
-                typeof exports.riscbox_turn_abort !== "function" ||
+                typeof exports.riscbox_quantum_begin !== "function" ||
+                typeof exports.riscbox_quantum_run !== "function" ||
+                typeof exports.riscbox_quantum_finish !== "function" ||
+                typeof exports.riscbox_quantum_abort !== "function" ||
                 typeof exports.riscbox_timing_stat !== "function")
                 throw new TypeError("Riscbox WASM has an incompatible run interface");
-            const timesliceMs = options.timesliceMs ?? 10;
-            if (!Number.isFinite(timesliceMs) || timesliceMs <= 0 || timesliceMs > 100)
-                throw new RangeError("timesliceMs must be greater than zero and at most 100");
+            if (Object.hasOwn(options, "timesliceMs"))
+                throw new TypeError("timesliceMs has been renamed to targetQuantumMs");
+            const targetQuantumMs = options.targetQuantumMs ?? 10;
+            if (!Number.isFinite(targetQuantumMs) || targetQuantumMs <= 0 || targetQuantumMs > 100)
+                throw new RangeError("targetQuantumMs must be greater than zero and at most 100");
             this.exports = exports;
             this.options = options;
-            if (exports.riscbox_configure_timing(timesliceMs, options.debugTiming ? 1 : 0) !== 0)
+            if (exports.riscbox_configure_quantum(targetQuantumMs, options.debugTiming ? 1 : 0) !== 0)
                 throw new Error("Riscbox WASM timing configuration failed");
             this.timing = options.debugTiming ? {
                 nextReport: performance.now() + 1_000,
-                turns: 0, calls: 0, cycles: 0, activeMs: 0,
-                timerExits: 0, idleTurns: 0, idleMs: 0,
-                catchupCount: 0, catchupMs: 0,
+                quanta: 0, cpuRuns: 0, cycles: 0, activeMs: 0,
+                timerReprogrammingExits: 0, wfiQuanta: 0, wfiMs: 0,
+                catchUpWaits: 0, catchUpMs: 0,
                 timerIntervals: [],
             } : null;
             this.p9Sessions = new Map();
             this.p9Requests = new Map();
             this.hints = new Set();
             this.settledHints = 0;
-            this.driving = false;
-            this.timer = null;
+            this.quantumRunning = false;
+            this.wakeupTimer = null;
             this.started = false;
         }
 
@@ -137,27 +141,23 @@
             return result;
         }
 
-        run() {
-            return this.drive();
-        }
-
-        schedule(delay) {
-            // Every wakeup waits until wall time reaches the last guest tick.
-            if (this.driving)
+        scheduleWakeup(delay) {
+            // A guest-clock lead delays the next browser task until host time catches up.
+            if (this.quantumRunning)
                 return;
             const now = Date.now();
             const adjusted = this.exports.riscbox_wake_delay_ms(
                 now >>> 0, Math.floor(now / 0x1_0000_0000) >>> 0, delay,
             );
             if (this.timing && adjusted > delay) {
-                this.timing.catchupCount++;
-                this.timing.catchupMs += adjusted - delay;
+                this.timing.catchUpWaits++;
+                this.timing.catchUpMs += adjusted - delay;
             }
-            if (this.timer !== null)
-                clearTimeout(this.timer);
-            this.timer = setTimeout(() => {
-                this.timer = null;
-                void this.drive().catch((error) => this.options.onError?.(error));
+            if (this.wakeupTimer !== null)
+                clearTimeout(this.wakeupTimer);
+            this.wakeupTimer = setTimeout(() => {
+                this.wakeupTimer = null;
+                void this.runQuantum().catch((error) => this.options.onError?.(error));
             }, adjusted);
         }
 
@@ -166,64 +166,70 @@
             const timing = this.timing;
             if (!timing || now < timing.nextReport)
                 return;
-            const callsPerTurn = timing.turns ? timing.calls / timing.turns : 0;
-            const activeMips = timing.activeMs ? timing.cycles / timing.activeMs / 1_000 : 0;
+            const cpuRunsPerQuantum = timing.quanta ? timing.cpuRuns / timing.quanta : 0;
+            const activeMCyclesPerSecond = timing.activeMs
+                ? timing.cycles / timing.activeMs / 1_000 : 0;
             const intervals = timing.timerIntervals;
             const medianTicks = intervals.length
                 ? intervals.slice().sort((a, b) => a - b)[Math.floor(intervals.length / 2)] : 0;
             console.log("Riscbox timing", {
-                estimatedMcyclesPerSecond: this.exports.riscbox_timing_stat(0) / 1_000_000,
-                approximateMips: activeMips,
-                callsPerTurn, timerExits: timing.timerExits,
-                medianTimerIntervalMs: medianTicks / TICKS_PER_MILLISECOND,
-                idleTurns: timing.idleTurns, idleMs: timing.idleMs,
-                catchupCount: timing.catchupCount, catchupMs: timing.catchupMs,
+                estimatedEmulatedMCyclesPerSecond: this.exports.riscbox_timing_stat(0) / 1_000_000,
+                activeEmulatedMCyclesPerSecond: activeMCyclesPerSecond,
+                cpuRunsPerQuantum, timerReprogrammingExits: timing.timerReprogrammingExits,
+                medianTimerIntervalMs: medianTicks / GUEST_TICKS_PER_MILLISECOND,
+                wfiQuanta: timing.wfiQuanta, wfiMs: timing.wfiMs,
+                catchUpWaits: timing.catchUpWaits, catchUpMs: timing.catchUpMs,
             });
             timing.nextReport = now + 5_000;
-            timing.turns = timing.calls = timing.cycles = timing.activeMs = 0;
-            timing.timerExits = timing.idleTurns = timing.idleMs = 0;
-            timing.catchupCount = timing.catchupMs = 0;
+            timing.quanta = timing.cpuRuns = timing.cycles = timing.activeMs = 0;
+            timing.timerReprogrammingExits = timing.wfiQuanta = timing.wfiMs = 0;
+            timing.catchUpWaits = timing.catchUpMs = 0;
             timing.timerIntervals = [];
         }
 
-        async drive() {
-            // The timer only starts a turn; this loop owns every continuation in it.
-            if (this.driving)
+        async runQuantum() {
+            // One quantum may pause for host service and resume through microtasks.
+            if (this.quantumRunning)
                 return;
             const now = Date.now();
-            const begin = this.exports.riscbox_turn_begin(
+            const begin = this.exports.riscbox_quantum_begin(
                 now >>> 0, Math.floor(now / 0x1_0000_0000) >>> 0,
             );
-            if (begin < 0)
+            if (begin === QUANTUM_START_VM_INACTIVE)
                 return;
+            if (begin < QUANTUM_START_VM_INACTIVE)
+                throw new Error(`Riscbox WASM could not begin a quantum: ${begin}`);
             if (begin > 0) {
-                this.schedule(begin);
+                this.scheduleWakeup(begin);
                 return;
             }
-            if (this.timer !== null) {
-                clearTimeout(this.timer);
-                this.timer = null;
+            if (this.wakeupTimer !== null) {
+                clearTimeout(this.wakeupTimer);
+                this.wakeupTimer = null;
             }
-            if (this.timing && this.idleStartedAt !== undefined) {
-                this.timing.idleMs += performance.now() - this.idleStartedAt;
-                this.idleStartedAt = undefined;
+            if (this.timing && this.wfiStartedAt !== undefined) {
+                this.timing.wfiMs += performance.now() - this.wfiStartedAt;
+                this.wfiStartedAt = undefined;
             }
-            this.driving = true;
+            this.quantumRunning = true;
             const startedAt = performance.now();
             let nextDelay = 0;
-            let waiting = false;
+            let wfiSleep = false;
+            let vmInactive = false;
             let completed = false;
             try {
                 for (;;) {
-                    const reason = this.exports.riscbox_turn_advance();
-                    if (reason < 0 || reason > TURN_IDLE)
-                        throw new Error(`Riscbox WASM returned invalid turn reason ${reason}`);
+                    const reason = this.exports.riscbox_quantum_run();
+                    if (reason < 0 || reason > QUANTUM_VM_INACTIVE)
+                        throw new Error(`Riscbox WASM returned invalid quantum outcome ${reason}`);
                     this.drainActions();
-                    if (reason === 0 || reason === TURN_WAITING || reason === TURN_IDLE) {
-                        waiting = reason === TURN_WAITING;
+                    if (reason === QUANTUM_BUDGET_REACHED ||
+                        reason === QUANTUM_WFI_SLEEP || reason === QUANTUM_VM_INACTIVE) {
+                        wfiSleep = reason === QUANTUM_WFI_SLEEP;
+                        vmInactive = reason === QUANTUM_VM_INACTIVE;
                         break;
                     }
-                    if (reason === TURN_HOST_ACTIONS) {
+                    if (reason === QUANTUM_HOST_SERVICE_REQUIRED) {
                         // Each settled hinted reply restarts the dry-yield allowance.
                         let dryYields = 0;
                         while (this.hints.size > 0 && dryYields < 20) {
@@ -236,34 +242,35 @@
                     }
                 }
                 const end = Date.now();
-                nextDelay = this.exports.riscbox_turn_finish(
+                nextDelay = this.exports.riscbox_quantum_finish(
                     performance.now() - startedAt,
                     end >>> 0, Math.floor(end / 0x1_0000_0000) >>> 0,
                 );
                 if (nextDelay < 0)
-                    throw new Error("Riscbox WASM could not finish the turn");
+                    throw new Error("Riscbox WASM could not finish the quantum");
                 completed = true;
                 if (this.timing) {
                     const timing = this.timing;
-                    timing.turns++;
-                    timing.calls += this.exports.riscbox_timing_stat(1);
-                    timing.timerExits += this.exports.riscbox_timing_stat(2);
+                    timing.quanta++;
+                    timing.cpuRuns += this.exports.riscbox_timing_stat(1);
+                    timing.timerReprogrammingExits += this.exports.riscbox_timing_stat(2);
                     timing.cycles += this.exports.riscbox_timing_stat(4);
                     const interval = this.exports.riscbox_timing_stat(3);
                     if (interval > 0 && timing.timerIntervals.length < 10_000)
                         timing.timerIntervals.push(interval);
                     timing.activeMs += performance.now() - startedAt;
-                    if (waiting) timing.idleTurns++;
+                    if (wfiSleep) timing.wfiQuanta++;
                     this.reportTiming(performance.now());
                 }
             } finally {
                 if (!completed)
-                    this.exports.riscbox_turn_abort();
-                this.driving = false;
+                    this.exports.riscbox_quantum_abort();
+                this.quantumRunning = false;
             }
-            if (waiting && this.timing)
-                this.idleStartedAt = performance.now();
-            this.schedule(nextDelay);
+            if (wfiSleep && this.timing)
+                this.wfiStartedAt = performance.now();
+            if (!vmInactive)
+                this.scheduleWakeup(nextDelay);
         }
 
         drainActions() {
@@ -294,12 +301,12 @@
                         });
                         this.drainActions();
                         if (this.started)
-                            this.schedule(0);
+                            this.scheduleWakeup(0);
                     }).catch((error) => this.options.onError?.(error));
                 } else if (kind === 2) {
                     this.started = true;
                     this.options.onVmStarted?.();
-                    this.schedule(0);
+                    this.scheduleWakeup(0);
                 } else if (kind === 3) {
                     this.options.consoleWrite?.(decoder.decode(this.bytes(ptr, len)));
                 } else if (kind === 4) {
@@ -406,7 +413,7 @@
         }
 
         completeP9(endpoint, generation, requestId, outcome, bytes = new Uint8Array()) {
-            // A late completion clears its hint and replaces a sleeping turn timer.
+            // A late completion clears its hint and replaces a WFI wakeup timer.
             const key = `${endpoint}:${generation}:${requestId}`;
             this.p9Requests.delete(key);
             if (this.hints.delete(key))
@@ -418,7 +425,7 @@
             if (result !== 0)
                 throw new Error(`Riscbox rejected 9p completion ${requestId}`);
             this.drainActions();
-            this.schedule(0);
+            this.scheduleWakeup(0);
         }
 
         retireP9(endpoint, generation) {

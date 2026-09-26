@@ -5,14 +5,14 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, VecDeque};
 use std::rc::Rc;
 
-use crate::browser::{BrowserController, BrowserEvent, RunPolicy};
+use crate::browser_input::{BrowserEvent, BrowserInputQueue};
 use crate::browser_storage::HttpBlockStore;
 use crate::config::{Console, VmConfig, resolve_asset_path};
 use crate::entropy::{EntropyError, EntropySource, SharedEntropy};
 use crate::machine::{
     BootImages, FramebufferConfig, FramebufferUpdate, Machine, MachineConfig, MachineError,
 };
-use crate::tinyemu_core::RunState;
+use crate::tinyemu_core::CpuRunExitReason;
 use crate::virtio_devices::{
     DeviceError, InputKind, NetworkBackend, NinePBackend, NinePEndpointId, NinePGeneration,
     NinePOutcome, NinePRequestId, NinePTransportAction,
@@ -115,16 +115,17 @@ pub enum HostAction {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct BrowserRunResult {
-    pub cycles: u32,
-    pub state: RunState,
-    pub delay_ms: u32,
+pub struct PlatformRunResult {
+    pub consumed_cycles: u32,
+    pub state: CpuRunExitReason,
 }
 
-const TICKS_PER_SECOND: u128 = 10_000_000;
-const TICKS_PER_MILLISECOND: u64 = 10_000;
-const SAMPLE_HALFLIFE_MS: f64 = 5_000.0;
-const INITIAL_CYCLES_PER_SECOND: f64 = 300_000_000.0;
+const GUEST_TICKS_PER_SECOND: u128 = 10_000_000;
+const GUEST_TICKS_PER_MILLISECOND: u64 = 10_000;
+const NANOSECONDS_PER_GUEST_TICK: u64 = 100;
+const MAX_WFI_WAKE_DELAY_GUEST_TICKS: u64 = 1_000_000;
+const RATE_SAMPLE_HALFLIFE_HOST_MS: f64 = 5_000.0;
+const INITIAL_EMULATED_CYCLES_PER_HOST_SECOND: f64 = 300_000_000.0;
 
 fn integer_as_f64(value: u64) -> f64 {
     // Convert exact halves without an implicit precision-losing integer cast.
@@ -146,7 +147,8 @@ fn rounded_positive_integer(value: f64) -> u64 {
     }
     let mantissa = (bits & ((1_u64 << 52) - 1)) | (1_u64 << 52);
     if exponent >= 52 {
-        mantissa.checked_shl(u32::try_from(exponent - 52).expect("shift fits"))
+        mantissa
+            .checked_shl(u32::try_from(exponent - 52).expect("shift fits"))
             .unwrap_or(u64::MAX)
     } else {
         mantissa >> u32::try_from(52 - exponent).expect("shift fits")
@@ -154,91 +156,97 @@ fn rounded_positive_integer(value: f64) -> u64 {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum TurnStart {
+pub enum QuantumStart {
     Ready,
-    Delay(u32),
-    Idle,
+    CatchUpDelayMs(u32),
+    VmInactive,
+    AlreadyActive,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum TurnExit {
-    HostActions,
-    Finished,
-    Waiting,
-    Idle,
+pub enum QuantumOutcome {
+    HostServiceRequired,
+    BudgetReached,
+    WfiSleep,
+    VmInactive,
 }
 
 #[derive(Clone, Copy, Debug)]
 struct RateEstimate {
-    cycles: f64,
-    milliseconds: f64,
-    cycles_per_second: f64,
+    consumed_cycles: f64,
+    host_elapsed_ms: f64,
+    emulated_cycles_per_host_second: f64,
 }
 
 impl Default for RateEstimate {
     fn default() -> Self {
         Self {
-            cycles: 0.0,
-            milliseconds: 0.0,
-            cycles_per_second: INITIAL_CYCLES_PER_SECOND,
+            consumed_cycles: 0.0,
+            host_elapsed_ms: 0.0,
+            emulated_cycles_per_host_second: INITIAL_EMULATED_CYCLES_PER_HOST_SECOND,
         }
     }
 }
 
 impl RateEstimate {
-    fn observe(&mut self, cycles: u64, milliseconds: f64) {
-        if cycles == 0 || !milliseconds.is_finite() || milliseconds <= 0.0 {
+    fn observe(&mut self, consumed_cycles: u64, host_elapsed_ms: f64) {
+        if consumed_cycles == 0 || !host_elapsed_ms.is_finite() || host_elapsed_ms <= 0.0 {
             return;
         }
-        let decay = 2.0_f64.powf(-milliseconds / SAMPLE_HALFLIFE_MS);
-        // Decaying both totals weights each turn by its whole cycle count.
-        self.cycles = self.cycles * decay + integer_as_f64(cycles);
-        self.milliseconds = self.milliseconds * decay + milliseconds;
-        self.cycles_per_second = self.cycles * 1_000.0 / self.milliseconds;
+        let decay = 2.0_f64.powf(-host_elapsed_ms / RATE_SAMPLE_HALFLIFE_HOST_MS);
+        // Decaying both totals weights each quantum by its whole cycle count.
+        self.consumed_cycles = self.consumed_cycles * decay + integer_as_f64(consumed_cycles);
+        self.host_elapsed_ms = self.host_elapsed_ms * decay + host_elapsed_ms;
+        self.emulated_cycles_per_host_second =
+            self.consumed_cycles * 1_000.0 / self.host_elapsed_ms;
     }
 }
 
 #[derive(Debug)]
-struct ActiveTurn {
-    start_ticks: u64,
-    rate: u64,
-    budget: u32,
-    used: u64,
-    stalled_calls: u32,
-    calls: u32,
-    timer_exits: u32,
-    timer_intervals: Vec<u64>,
+struct ActiveQuantum {
+    start_guest_ticks: u64,
+    cycles_per_host_second: u64,
+    budget_cycles: u32,
+    consumed_cycles: u64,
+    stalled_cpu_runs: u32,
+    cpu_runs: u32,
+    timer_reprogramming_exits: u32,
+    timer_intervals_guest_ticks: Vec<u64>,
     record_timer_interval: bool,
-    idle_delay_ticks: u64,
-    terminal: Option<TurnExit>,
+    wfi_wake_delay_guest_ticks: u64,
+    terminal: Option<QuantumOutcome>,
 }
 
-impl ActiveTurn {
-    fn ticks(&self) -> u64 {
-        // One integer mapping owns guest time for the complete browser turn.
-        let offset = u128::from(self.used) * TICKS_PER_SECOND / u128::from(self.rate);
-        self.start_ticks
+impl ActiveQuantum {
+    fn guest_ticks(&self) -> u64 {
+        // One integer mapping owns guest time for the complete quantum.
+        let offset = u128::from(self.consumed_cycles) * GUEST_TICKS_PER_SECOND
+            / u128::from(self.cycles_per_host_second);
+        self.start_guest_ticks
             .saturating_add(u64::try_from(offset).unwrap_or(u64::MAX))
     }
 
-    fn cycles_to_deadline(&self, delay_ticks: u64) -> u32 {
+    fn cycles_until_deadline(&self, remaining_guest_ticks: u64) -> u32 {
         // Ceiling inversion reaches the first cycle whose guest tick is due.
-        let offset = u128::from(self.ticks() - self.start_ticks) + u128::from(delay_ticks);
+        let offset = u128::from(self.guest_ticks() - self.start_guest_ticks)
+            + u128::from(remaining_guest_ticks);
         let numerator = offset
-            .saturating_mul(u128::from(self.rate))
-            .saturating_add(TICKS_PER_SECOND - 1);
-        let target = numerator / TICKS_PER_SECOND;
-        let additional = target.saturating_sub(u128::from(self.used)).max(1);
+            .saturating_mul(u128::from(self.cycles_per_host_second))
+            .saturating_add(GUEST_TICKS_PER_SECOND - 1);
+        let target = numerator / GUEST_TICKS_PER_SECOND;
+        let additional = target
+            .saturating_sub(u128::from(self.consumed_cycles))
+            .max(1);
         u32::try_from(additional).unwrap_or(u32::MAX)
     }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
-struct TurnStatistics {
-    calls: u32,
-    timer_exits: u32,
-    median_interval_ticks: u64,
-    cycles: u64,
+struct QuantumStatistics {
+    cpu_runs: u32,
+    timer_reprogramming_exits: u32,
+    median_timer_interval_guest_ticks: u64,
+    consumed_cycles: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -349,7 +357,7 @@ enum PendingHttp {
 }
 
 enum State {
-    Idle,
+    VmInactive,
     Config {
         start: RuntimeStart,
         request_id: u32,
@@ -362,244 +370,286 @@ pub struct BrowserRuntime {
     state: State,
     next_request_id: u32,
     actions: VecDeque<HostAction>,
-    policy: RunPolicy,
     entropy: Option<EntropyCallback>,
-    timeslice_ms: f64,
+    target_quantum_ms: f64,
     diagnostics: bool,
-    rate: RateEstimate,
-    guest_floor_ticks: u64,
-    active_turn: Option<ActiveTurn>,
-    last_turn: TurnStatistics,
+    cycle_rate_estimate: RateEstimate,
+    guest_clock_floor_ticks: u64,
+    active_quantum: Option<ActiveQuantum>,
+    last_quantum: QuantumStatistics,
 }
 
 impl Default for BrowserRuntime {
     fn default() -> Self {
         Self {
-            state: State::Idle,
+            state: State::VmInactive,
             next_request_id: 1,
             actions: VecDeque::new(),
-            policy: RunPolicy::default(),
             entropy: None,
-            timeslice_ms: 10.0,
+            target_quantum_ms: 10.0,
             diagnostics: false,
-            rate: RateEstimate::default(),
-            guest_floor_ticks: 0,
-            active_turn: None,
-            last_turn: TurnStatistics::default(),
+            cycle_rate_estimate: RateEstimate::default(),
+            guest_clock_floor_ticks: 0,
+            active_quantum: None,
+            last_quantum: QuantumStatistics::default(),
         }
     }
 }
 
 impl BrowserRuntime {
-    /// Configures the duration and optional counters before a turn starts.
+    /// Configures the duration and optional counters before a quantum starts.
     ///
     /// # Errors
-    /// Returns an error for an invalid duration or an active turn.
-    pub fn configure_timing(
+    /// Returns an error for an invalid duration or an active quantum.
+    pub fn configure_quantum(
         &mut self,
-        timeslice_ms: f64,
+        target_quantum_ms: f64,
         diagnostics: bool,
     ) -> Result<(), RuntimeError> {
-        if !timeslice_ms.is_finite()
-            || timeslice_ms <= 0.0
-            || timeslice_ms > 100.0
-            || self.active_turn.is_some()
+        if !target_quantum_ms.is_finite()
+            || target_quantum_ms <= 0.0
+            || target_quantum_ms > 100.0
+            || self.active_quantum.is_some()
         {
-            return Err(RuntimeError::InvalidConfig("invalid turn duration".into()));
+            return Err(RuntimeError::InvalidConfig(
+                "invalid quantum duration".into(),
+            ));
         }
-        self.timeslice_ms = timeslice_ms;
+        self.target_quantum_ms = target_quantum_ms;
         self.diagnostics = diagnostics;
         Ok(())
     }
 
     #[must_use]
-    pub fn wake_delay_ms(&self, wall_milliseconds: u64, requested_delay_ms: u32) -> u32 {
-        let wall_ticks = wall_milliseconds.saturating_mul(TICKS_PER_MILLISECOND);
-        let gap = self.guest_floor_ticks.saturating_sub(wall_ticks);
-        let catchup = gap.div_ceil(TICKS_PER_MILLISECOND);
-        requested_delay_ms.max(u32::try_from(catchup).unwrap_or(u32::MAX))
+    pub fn wake_delay_ms(&self, host_epoch_ms: u64, requested_wakeup_delay_ms: u32) -> u32 {
+        let host_epoch_guest_ticks = host_epoch_ms.saturating_mul(GUEST_TICKS_PER_MILLISECOND);
+        let guest_clock_lead_ticks = self
+            .guest_clock_floor_ticks
+            .saturating_sub(host_epoch_guest_ticks);
+        let catch_up_delay_ms = guest_clock_lead_ticks.div_ceil(GUEST_TICKS_PER_MILLISECOND);
+        requested_wakeup_delay_ms.max(u32::try_from(catch_up_delay_ms).unwrap_or(u32::MAX))
     }
 
     #[must_use]
-    pub fn begin_turn(&mut self, wall_milliseconds: u64) -> TurnStart {
-        if self.active_turn.is_some() {
-            return TurnStart::Idle;
+    pub fn begin_quantum(&mut self, host_epoch_ms: u64) -> QuantumStart {
+        if self.active_quantum.is_some() {
+            return QuantumStart::AlreadyActive;
         }
         if !matches!(self.state, State::Running(_)) {
-            return TurnStart::Idle;
+            return QuantumStart::VmInactive;
         }
-        let delay = self.wake_delay_ms(wall_milliseconds, 0);
+        let delay = self.wake_delay_ms(host_epoch_ms, 0);
         if delay != 0 {
-            return TurnStart::Delay(delay);
+            return QuantumStart::CatchUpDelayMs(delay);
         }
-        let rate = rounded_positive_integer(self.rate.cycles_per_second.max(1.0));
-        let budget = rounded_positive_integer((integer_as_f64(rate) * self.timeslice_ms / 1_000.0)
-            .round()
-            .clamp(1.0, f64::from(i32::MAX)));
-        let budget = u32::try_from(budget).unwrap_or(i32::MAX as u32);
-        self.active_turn = Some(ActiveTurn {
-            start_ticks: wall_milliseconds
-                .saturating_mul(TICKS_PER_MILLISECOND)
-                .max(self.guest_floor_ticks),
-            rate,
-            budget,
-            used: 0,
-            stalled_calls: 0,
-            calls: 0,
-            timer_exits: 0,
-            timer_intervals: Vec::new(),
+        let locked_rate_cycles_per_host_second = rounded_positive_integer(
+            self.cycle_rate_estimate
+                .emulated_cycles_per_host_second
+                .max(1.0),
+        );
+        let quantum_budget_cycles = rounded_positive_integer(
+            (integer_as_f64(locked_rate_cycles_per_host_second) * self.target_quantum_ms / 1_000.0)
+                .round()
+                .clamp(1.0, f64::from(i32::MAX)),
+        );
+        let quantum_budget_cycles = u32::try_from(quantum_budget_cycles).unwrap_or(i32::MAX as u32);
+        self.active_quantum = Some(ActiveQuantum {
+            start_guest_ticks: host_epoch_ms
+                .saturating_mul(GUEST_TICKS_PER_MILLISECOND)
+                .max(self.guest_clock_floor_ticks),
+            cycles_per_host_second: locked_rate_cycles_per_host_second,
+            budget_cycles: quantum_budget_cycles,
+            consumed_cycles: 0,
+            stalled_cpu_runs: 0,
+            cpu_runs: 0,
+            timer_reprogramming_exits: 0,
+            timer_intervals_guest_ticks: Vec::new(),
             record_timer_interval: false,
-            idle_delay_ticks: 0,
+            wfi_wake_delay_guest_ticks: 0,
             terminal: None,
         });
-        TurnStart::Ready
+        QuantumStart::Ready
     }
 
-    /// Runs until browser work or the turn boundary needs JavaScript.
+    /// Runs until browser work or the quantum boundary needs JavaScript.
     ///
     /// # Errors
     /// Returns an error for invalid guest I/O or an execution loop without progress.
-    pub fn advance_turn(
+    pub fn run_quantum(
         &mut self,
-        controller: &mut BrowserController,
-    ) -> Result<TurnExit, RuntimeError> {
-        let Some(mut turn) = self.active_turn.take() else {
-            return Err(RuntimeError::Machine("advance without an active turn".into()));
+        input_queue: &mut BrowserInputQueue,
+    ) -> Result<QuantumOutcome, RuntimeError> {
+        let Some(mut quantum) = self.active_quantum.take() else {
+            return Err(RuntimeError::Machine(
+                "advance without an active quantum".into(),
+            ));
         };
-        let result = self.advance_active_turn(controller, &mut turn);
-        self.active_turn = Some(turn);
+        let result = self.run_active_quantum(input_queue, &mut quantum);
+        self.active_quantum = Some(quantum);
         result
     }
 
-    fn advance_active_turn(
+    fn run_active_quantum(
         &mut self,
-        controller: &mut BrowserController,
-        turn: &mut ActiveTurn,
-    ) -> Result<TurnExit, RuntimeError> {
-        if let Some(terminal) = turn.terminal {
+        input_queue: &mut BrowserInputQueue,
+        quantum: &mut ActiveQuantum,
+    ) -> Result<QuantumOutcome, RuntimeError> {
+        if let Some(terminal) = quantum.terminal {
             return Ok(terminal);
         }
-        while turn.used < u64::from(turn.budget) {
-            // Timer deadlines stay in guest ticks until the final CPU budget.
-            let ticks = turn.ticks();
-            let deadline = self.next_timer_delay_ticks(ticks);
-            let remaining = u64::from(turn.budget) - turn.used;
-            let mut call_budget = u32::try_from(remaining).unwrap_or(i32::MAX as u32);
-            if let Some(delay_ticks) = deadline {
-                call_budget = call_budget.min(turn.cycles_to_deadline(delay_ticks));
-                if turn.record_timer_interval && self.diagnostics
-                    && turn.timer_intervals.len() < 10_000
+        while quantum.consumed_cycles < u64::from(quantum.budget_cycles) {
+            // Timer deadlines stay in guest ticks until the CPU-run limit is known.
+            let guest_ticks = quantum.guest_ticks();
+            let deadline_remaining_guest_ticks = self.next_timer_remaining_guest_ticks(guest_ticks);
+            let quantum_remaining_cycles =
+                u64::from(quantum.budget_cycles) - quantum.consumed_cycles;
+            let mut cpu_run_cycle_limit =
+                u32::try_from(quantum_remaining_cycles).unwrap_or(i32::MAX as u32);
+            if let Some(remaining_guest_ticks) = deadline_remaining_guest_ticks {
+                cpu_run_cycle_limit =
+                    cpu_run_cycle_limit.min(quantum.cycles_until_deadline(remaining_guest_ticks));
+                if quantum.record_timer_interval
+                    && self.diagnostics
+                    && quantum.timer_intervals_guest_ticks.len() < 10_000
                 {
-                    turn.timer_intervals.push(delay_ticks);
+                    quantum
+                        .timer_intervals_guest_ticks
+                        .push(remaining_guest_ticks);
                 }
             }
-            turn.record_timer_interval = false;
-            let Some(outcome) = self.run(controller, ticks, ticks.saturating_mul(100), call_budget)?
+            quantum.record_timer_interval = false;
+            let Some(outcome) = self.run_cpu_once(
+                input_queue,
+                guest_ticks,
+                guest_ticks.saturating_mul(NANOSECONDS_PER_GUEST_TICK),
+                cpu_run_cycle_limit,
+            )?
             else {
-                turn.terminal = Some(TurnExit::Idle);
-                return Ok(TurnExit::Idle);
+                quantum.terminal = Some(QuantumOutcome::VmInactive);
+                return Ok(QuantumOutcome::VmInactive);
             };
-            turn.used += u64::from(outcome.cycles);
+            quantum.consumed_cycles += u64::from(outcome.consumed_cycles);
             // The interpreter can overshoot a block boundary; actual cycles
             // determine both later guest time and the next calibration sample.
             if self.diagnostics {
-                turn.calls += 1;
+                quantum.cpu_runs += 1;
             }
-            turn.stalled_calls = if outcome.cycles == 0 {
-                turn.stalled_calls + 1
+            quantum.stalled_cpu_runs = if outcome.consumed_cycles == 0 {
+                quantum.stalled_cpu_runs + 1
             } else {
                 0
             };
-            if turn.stalled_calls > 1 || outcome.state == RunState::Running && outcome.cycles == 0 {
+            if quantum.stalled_cpu_runs > 1
+                || outcome.state == CpuRunExitReason::CycleLimitReached
+                    && outcome.consumed_cycles == 0
+            {
                 return Err(RuntimeError::Machine("CPU made no progress".into()));
             }
-            if outcome.state == RunState::TimerChanged {
-                turn.record_timer_interval = true;
+            if outcome.state == CpuRunExitReason::TimerReprogrammed {
+                quantum.record_timer_interval = true;
                 if self.diagnostics {
-                    turn.timer_exits += 1;
+                    quantum.timer_reprogramming_exits += 1;
                 }
             }
-            if outcome.state == RunState::Waiting {
+            if outcome.state == CpuRunExitReason::WfiSleep {
                 // Pending timers are already reflected in the machine state.
-                // Only an actual WFI sleep leaves this turn waiting on the host.
-                let next = self.next_timer_delay_ticks(turn.ticks());
+                // Only an actual WFI sleep leaves this quantum waiting on the host.
+                let next_timer_remaining_guest_ticks =
+                    self.next_timer_remaining_guest_ticks(quantum.guest_ticks());
                 if let State::Running(running) = &self.state
-                    && running.machine.is_waiting()
+                    && running.machine.is_wfi_sleeping()
                 {
-                    turn.idle_delay_ticks = next.unwrap_or(u64::MAX).min(1_000_000);
-                    turn.terminal = Some(TurnExit::Waiting);
+                    quantum.wfi_wake_delay_guest_ticks = next_timer_remaining_guest_ticks
+                        .unwrap_or(u64::MAX)
+                        .min(MAX_WFI_WAKE_DELAY_GUEST_TICKS);
+                    quantum.terminal = Some(QuantumOutcome::WfiSleep);
                 }
             }
-            if turn.used >= u64::from(turn.budget) && turn.terminal.is_none() {
-                turn.terminal = Some(TurnExit::Finished);
+            if quantum.consumed_cycles >= u64::from(quantum.budget_cycles)
+                && quantum.terminal.is_none()
+            {
+                quantum.terminal = Some(QuantumOutcome::BudgetReached);
             }
-            if !self.actions.is_empty() || outcome.state == RunState::HostAttention {
-                return Ok(TurnExit::HostActions);
+            if !self.actions.is_empty() || outcome.state == CpuRunExitReason::HostServiceRequested {
+                return Ok(QuantumOutcome::HostServiceRequired);
             }
-            if let Some(terminal) = turn.terminal {
+            if let Some(terminal) = quantum.terminal {
                 return Ok(terminal);
             }
         }
-        turn.terminal = Some(TurnExit::Finished);
-        Ok(TurnExit::Finished)
+        quantum.terminal = Some(QuantumOutcome::BudgetReached);
+        Ok(QuantumOutcome::BudgetReached)
     }
 
-    /// Ends a completed turn and incorporates its elapsed host time.
+    /// Ends a completed quantum and incorporates its elapsed host time.
     ///
     /// # Errors
-    /// Returns an error when a turn is unfinished or elapsed time is invalid.
-    pub fn finish_turn(
+    /// Returns an error when a quantum is unfinished or elapsed time is invalid.
+    pub fn finish_quantum(
         &mut self,
-        elapsed_ms: f64,
-        wall_milliseconds: u64,
+        host_elapsed_ms: f64,
+        host_epoch_ms: u64,
     ) -> Result<u32, RuntimeError> {
-        if !elapsed_ms.is_finite() || elapsed_ms < 0.0 {
-            return Err(RuntimeError::InvalidConfig("invalid turn elapsed time".into()));
+        if !host_elapsed_ms.is_finite() || host_elapsed_ms < 0.0 {
+            return Err(RuntimeError::InvalidConfig(
+                "invalid quantum elapsed time".into(),
+            ));
         }
-        let Some(turn) = self.active_turn.take() else {
-            return Err(RuntimeError::Machine("finish without an active turn".into()));
+        let Some(quantum) = self.active_quantum.take() else {
+            return Err(RuntimeError::Machine(
+                "finish without an active quantum".into(),
+            ));
         };
-        if turn.terminal.is_none() {
-            self.active_turn = Some(turn);
-            return Err(RuntimeError::Machine("unfinished browser turn".into()));
+        if quantum.terminal.is_none() {
+            self.active_quantum = Some(quantum);
+            return Err(RuntimeError::Machine("unfinished browser quantum".into()));
         }
-        self.guest_floor_ticks = turn.ticks();
-        self.rate.observe(turn.used, elapsed_ms);
+        self.guest_clock_floor_ticks = quantum.guest_ticks();
+        self.cycle_rate_estimate
+            .observe(quantum.consumed_cycles, host_elapsed_ms);
         if self.diagnostics {
-            let mut intervals = turn.timer_intervals;
+            let mut intervals = quantum.timer_intervals_guest_ticks;
             intervals.sort_unstable();
-            self.last_turn = TurnStatistics {
-                calls: turn.calls,
-                timer_exits: turn.timer_exits,
-                median_interval_ticks: intervals.get(intervals.len() / 2).copied().unwrap_or(0),
-                cycles: turn.used,
+            self.last_quantum = QuantumStatistics {
+                cpu_runs: quantum.cpu_runs,
+                timer_reprogramming_exits: quantum.timer_reprogramming_exits,
+                median_timer_interval_guest_ticks: intervals
+                    .get(intervals.len() / 2)
+                    .copied()
+                    .unwrap_or(0),
+                consumed_cycles: quantum.consumed_cycles,
             };
         }
-        let requested = if turn.terminal == Some(TurnExit::Waiting) {
-            let due = self.guest_floor_ticks.saturating_add(turn.idle_delay_ticks);
-            let wall = wall_milliseconds.saturating_mul(TICKS_PER_MILLISECOND);
-            u32::try_from(due.saturating_sub(wall).div_ceil(TICKS_PER_MILLISECOND))
-                .unwrap_or(u32::MAX)
+        let requested = if quantum.terminal == Some(QuantumOutcome::WfiSleep) {
+            let due = self
+                .guest_clock_floor_ticks
+                .saturating_add(quantum.wfi_wake_delay_guest_ticks);
+            let wall = host_epoch_ms.saturating_mul(GUEST_TICKS_PER_MILLISECOND);
+            u32::try_from(
+                due.saturating_sub(wall)
+                    .div_ceil(GUEST_TICKS_PER_MILLISECOND),
+            )
+            .unwrap_or(u32::MAX)
         } else {
             0
         };
         Ok(requested)
     }
 
-    pub fn abort_turn(&mut self) {
-        if let Some(turn) = self.active_turn.take() {
-            self.guest_floor_ticks = self.guest_floor_ticks.max(turn.ticks());
+    pub fn abort_quantum(&mut self) {
+        if let Some(quantum) = self.active_quantum.take() {
+            self.guest_clock_floor_ticks = self.guest_clock_floor_ticks.max(quantum.guest_ticks());
         }
     }
 
     #[must_use]
     pub fn timing_stat(&self, kind: u32) -> f64 {
         match kind {
-            0 => self.rate.cycles_per_second,
-            1 => f64::from(self.last_turn.calls),
-            2 => f64::from(self.last_turn.timer_exits),
-            3 => integer_as_f64(self.last_turn.median_interval_ticks),
-            4 => integer_as_f64(self.last_turn.cycles),
+            0 => self.cycle_rate_estimate.emulated_cycles_per_host_second,
+            1 => f64::from(self.last_quantum.cpu_runs),
+            2 => f64::from(self.last_quantum.timer_reprogramming_exits),
+            3 => integer_as_f64(self.last_quantum.median_timer_interval_guest_ticks),
+            4 => integer_as_f64(self.last_quantum.consumed_cycles),
             _ => 0.0,
         }
     }
@@ -640,7 +690,7 @@ impl BrowserRuntime {
     ///
     /// Returns `AlreadyStarted` unless the runtime is idle.
     pub fn start(&mut self, start: RuntimeStart) -> Result<(), RuntimeError> {
-        if !matches!(self.state, State::Idle) {
+        if !matches!(self.state, State::VmInactive) {
             return Err(RuntimeError::AlreadyStarted);
         }
         let request_id = self.allocate_request(&start.config_url);
@@ -663,7 +713,7 @@ impl BrowserRuntime {
         if !(200..300).contains(&status) {
             return Err(RuntimeError::HttpStatus(status));
         }
-        let state = core::mem::replace(&mut self.state, State::Idle);
+        let state = core::mem::replace(&mut self.state, State::VmInactive);
         match state {
             State::Config { start, request_id } if request_id == id => {
                 let source = String::from_utf8(bytes).map_err(|_| {
@@ -759,7 +809,8 @@ impl BrowserRuntime {
         request_id: NinePRequestId,
         outcome: NinePOutcome,
     ) -> Result<(), RuntimeError> {
-        let State::Running(mut running) = core::mem::replace(&mut self.state, State::Idle) else {
+        let State::Running(mut running) = core::mem::replace(&mut self.state, State::VmInactive)
+        else {
             return Err(RuntimeError::Machine(
                 "9p completion without a running VM".into(),
             ));
@@ -787,17 +838,17 @@ impl BrowserRuntime {
     /// # Errors
     ///
     /// Returns an error when queued input exposes an invalid guest device queue.
-    pub fn run(
+    pub fn run_cpu_once(
         &mut self,
-        controller: &mut BrowserController,
-        timer_ticks: u64,
-        host_nanoseconds: u64,
-        budget: u32,
-    ) -> Result<Option<BrowserRunResult>, RuntimeError> {
+        input_queue: &mut BrowserInputQueue,
+        guest_timer_ticks: u64,
+        guest_rtc_ns: u64,
+        cycle_limit_cycles: u32,
+    ) -> Result<Option<PlatformRunResult>, RuntimeError> {
         let State::Running(running) = &mut self.state else {
             return Ok(None);
         };
-        if let Some(size) = controller.take_resize()
+        if let Some(size) = input_queue.take_resize()
             && let Some(slot) = running.console_slot
         {
             running
@@ -810,7 +861,7 @@ impl BrowserRuntime {
         } else {
             input.len().min(running.machine.receive_space())
         };
-        let count = controller.read_console(&mut input[..input_limit]);
+        let count = input_queue.read_console(&mut input[..input_limit]);
         if count != 0 {
             if let Some(slot) = running.console_slot {
                 running
@@ -820,12 +871,14 @@ impl BrowserRuntime {
                 running.machine.receive_console(&input[..count]);
             }
         }
-        while let Some(event) = controller.next_event() {
+        while let Some(event) = input_queue.next_event() {
             running.deliver_event(event)?;
         }
         // Every entry samples host time before the C core resumes guest execution.
-        running.machine.update_time(timer_ticks, host_nanoseconds);
-        let outcome = running.machine.run(budget.min(self.policy.yield_cycles));
+        running
+            .machine
+            .present_guest_clocks(guest_timer_ticks, guest_rtc_ns);
+        let outcome = running.machine.run_cpu(cycle_limit_cycles);
         let uart = running.machine.take_console_output();
         let mut console = if running.uart_output {
             uart
@@ -850,31 +903,23 @@ impl BrowserRuntime {
                 self.actions.push_back(HostAction::Framebuffer(update));
             }
         }
-        let delay = if outcome.state == RunState::Waiting {
-            running
-                .machine
-                .sleep_duration_ms(self.policy.maximum_delay_ms)
-        } else {
-            0
-        };
         self.pump_http_requests()?;
-        Ok(Some(BrowserRunResult {
-            cycles: outcome.cycles,
+        Ok(Some(PlatformRunResult {
+            consumed_cycles: outcome.consumed_cycles,
             state: outcome.state,
-            delay_ms: delay,
         }))
     }
 
     #[must_use]
-    pub fn next_timer_delay_ticks(&mut self, ticks: u64) -> Option<u64> {
+    pub fn next_timer_remaining_guest_ticks(&mut self, ticks: u64) -> Option<u64> {
         // Querying at the driver's current tick also updates pending interrupts.
         let State::Running(running) = &mut self.state else {
             return None;
         };
         running
             .machine
-            .update_time(ticks, ticks.saturating_mul(100));
-        running.machine.next_timer_delay_ticks()
+            .present_guest_clocks(ticks, ticks.saturating_mul(100));
+        running.machine.next_timer_remaining_guest_ticks()
     }
 
     pub fn next_action(&mut self) -> Option<HostAction> {
@@ -905,7 +950,8 @@ impl BrowserRuntime {
     }
 
     fn request_next_asset(&mut self) -> Result<(), RuntimeError> {
-        let State::Loading(mut loading) = core::mem::replace(&mut self.state, State::Idle) else {
+        let State::Loading(mut loading) = core::mem::replace(&mut self.state, State::VmInactive)
+        else {
             unreachable!();
         };
         if let Some((kind, url)) = loading.assets.pop_front() {
@@ -1022,7 +1068,8 @@ impl BrowserRuntime {
     }
 
     fn pump_http_requests(&mut self) -> Result<(), RuntimeError> {
-        let State::Running(mut running) = core::mem::replace(&mut self.state, State::Idle) else {
+        let State::Running(mut running) = core::mem::replace(&mut self.state, State::VmInactive)
+        else {
             return Ok(());
         };
         for slot in running.block_slots.clone() {
@@ -1088,7 +1135,7 @@ impl NetworkBackend for OutputNetwork {
 
 #[cfg(test)]
 mod tests {
-    use super::{ActiveTurn, RateEstimate, TICKS_PER_SECOND, scale_pointer_coordinate};
+    use super::{ActiveQuantum, GUEST_TICKS_PER_SECOND, RateEstimate, scale_pointer_coordinate};
 
     #[test]
     fn pointer_coordinates_are_clamped_and_scaled_to_the_tablet_range() {
@@ -1102,38 +1149,42 @@ mod tests {
     fn deadline_budget_reaches_the_first_matching_tick() {
         for rate in [1_000_000, 300_000_000, 1_123_456_789] {
             for deadline in [1, 2, 997, 10_001] {
-                let turn = ActiveTurn {
-                    start_ticks: 17_300_000_000_000_000,
-                    rate,
-                    budget: i32::MAX as u32,
-                    used: 123,
-                    stalled_calls: 0,
-                    calls: 0,
-                    timer_exits: 0,
-                    timer_intervals: Vec::new(),
+                let quantum = ActiveQuantum {
+                    start_guest_ticks: 17_300_000_000_000_000,
+                    cycles_per_host_second: rate,
+                    budget_cycles: i32::MAX as u32,
+                    consumed_cycles: 123,
+                    stalled_cpu_runs: 0,
+                    cpu_runs: 0,
+                    timer_reprogramming_exits: 0,
+                    timer_intervals_guest_ticks: Vec::new(),
                     record_timer_interval: false,
-                    idle_delay_ticks: 0,
+                    wfi_wake_delay_guest_ticks: 0,
                     terminal: None,
                 };
-                let target = turn.used + u64::from(turn.cycles_to_deadline(deadline));
-                let offset = (u128::from(turn.used) * TICKS_PER_SECOND / u128::from(rate))
+                let target =
+                    quantum.consumed_cycles + u64::from(quantum.cycles_until_deadline(deadline));
+                let offset = (u128::from(quantum.consumed_cycles) * GUEST_TICKS_PER_SECOND
+                    / u128::from(rate))
                     + u128::from(deadline);
-                assert!(u128::from(target) * TICKS_PER_SECOND / u128::from(rate) >= offset);
-                assert!(u128::from(target - 1) * TICKS_PER_SECOND / u128::from(rate) < offset);
+                assert!(u128::from(target) * GUEST_TICKS_PER_SECOND / u128::from(rate) >= offset);
+                assert!(
+                    u128::from(target - 1) * GUEST_TICKS_PER_SECOND / u128::from(rate) < offset
+                );
             }
         }
     }
 
     #[test]
-    fn whole_turn_samples_replace_guess_and_decay_previous_measurements() {
+    fn whole_quantum_samples_replace_guess_and_decay_previous_measurements() {
         let mut rate = RateEstimate::default();
         rate.observe(100_000, 10.0);
-        assert!((rate.cycles_per_second - 10_000_000.0).abs() < 0.001);
+        assert!((rate.emulated_cycles_per_host_second - 10_000_000.0).abs() < 0.001);
         rate.observe(50_000, 10.0);
-        assert!(rate.cycles_per_second < 10_000_000.0);
-        assert!(rate.cycles_per_second > 5_000_000.0);
-        let measured = rate.cycles_per_second;
+        assert!(rate.emulated_cycles_per_host_second < 10_000_000.0);
+        assert!(rate.emulated_cycles_per_host_second > 5_000_000.0);
+        let measured = rate.emulated_cycles_per_host_second;
         rate.observe(0, 100.0);
-        assert!((rate.cycles_per_second - measured).abs() < 0.001);
+        assert!((rate.emulated_cycles_per_host_second - measured).abs() < 0.001);
     }
 }

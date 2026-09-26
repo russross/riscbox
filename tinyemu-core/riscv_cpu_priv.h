@@ -161,8 +161,8 @@ struct RISCVCPUState {
     RISCVCPUTimeFunc *get_time;
     void *time_opaque;
     BOOL power_down_flag;
-    BOOL host_attention;
-    BOOL timer_attention;
+    BOOL host_service_requested;
+    BOOL timer_reprogrammed;
     int pending_exception; /* used during MMU exception handling */
     target_ulong pending_tval;
 

@@ -86,17 +86,20 @@ runtime.start(new URL("./riscbox.cfg", location.href).href, 256);
 ```
 
 The adapter schedules execution automatically. Runnable guests request an
-immediate next turn; waiting guests sleep until the nearest guest timer deadline,
-up to 100 milliseconds. A completed asynchronous device request wakes a waiting
-guest when guest time has caught up with wall time. Rust calibrates the cycle
-budget from complete browser turns timed by JavaScript. Set `timesliceMs` in the instantiate
-options to choose a turn duration from greater than zero through 100 milliseconds
-(default 10); this bounds latency for host input and completed I/O. Set
-`debugTiming: true` to log cycle rate, approximate MIPS, calls per turn, timer
-intervals, idle time, and clock catch-up delays. Integrations can also provide
+immediate next execution quantum; WFI sleeping guests wake at the nearest guest
+timer deadline or after at most 100 milliseconds. A completed asynchronous
+device request can wake a WFI sleeping guest when host time has caught up with
+guest time. Rust calibrates the quantum cycle budget from complete quanta timed
+by JavaScript. Set `targetQuantumMs` in the instantiate options to choose a
+nominal duration greater than zero and at most 100 milliseconds (default 10);
+this bounds latency for host input and completed I/O. Set `debugTiming: true`
+to log estimated and active emulated Mcycles/s, CPU runs per quantum, timer
+intervals, WFI sleep time, and catch-up waits. Integrations can also provide
 `networkWrite`, `framebufferRefresh`, and `p9Servers`. Host input methods are
 `consoleInput(bytes)`, `consoleResize(columns, rows)`, `keyEvent()`,
 `pointerEvent()`, `wheelEvent()`, `networkInput()`, and `networkCarrier()`.
+`runQuantum()` explicitly requests a quantum when a host integration needs to
+resume a VM; normal wakeups are scheduled by the browser adapter.
 Framebuffer callbacks receive a zero-copy WASM view plus `x`, `y`, `width`,
 `height`, and full-frame `stride`; consume the view synchronously.
 
@@ -338,7 +341,7 @@ reference.
 
 The active `tinyemu-core/` contains a freestanding subset of the archived C
 CPU, SoftFP, and physical memory implementation. Rust owns the platform,
-devices, browser requests, and C allocations. A browser turn may enter C
+devices, browser requests, and C allocations. An execution quantum may enter C
 multiple times to inject guest time at a timer deadline or process host work;
 C calls Rust for device accesses. The historical `c/` tree is not built.
 Project history is recorded in [CHANGELOG.md](CHANGELOG.md).

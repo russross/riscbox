@@ -11,22 +11,22 @@ typedef struct {
 struct TinyemuCore {
     PhysMemoryMap *map;
     RISCVCPUState *cpu;
-    uint64_t time_ticks;
-    void *host;
+    uint64_t guest_timer_ticks;
+    void *platform;
     BridgeDevice devices[PHYS_MEM_RANGE_MAX];
     unsigned device_count;
 };
 
-extern int tinyemu_host_read(void *host, uint64_t address, unsigned width,
+extern int tinyemu_platform_read(void *platform, uint64_t address, unsigned width,
                              uint32_t *value);
-extern int tinyemu_host_write(void *host, uint64_t address, unsigned width,
+extern int tinyemu_platform_write(void *platform, uint64_t address, unsigned width,
                               uint32_t value);
-extern uint32_t tinyemu_host_interrupts(void *host);
-extern uint32_t tinyemu_host_attention(void *host);
+extern uint32_t tinyemu_platform_interrupts(void *platform);
+extern uint32_t tinyemu_platform_service_requested(void *platform);
 
 static uint64_t get_time(void *opaque)
 {
-    return ((TinyemuCore *)opaque)->time_ticks;
+    return ((TinyemuCore *)opaque)->guest_timer_ticks;
 }
 
 static void flush_write_tlb(void *opaque, uint8_t *address, size_t len)
@@ -39,10 +39,10 @@ static int read_device(void *opaque, uint32_t offset, int size_log2,
                        uint32_t *value)
 {
     BridgeDevice *device = opaque;
-    int status = tinyemu_host_read(device->core->host, device->base + offset,
+    int status = tinyemu_platform_read(device->core->platform, device->base + offset,
                                    1u << size_log2, value);
     tinyemu_core_set_interrupts(device->core,
-                                tinyemu_host_interrupts(device->core->host));
+                                tinyemu_platform_interrupts(device->core->platform));
     return status;
 }
 
@@ -50,12 +50,12 @@ static int write_device(void *opaque, uint32_t offset, uint32_t value,
                         int size_log2)
 {
     BridgeDevice *device = opaque;
-    int status = tinyemu_host_write(device->core->host, device->base + offset,
+    int status = tinyemu_platform_write(device->core->platform, device->base + offset,
                                     1u << size_log2, value);
     tinyemu_core_set_interrupts(device->core,
-                                tinyemu_host_interrupts(device->core->host));
-    if (status == 0 && tinyemu_host_attention(device->core->host))
-        device->core->cpu->host_attention = TRUE;
+                                tinyemu_platform_interrupts(device->core->platform));
+    if (status == 0 && tinyemu_platform_service_requested(device->core->platform))
+        device->core->cpu->host_service_requested = TRUE;
     return status;
 }
 
@@ -189,9 +189,9 @@ int tinyemu_core_clear_dirty(TinyemuCore *core, int region, uint64_t offset)
     return 0;
 }
 
-void tinyemu_core_set_time(TinyemuCore *core, uint64_t ticks)
+void tinyemu_core_set_guest_timer_ticks(TinyemuCore *core, uint64_t ticks)
 {
-    core->time_ticks = ticks;
+    core->guest_timer_ticks = ticks;
     riscv_cpu_update_time(core->cpu, ticks);
 }
 
@@ -202,7 +202,7 @@ uint64_t tinyemu_core_stimecmp(const TinyemuCore *core)
     return riscv_cpu_get_stimecmp(core->cpu);
 }
 
-uint32_t tinyemu_core_is_waiting(const TinyemuCore *core)
+uint32_t tinyemu_core_is_wfi_sleeping(const TinyemuCore *core)
 {
     return riscv_cpu_get_power_down(core->cpu) ? 1u : 0u;
 }
@@ -214,19 +214,20 @@ void tinyemu_core_set_interrupts(TinyemuCore *core, uint32_t mask)
     riscv_cpu_set_mip(core->cpu, mask & external);
 }
 
-TinyemuRunResult tinyemu_core_run(TinyemuCore *core, uint32_t budget,
-                                   void *host)
+TinyemuCpuRunResult tinyemu_core_run_cpu(TinyemuCore *core, uint32_t cycle_limit,
+                                   void *platform)
 {
-    core->host = host;
-    core->cpu->host_attention = FALSE;
-    core->cpu->timer_attention = FALSE;
+    core->platform = platform;
+    core->cpu->host_service_requested = FALSE;
+    core->cpu->timer_reprogrammed = FALSE;
     uint64_t before = riscv_cpu_get_cycles(core->cpu);
-    riscv_cpu_interp(core->cpu, (int)budget);
-    core->host = NULL;
-    uint32_t reason = core->cpu->timer_attention ? 3u :
-                      core->cpu->host_attention ? 2u :
-                      riscv_cpu_get_power_down(core->cpu) ? 1u : 0u;
-    TinyemuRunResult result = {
+    riscv_cpu_interp(core->cpu, (int)cycle_limit);
+    core->platform = NULL;
+    uint32_t reason = core->cpu->timer_reprogrammed ? TINYEMU_CPU_TIMER_REPROGRAMMED :
+                      core->cpu->host_service_requested ? TINYEMU_CPU_HOST_SERVICE_REQUESTED :
+                      riscv_cpu_get_power_down(core->cpu) ? TINYEMU_CPU_WFI_SLEEP :
+                      TINYEMU_CPU_LIMIT_REACHED;
+    TinyemuCpuRunResult result = {
         (uint32_t)(riscv_cpu_get_cycles(core->cpu) - before),
         reason
     };

@@ -16,7 +16,7 @@ use crate::guest_memory::{
 use crate::platform::{
     Clint, FinishStatus, Finisher, GoldfishRtc, MIP_MSIP, MIP_MTIP, Plic, Uart16550,
 };
-use crate::tinyemu_core::{BusError, Core, HostCallbacks, RunOutcome, RunState};
+use crate::tinyemu_core::{BusError, Core, CpuRunExitReason, CpuRunResult, PlatformCallbacks};
 use crate::virtio::{MMIO_SIZE, VirtioTransport};
 use crate::virtio_devices::{
     BlockBackend, BlockDevice, ConsoleDevice, DeviceError, EntropyDevice, InputDevice, InputKind,
@@ -242,10 +242,10 @@ pub struct PlatformBus {
     finisher: Finisher,
     framebuffer: Option<Framebuffer>,
     virtio: Vec<VirtioSlot>,
-    timer_ticks: u64,
-    host_nanoseconds: u64,
-    host_attention: bool,
-    timer_attention: bool,
+    guest_timer_ticks: u64,
+    guest_rtc_ns: u64,
+    host_service_requested: bool,
+    timer_reprogrammed: bool,
 }
 
 impl PlatformBus {
@@ -309,10 +309,10 @@ impl PlatformBus {
             finisher: Finisher::default(),
             framebuffer,
             virtio: Vec::new(),
-            timer_ticks: 0,
-            host_nanoseconds: 0,
-            host_attention: false,
-            timer_attention: false,
+            guest_timer_ticks: 0,
+            guest_rtc_ns: 0,
+            host_service_requested: false,
+            timer_reprogrammed: false,
         })
     }
 
@@ -330,17 +330,14 @@ impl PlatformBus {
         {
             0
         } else if (RTC_BASE..RTC_BASE + 0x1000).contains(&address) && width == AccessWidth::Word {
-            u64::from(
-                self.rtc
-                    .read(offset(address, RTC_BASE)?, self.host_nanoseconds),
-            )
+            u64::from(self.rtc.read(offset(address, RTC_BASE)?, self.guest_rtc_ns))
         } else if (CLINT_BASE..CLINT_BASE + 0x1_0000).contains(&address)
             && matches!(width, AccessWidth::Word | AccessWidth::DoubleWord)
         {
             let device_offset = offset(address, CLINT_BASE)?;
-            let low = u64::from(self.clint.read(device_offset, self.timer_ticks));
+            let low = u64::from(self.clint.read(device_offset, self.guest_timer_ticks));
             if width == AccessWidth::DoubleWord {
-                low | (u64::from(self.clint.read(device_offset + 4, self.timer_ticks)) << 32)
+                low | (u64::from(self.clint.read(device_offset + 4, self.guest_timer_ticks)) << 32)
             } else {
                 low
             }
@@ -368,11 +365,10 @@ impl PlatformBus {
                 .write(offset(address, FINISHER_BASE)?, value32);
         } else if (RTC_BASE..RTC_BASE + 0x1000).contains(&address) && width == AccessWidth::Word {
             let device_offset = offset(address, RTC_BASE)?;
-            self.rtc
-                .write(device_offset, value32, self.host_nanoseconds);
+            self.rtc.write(device_offset, value32, self.guest_rtc_ns);
             if matches!(device_offset, 0 | 4 | 8 | 0x0c | 0x14) {
-                self.host_attention = true;
-                self.timer_attention = true;
+                self.host_service_requested = true;
+                self.timer_reprogrammed = true;
             }
         } else if (CLINT_BASE..CLINT_BASE + 0x1_0000).contains(&address)
             && matches!(width, AccessWidth::Word | AccessWidth::DoubleWord)
@@ -383,8 +379,8 @@ impl PlatformBus {
                 self.clint.write(device_offset + 4, (value >> 32) as u32);
             }
             if matches!(device_offset, 0x4000 | 0x4004) {
-                self.host_attention = true;
-                self.timer_attention = true;
+                self.host_service_requested = true;
+                self.timer_reprogrammed = true;
             }
         } else if (PLIC_BASE..PLIC_BASE + 0x400_0000).contains(&address)
             && width == AccessWidth::Word
@@ -398,7 +394,7 @@ impl PlatformBus {
             device
                 .write(&mut self.memory, device_offset, value32, width)
                 .map_err(|_| BusError::AccessFault)?;
-            self.host_attention |= device.needs_host();
+            self.host_service_requested |= device.needs_host();
         } else {
             return Err(BusError::AccessFault);
         }
@@ -441,14 +437,14 @@ impl PlatformBus {
         if self.clint.software_interrupt() {
             direct |= MIP_MSIP;
         }
-        if self.clint.timer_interrupt(self.timer_ticks) {
+        if self.clint.timer_interrupt(self.guest_timer_ticks) {
             direct |= MIP_MTIP;
         }
         direct | external
     }
 }
 
-impl HostCallbacks for PlatformBus {
+impl PlatformCallbacks for PlatformBus {
     fn read(&mut self, address: u64, width: u32) -> Result<u32, BusError> {
         let width = callback_width(width).ok_or(BusError::AccessFault)?;
         let value = self.read_mmio(address, width)?;
@@ -467,8 +463,8 @@ impl HostCallbacks for PlatformBus {
         self.interrupt_mask()
     }
 
-    fn host_attention(&self) -> bool {
-        self.host_attention
+    fn host_service_requested(&self) -> bool {
+        self.host_service_requested
     }
 }
 
@@ -759,32 +755,19 @@ impl Machine {
         self.copy_to_ram(0x1000, &reset)
     }
 
-    pub fn update_time(&mut self, timer_ticks: u64, host_nanoseconds: u64) {
-        self.bus.timer_ticks = timer_ticks;
-        self.bus.host_nanoseconds = host_nanoseconds;
-        let _ = self.bus.rtc.limit_delay_ms(u32::MAX, host_nanoseconds);
+    pub fn present_guest_clocks(&mut self, guest_timer_ticks: u64, guest_rtc_ns: u64) {
+        self.bus.guest_timer_ticks = guest_timer_ticks;
+        self.bus.guest_rtc_ns = guest_rtc_ns;
+        self.bus.rtc.refresh_alarm(guest_rtc_ns);
         self.bus.update_device_irqs();
         self.sync_interrupts();
-        self.cpu.set_time(timer_ticks);
+        self.cpu.set_guest_timer_ticks(guest_timer_ticks);
     }
 
     #[must_use]
-    pub fn sleep_duration_ms(&mut self, maximum_delay_ms: u32) -> u32 {
-        let now = self.bus.timer_ticks;
-        let mut delay = self
-            .bus
-            .rtc
-            .limit_delay_ms(maximum_delay_ms, self.bus.host_nanoseconds);
-        if !self.bus.clint.timer_interrupt(now) {
-            delay = delay.min(timer_delay_ms(self.bus.clint.timecmp(), now));
-        }
-        delay.min(timer_delay_ms(self.cpu.stimecmp(), now))
-    }
-
-    #[must_use]
-    pub fn next_timer_delay_ticks(&self) -> Option<u64> {
-        // Due compares are already reflected in interrupt state by update_time.
-        let now = self.bus.timer_ticks;
+    pub fn next_timer_remaining_guest_ticks(&self) -> Option<u64> {
+        // Due compares are already reflected in interrupt state by present_guest_clocks.
+        let now = self.bus.guest_timer_ticks;
         let mut delay = u64::MAX;
         if !self.bus.clint.timer_interrupt(now) {
             delay = delay.min(self.bus.clint.timecmp() - now);
@@ -793,7 +776,10 @@ impl Machine {
         if supervisor > now {
             delay = delay.min(supervisor - now);
         }
-        if let Some(rtc_delay) = self.bus.rtc.alarm_delay_ticks(self.bus.host_nanoseconds)
+        if let Some(rtc_delay) = self
+            .bus
+            .rtc
+            .alarm_remaining_guest_ticks(self.bus.guest_rtc_ns)
             && rtc_delay > 0
         {
             delay = delay.min(rtc_delay);
@@ -802,24 +788,26 @@ impl Machine {
     }
 
     #[must_use]
-    pub fn is_waiting(&self) -> bool {
-        self.cpu.is_waiting()
+    pub fn is_wfi_sleeping(&self) -> bool {
+        self.cpu.is_wfi_sleeping()
     }
 
-    pub fn run(&mut self, cycles: u32) -> RunOutcome {
-        self.bus.host_attention = false;
-        self.bus.timer_attention = false;
+    pub fn run_cpu(&mut self, cycle_limit_cycles: u32) -> CpuRunResult {
+        self.bus.host_service_requested = false;
+        self.bus.timer_reprogrammed = false;
         self.sync_interrupts();
-        let result = self.cpu.run_host(cycles, &mut self.bus);
+        let result = self
+            .cpu
+            .run_cpu_with_platform(cycle_limit_cycles, &mut self.bus);
         self.sync_interrupts();
-        RunOutcome {
-            cycles: result.cycles,
+        CpuRunResult {
+            consumed_cycles: result.consumed_cycles,
             state: match result.reason {
-                1 => RunState::Waiting,
-                2 if self.bus.timer_attention => RunState::TimerChanged,
-                2 => RunState::HostAttention,
-                3 => RunState::TimerChanged,
-                _ => RunState::Running,
+                1 => CpuRunExitReason::WfiSleep,
+                2 if self.bus.timer_reprogrammed => CpuRunExitReason::TimerReprogrammed,
+                2 => CpuRunExitReason::HostServiceRequested,
+                3 => CpuRunExitReason::TimerReprogrammed,
+                _ => CpuRunExitReason::CycleLimitReached,
             },
         }
     }
@@ -1300,9 +1288,4 @@ fn virtio_irq_checked(index: usize) -> Option<u8> {
 fn low_u32(value: u64) -> u32 {
     let bytes = value.to_le_bytes();
     u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
-}
-
-fn timer_delay_ms(compare: u64, now: u64) -> u32 {
-    let ticks = compare.saturating_sub(now) / 10_000;
-    u32::try_from(ticks).unwrap_or(u32::MAX)
 }

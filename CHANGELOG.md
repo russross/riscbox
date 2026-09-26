@@ -4,26 +4,37 @@ Riscbox changelog
 Unreleased
 ----------
 
-*   Moved browser turn budgets, cycle-rate calibration, exact timer deadline
-    arithmetic, and repeated CPU calls into Rust. JavaScript now supplies wall
-    time and whole-turn elapsed time, dispatches host actions between WASM
-    calls, and schedules browser wakeups. The raw WASM ABI now exposes turn
-    begin, advance, finish, abort, wake-delay, and diagnostic operations.
-*   Calibrated browser turn budgets from complete-turn cycle and elapsed-time
-    samples with a five-second active-time half-life. Guest time now advances
-    in 10 MHz ticks from cycles at a fixed rate within each turn; timer writes
-    exit the core and subsequent calls target the next precise deadline.
-    Configurable turn duration defaults to 10 ms, waiting wakeups cap at 100 ms,
-    and a guest clock lead delays the next turn until wall time catches up.
-    Added opt-in timing diagnostics for rate, call counts, timer intervals,
-    idle time, and catch-up waits.
-*   Added an early host-attention exit after guest MMIO requests for 9p and
-    HTTP block work. The JavaScript driver now owns bounded guest turns,
-    resumes unused cycles after resident 9p replies, and replaces WFI timers
-    when asynchronous replies arrive. 9p sessions can hint that a request will
-    settle through microtasks; the driver logs 20 consecutive empty yields and
-    recovers. Removed the custom `schedule(milliseconds)` option and changed
-    the custom 9p request interface to include `expectResponse`.
+*   Standardized browser scheduling names across C, Rust, the raw WASM ABI,
+    JavaScript, tests, and documentation. An execution quantum contains one or
+    more CPU runs and may cross host-service boundaries. Renamed the public
+    `timesliceMs` option to `targetQuantumMs` and the raw WASM turn exports to
+    quantum exports. The browser adapter exposes `runQuantum()` in place of
+    the ambiguous `run()` wrapper and rejects the old duration option with a
+    migration error. Removed the unused direct-run scheduling policy, its
+    duplicate machine and RTC delay helpers, and an obsolete host-scheduling
+    callback in the example UI. Timing diagnostics now report emulated
+    Mcycles/s instead of approximate MIPS. The C callback interface is now
+    named `PlatformCallbacks`, and queued browser input lives in
+    `browser_input.rs`.
+*   Moved quantum cycle budgets, cycle-rate calibration, precise timer deadline
+    arithmetic, and repeated CPU runs into Rust. JavaScript supplies host epoch
+    time and whole-quantum monotonic elapsed time, dispatches host actions
+    between WASM activations, and schedules browser wakeups.
+*   Calibrated quantum cycle budgets from complete-quantum cycle and elapsed-time
+    samples with a five-second active-time half-life. Guest time advances in
+    10 MHz ticks from cycles at a fixed rate within each quantum; timer writes
+    exit the core and subsequent CPU runs target the next precise deadline.
+    The target quantum duration defaults to 10 ms, WFI wakeups cap at 100 ms,
+    and a guest-clock lead delays the next quantum until host epoch time catches
+    up. Opt-in timing diagnostics report rate, CPU runs per quantum, timer
+    intervals, WFI sleep time, and catch-up waits.
+*   Added an early host-service exit after guest MMIO requests for 9p and HTTP
+    block work. The browser adapter resumes unused quantum cycles after
+    resident 9p replies and replaces WFI wakeups when asynchronous replies
+    arrive. 9p sessions can hint that a request will settle through microtasks;
+    the adapter logs 20 consecutive empty yields and recovers. Removed the
+    custom `schedule(milliseconds)` option and changed the custom 9p request
+    interface to include `expectResponse`.
 *   Load raw or gzip-compressed kernels at the existing boot address, with
     decompressed size bounded by the RAM and initrd layout. Image deployments
     now publish `gzip -9` kernels under names derived from the uncompressed
@@ -48,7 +59,7 @@ Unreleased
     unchanged.
 *   Moved production CPU instruction execution, CSR/VM/TLB handling, SoftFP,
     and physical RAM into a freestanding TinyEMU C core. Rust retains machine
-    setup and devices and enters C for coarse timeslices, crossing back for
+    setup and devices and entered C for coarse CPU runs, crossing back for
     MMIO. Clang builds the C core directly for native tests and raw WASM;
     Rust's allocator backs C allocations without Emscripten or libc imports.
     Alpine boot through login and shutdown and xv6 full usertests pass.

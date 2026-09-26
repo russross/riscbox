@@ -43,7 +43,7 @@ pub enum BrowserEvent {
 }
 
 #[derive(Debug)]
-pub struct BrowserController {
+pub struct BrowserInputQueue {
     console: VecDeque<u8>,
     resize: Option<TerminalSize>,
     events: VecDeque<BrowserEvent>,
@@ -55,7 +55,7 @@ pub struct BrowserController {
     network_bytes: usize,
 }
 
-impl Default for BrowserController {
+impl Default for BrowserInputQueue {
     fn default() -> Self {
         Self {
             console: VecDeque::with_capacity(CONSOLE_INPUT_CAPACITY),
@@ -71,7 +71,7 @@ impl Default for BrowserController {
     }
 }
 
-impl BrowserController {
+impl BrowserInputQueue {
     /// Queues as much terminal input as the fixed browser FIFO can hold.
     pub fn queue_console(&mut self, data: &[u8]) -> usize {
         let accepted = data
@@ -173,20 +173,5 @@ impl BrowserController {
             self.network_bytes -= packet.len();
         }
         Some(event)
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RunPolicy {
-    pub yield_cycles: u32,
-    pub maximum_delay_ms: u32,
-}
-
-impl Default for RunPolicy {
-    fn default() -> Self {
-        Self {
-            yield_cycles: i32::MAX as u32,
-            maximum_delay_ms: 100,
-        }
     }
 }

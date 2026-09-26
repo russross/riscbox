@@ -1,6 +1,7 @@
-use riscbox::browser::BrowserController;
+use riscbox::browser_input::BrowserInputQueue;
 use riscbox::browser_runtime::{
-    BrowserNineP, BrowserRuntime, HostAction, RuntimeError, RuntimeStart, TurnExit, TurnStart,
+    BrowserNineP, BrowserRuntime, HostAction, QuantumOutcome, QuantumStart, RuntimeError,
+    RuntimeStart,
 };
 use riscbox::virtio_devices::{
     NinePBackend, NinePEndpointId, NinePGeneration, NinePRequestId, NinePTransportAction,
@@ -46,22 +47,41 @@ fn start_uart_writer(config: &[u8]) -> BrowserRuntime {
 }
 
 #[test]
-fn complete_turn_resumes_after_host_action_and_updates_rate() {
+fn complete_quantum_resumes_after_host_action_and_updates_rate() {
     let mut runtime = start_uart_writer(
         br#"{version:1,machine:"riscv64",memory_size:32,bios:"fw.bin",console:"uart"}"#,
     );
-    runtime.configure_timing(1.0, true).expect("timing configuration");
-    assert_eq!(runtime.begin_turn(1_000_000), TurnStart::Ready);
-    let mut controller = BrowserController::default();
-    assert_eq!(runtime.advance_turn(&mut controller).expect("first advance"), TurnExit::HostActions);
-    assert!(matches!(runtime.next_action(), Some(HostAction::Console(_))));
+    runtime
+        .configure_quantum(1.0, true)
+        .expect("timing configuration");
+    assert_eq!(runtime.begin_quantum(1_000_000), QuantumStart::Ready);
+    assert_eq!(
+        runtime.begin_quantum(1_000_000),
+        QuantumStart::AlreadyActive
+    );
+    let mut input_queue = BrowserInputQueue::default();
+    assert_eq!(
+        runtime
+            .run_quantum(&mut input_queue)
+            .expect("first advance"),
+        QuantumOutcome::HostServiceRequired
+    );
+    assert!(matches!(
+        runtime.next_action(),
+        Some(HostAction::Console(_))
+    ));
     assert_eq!(runtime.next_action(), None);
-    assert_eq!(runtime.advance_turn(&mut controller).expect("remaining budget"), TurnExit::Finished);
-    assert_eq!(runtime.finish_turn(2.0, 1_000_002).expect("finish"), 0);
+    assert_eq!(
+        runtime
+            .run_quantum(&mut input_queue)
+            .expect("remaining budget"),
+        QuantumOutcome::BudgetReached
+    );
+    assert_eq!(runtime.finish_quantum(2.0, 1_000_002).expect("finish"), 0);
     assert!(runtime.timing_stat(0) > 0.0);
     assert!(runtime.timing_stat(1) >= 1.0);
-    assert_eq!(runtime.begin_turn(1_000_002), TurnStart::Ready);
-    runtime.abort_turn();
+    assert_eq!(runtime.begin_quantum(1_000_002), QuantumStart::Ready);
+    runtime.abort_quantum();
 }
 
 #[test]
@@ -134,10 +154,10 @@ fn run_delivers_queued_input_and_reschedules_runnable_guest_immediately() {
     assert_eq!(runtime.next_action(), Some(HostAction::Started));
     assert_eq!(runtime.next_action(), None);
 
-    let mut controller = BrowserController::default();
-    assert_eq!(controller.queue_console(b"x"), 1);
+    let mut input_queue = BrowserInputQueue::default();
+    assert_eq!(input_queue.queue_console(b"x"), 1);
     runtime
-        .run(&mut controller, 0, 0, 3_000_000)
+        .run_cpu_once(&mut input_queue, 0, 0, 3_000_000)
         .expect("execution slice");
     assert_eq!(runtime.next_action(), None);
 }
@@ -162,12 +182,12 @@ fn uart_backpressure_retains_unaccepted_browser_input() {
     runtime.next_action();
     runtime.next_action();
 
-    let mut controller = BrowserController::default();
-    controller.queue_console(b"ABC");
+    let mut input_queue = BrowserInputQueue::default();
+    input_queue.queue_console(b"ABC");
     runtime
-        .run(&mut controller, 0, 0, 3_000_000)
+        .run_cpu_once(&mut input_queue, 0, 0, 3_000_000)
         .expect("execution slice");
-    assert_eq!(controller.console_len(), 2);
+    assert_eq!(input_queue.console_len(), 2);
 }
 
 #[test]
@@ -189,16 +209,16 @@ fn virtio_input_before_driver_initialization_is_buffered() {
     runtime.next_action();
     runtime.next_action();
 
-    let mut controller = BrowserController::default();
-    controller.queue_console(b"x");
-    controller.key_event(true, 30);
-    controller.pointer_event(50, 60, 0);
+    let mut input_queue = BrowserInputQueue::default();
+    input_queue.queue_console(b"x");
+    input_queue.key_event(true, 30);
+    input_queue.pointer_event(50, 60, 0);
     assert_eq!(
-        controller.network_packet(b"frame"),
-        riscbox::browser::NetworkInputResult::Accepted
+        input_queue.network_packet(b"frame"),
+        riscbox::browser_input::NetworkInputResult::Accepted
     );
     runtime
-        .run(&mut controller, 0, 0, 3_000_000)
+        .run_cpu_once(&mut input_queue, 0, 0, 3_000_000)
         .expect("execution slice");
     assert_eq!(runtime.next_action(), None);
 }
@@ -223,7 +243,7 @@ fn uart_output_follows_the_console_configuration() {
     for (config, expects_output) in cases {
         let mut runtime = start_uart_writer(config);
         runtime
-            .run(&mut BrowserController::default(), 0, 0, 3_000_000)
+            .run_cpu_once(&mut BrowserInputQueue::default(), 0, 0, 3_000_000)
             .expect("execution slice");
         if expects_output {
             assert_eq!(
@@ -365,7 +385,7 @@ fn framebuffer_updates_coexist_with_the_virtio_console() {
     assert_eq!(runtime.next_action(), None);
 
     runtime
-        .run(&mut BrowserController::default(), 0, 0, 3_000_000)
+        .run_cpu_once(&mut BrowserInputQueue::default(), 0, 0, 3_000_000)
         .expect("execution slice");
     let Some(HostAction::Framebuffer(update)) = runtime.next_action() else {
         panic!("expected framebuffer action");
@@ -388,7 +408,7 @@ fn framebuffer_updates_coexist_with_the_virtio_console() {
 }
 
 #[test]
-fn waiting_guest_uses_bounded_sleep() {
+fn wfi_sleep_uses_bounded_wakeup_delay() {
     let mut runtime = BrowserRuntime::default();
     runtime.start(start()).expect("start");
     let (config_id, _) = request(&mut runtime);
@@ -407,9 +427,11 @@ fn waiting_guest_uses_bounded_sleep() {
     assert_eq!(runtime.next_action(), Some(HostAction::Started));
     assert_eq!(runtime.next_action(), None);
 
+    assert_eq!(runtime.begin_quantum(1_000_000), QuantumStart::Ready);
     let outcome = runtime
-        .run(&mut BrowserController::default(), 0, 0, 3_000_000)
-        .expect("waiting slice");
-    assert_eq!(outcome.expect("running VM").delay_ms, 100);
+        .run_quantum(&mut BrowserInputQueue::default())
+        .expect("waiting quantum");
+    assert_eq!(outcome, QuantumOutcome::WfiSleep);
+    assert_eq!(runtime.finish_quantum(1.0, 1_000_001).expect("finish"), 99);
     assert_eq!(runtime.next_action(), None);
 }

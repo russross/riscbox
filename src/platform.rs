@@ -408,12 +408,12 @@ pub struct GoldfishRtc {
 }
 
 impl GoldfishRtc {
-    const fn count(&self, host_nanoseconds: u64) -> u64 {
-        host_nanoseconds.wrapping_add(self.time_offset)
+    const fn count(&self, guest_rtc_ns: u64) -> u64 {
+        guest_rtc_ns.wrapping_add(self.time_offset)
     }
 
-    fn check_alarm(&mut self, host_nanoseconds: u64) {
-        if self.alarm_running && self.alarm <= self.count(host_nanoseconds) {
+    fn check_alarm(&mut self, guest_rtc_ns: u64) {
+        if self.alarm_running && self.alarm <= self.count(guest_rtc_ns) {
             self.alarm_running = false;
             self.irq_pending = true;
         }
@@ -424,10 +424,10 @@ impl GoldfishRtc {
         self.irq_pending && self.irq_enabled
     }
 
-    pub fn read(&mut self, offset: u32, host_nanoseconds: u64) -> u32 {
+    pub fn read(&mut self, offset: u32, guest_rtc_ns: u64) -> u32 {
         match offset {
             0 => {
-                let time = self.count(host_nanoseconds);
+                let time = self.count(guest_rtc_ns);
                 self.latched_time_high = (time >> 32) as u32;
                 low_u32(time)
             }
@@ -436,17 +436,17 @@ impl GoldfishRtc {
             0x0c => (self.alarm >> 32) as u32,
             0x10 => u32::from(self.irq_enabled),
             0x18 => {
-                self.check_alarm(host_nanoseconds);
+                self.check_alarm(guest_rtc_ns);
                 u32::from(self.alarm_running)
             }
             _ => 0,
         }
     }
 
-    pub fn write(&mut self, offset: u32, value: u32, host_nanoseconds: u64) {
+    pub fn write(&mut self, offset: u32, value: u32, guest_rtc_ns: u64) {
         match offset {
             0 | 4 => {
-                let current = self.count(host_nanoseconds);
+                let current = self.count(guest_rtc_ns);
                 let new = if offset == 0 {
                     (current & !u64::from(u32::MAX)) | u64::from(value)
                 } else {
@@ -457,7 +457,7 @@ impl GoldfishRtc {
             8 => {
                 self.alarm = (self.alarm & !u64::from(u32::MAX)) | u64::from(value);
                 self.alarm_running = true;
-                self.check_alarm(host_nanoseconds);
+                self.check_alarm(guest_rtc_ns);
             }
             0x0c => self.alarm = (self.alarm & u64::from(u32::MAX)) | (u64::from(value) << 32),
             0x10 => self.irq_enabled = value & 1 != 0,
@@ -467,23 +467,17 @@ impl GoldfishRtc {
         }
     }
 
-    #[must_use]
-    pub fn limit_delay_ms(&mut self, delay_ms: u32, host_nanoseconds: u64) -> u32 {
-        self.check_alarm(host_nanoseconds);
-        if !self.alarm_running {
-            return delay_ms;
-        }
-        let alarm_delay = self.alarm.saturating_sub(self.count(host_nanoseconds)) / 1_000_000;
-        delay_ms.min(u32::try_from(alarm_delay).unwrap_or(u32::MAX))
+    pub fn refresh_alarm(&mut self, guest_rtc_ns: u64) {
+        self.check_alarm(guest_rtc_ns);
     }
 
     /// Returns the active alarm's remaining time rounded up to guest ticks.
     #[must_use]
-    pub fn alarm_delay_ticks(&self, host_nanoseconds: u64) -> Option<u64> {
+    pub fn alarm_remaining_guest_ticks(&self, guest_rtc_ns: u64) -> Option<u64> {
         if !self.alarm_running {
             return None;
         }
-        let nanoseconds = self.alarm.saturating_sub(self.count(host_nanoseconds));
+        let nanoseconds = self.alarm.saturating_sub(self.count(guest_rtc_ns));
         Some(nanoseconds.div_ceil(100))
     }
 }

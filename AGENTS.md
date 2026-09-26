@@ -37,7 +37,8 @@ Repository map and terminology
 ------------------------------
 
 *   `src/` owns the Rust machine, devices, configuration, storage, browser
-    runtime, and the typed boundary to the C core. `guest_memory.rs` owns the
+    runtime, and the typed boundary to the C core. `browser_input.rs` queues
+    host input until a CPU run consumes it. `guest_memory.rs` owns the
     shared memory API and TinyEMU RAM bridge. No parallel Rust CPU, SoftFP, or
     physical-memory implementation remains.
 *   `tinyemu-core/` is the active freestanding TinyEMU CPU, SoftFP, and physical
@@ -77,7 +78,7 @@ wait-on-reservation. It is moving toward RVA23 where that is useful, but it is
 not RVA23 compliant because vectors and several other required extensions are
 intentionally absent. Advertise only implemented behavior.
 
-Production timeslices enter the TinyEMU C instruction loop. C owns CPU state,
+Production CPU runs enter the TinyEMU C instruction loop. C owns CPU state,
 TLB, physical mappings, and RAM; its setup and teardown allocations use the
 Rust global allocator. Rust owns platform devices and handles MMIO callbacks.
 Shared callback errors and run outcomes live at the TinyEMU boundary, while
@@ -93,19 +94,51 @@ relative to the configuration URL. Raw and gzip-compressed kernels load at the
 same guest address; decompressed output is bounded by the boot layout. Image
 deployments gzip the kernel while naming it from the uncompressed hash. HTTP
 disk writes are session-local.
-Rust sizes each guest turn from a measured execution rate and a configurable
-duration, ten milliseconds by default. Each turn locks its rate and maps
-consumed cycles to 10 MHz guest ticks using integer arithmetic. Timer writes
-exit the C loop so Rust can size the next call to the earliest CLINT,
+Rust sizes each execution quantum from a measured emulated cycle rate and a
+target duration, ten milliseconds by default. Each quantum locks its rate and
+maps consumed cycles to 10 MHz guest timer ticks using integer arithmetic.
+Timer writes exit the C loop so Rust can size the next CPU run to the earliest CLINT,
 supervisor, or RTC deadline. C also exits after MMIO requests for 9p or HTTP
-block work; Rust releases the exclusive timeslice borrow before JavaScript
-dispatches actions. JavaScript resumes the Rust turn after resident 9p replies
-and wakes waiting guests on later completions. JavaScript measures the complete
-turn and supplies its elapsed time to Rust for calibration. A guest time lead
-delays the next turn until wall time catches up. Waiting guests sleep until the
-next timer or a 100-millisecond fallback; asynchronous completions can replace
-that wakeup. The C interpreter may pass a requested budget at a code-block
-boundary, and Rust accounts for the actual cycles consumed.
+block work; Rust releases the exclusive CPU-run borrow before JavaScript
+dispatches actions. JavaScript resumes the same quantum after resident 9p
+replies and wakes a WFI sleeping guest on later completions. JavaScript measures
+the complete quantum with a monotonic clock and supplies its elapsed time to
+Rust for calibration. A guest-clock lead delays the next quantum until host
+epoch time catches up. WFI sleeping guests wake at the next timer deadline or
+a 100-millisecond fallback; asynchronous completions can replace that wakeup.
+The C interpreter may pass a requested cycle limit at a code-block boundary,
+and Rust accounts for the actual emulated cycles consumed.
+
+Timing and execution lexicon
+----------------------------
+
+*   A **browser task** is one event-loop task, such as a timer or input callback.
+    A **microtask** is a promise continuation or queued microtask. Use these
+    browser terms only for their event-loop meanings.
+*   The **TinyEMU CPU core** is C; the **machine/platform** and **browser runtime**
+    are Rust. The **raw WASM ABI** exposes scalar calls, the **browser adapter**
+    is JavaScript, and the **host application** embeds the adapter. C calls
+    Rust through `PlatformCallbacks`; JavaScript handles queued `HostAction`s.
+*   An **execution quantum** is one logical bounded unit of guest work. It can
+    contain several synchronous JS-to-WASM activations and several **CPU runs**
+    (individual C interpreter calls). A **host-service boundary** returns an
+    active quantum to JavaScript for queued device actions or hinted replies.
+*   The **quantum target duration** is the configured nominal host-time interval
+    used to calculate a **quantum cycle budget**. A **CPU-run cycle limit** is
+    the smaller request for one C call. **Cycles consumed** are what C actually
+    reports, including permitted overshoot. All cycles here are emulated guest
+    cycles, never host CPU cycles.
+*   **Host epoch time** comes from `Date.now()` in Unix milliseconds. **Host
+    elapsed time** comes from `performance.now()` in monotonic milliseconds.
+    **Guest timer ticks** are 10 MHz units; **guest RTC nanoseconds** are the
+    corresponding nanosecond base passed to Goldfish RTC, which applies its
+    device offset. Keep absolute **timer deadlines** in
+    guest ticks distinct from remaining guest-tick durations.
+*   **Timer reprogramming** changes a future deadline; a **due timer** sets an
+    interrupt pending. **WFI sleep** means the guest CPU waits for an interrupt.
+    **VM inactive** refers only to the VM lifecycle. A **guest-clock lead** is
+    the last presented guest time ahead of host epoch time; a **catch-up wait**
+    delays the next quantum until host time reaches it.
 
 VirtIO 9p is a generic concurrent asynchronous transport. Rust validates
 descriptors and message envelopes but does not implement filesystem semantics.
@@ -128,7 +161,7 @@ Architecture rules
     invariants at each unsafe block.
 *   Keep architectural state and host interfaces strongly typed. Favor concrete
     device ownership, shallow control flow, explicit dependencies, and immutable
-    values. Keep the C timeslice borrow exclusive of Rust device memory access.
+    values. Keep the C CPU-run borrow exclusive of Rust device memory access.
 *   Keep the raw WASM ABI and adapter small. Do not add Emscripten, WASI,
     `wasm-bindgen`, an async Rust runtime, or adapter runtime dependencies.
 *   Keep dependencies exceptional. Inspect the complete resolved graph before

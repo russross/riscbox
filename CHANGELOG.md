@@ -4,6 +4,7 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Clear the Risclet demo terminal viewport when rebooting the VM.
 *   Switched image deployments and QEMU setup to OpenSBI `fw_dynamic.bin`.
     The reset ROM supplies dynamic next-stage information. Boot configs may
     omit firmware for direct M-mode boot and override firmware, kernel, initrd,

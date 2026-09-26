@@ -485,6 +485,7 @@ class VmController {
 
     private resetTerminal(): void {
         this.terminal.reset();
+        this.terminal.scrollToBottom();
         this.terminal.write(SHOW_CURSOR);
     }
 

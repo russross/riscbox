@@ -43,7 +43,7 @@ def referenced_assets(config: str) -> set[str]:
     """Return locally named content-addressed assets referenced by config."""
     references = set(
         re.findall(
-            r'"((?:drive|fw_dynamic\.bin|fw_jump\.bin)-[0-9a-f]{8}|(?:linux|u-boot\.bin)-[0-9a-f]{8}(?:\.gz)?)(?:/blk\.txt)?"',
+            r'"(drive-[0-9a-f]{8}|(?:fw_dynamic\.bin|fw_jump\.bin|linux|u-boot\.bin)-[0-9a-f]{8}(?:\.gz)?)(?:/blk\.txt)?"',
             config,
         )
     )

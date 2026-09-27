@@ -9,6 +9,7 @@ BUILD_DIR := build/opensbi-$(VERSION)
 CONFIGURED := $(BUILD_DIR)/.configured
 FIRMWARE := $(BUILD_DIR)/platform/generic/firmware/fw_dynamic.bin
 BUILT := $(BUILD_DIR)/.firmware-built
+DEFCONFIG := defconfig
 
 include config
 
@@ -23,14 +24,16 @@ fw_dynamic.bin: $(BUILT)
 $(BUILT): $(CONFIGURED)
 	$(MAKE) -C $(SOURCE_DIR) O=$(abspath $(BUILD_DIR)) \
 		PLATFORM=$(PLATFORM) PLATFORM_RISCV_XLEN=$(PLATFORM_RISCV_XLEN) \
+		PLATFORM_DEFCONFIG=riscbox \
 		FW_DYNAMIC=$(FW_DYNAMIC) FW_OPTIONS=$(FW_OPTIONS) \
 		CROSS_COMPILE=$(CROSS_COMPILE) -j $(JOBS)
 	test -s $(FIRMWARE)
 	touch $@
 
-$(CONFIGURED): config $(SOURCE_READY)
+$(CONFIGURED): config $(DEFCONFIG) $(SOURCE_READY)
 	rm -rf $(BUILD_DIR)
 	mkdir -p $(BUILD_DIR)
+	install -m 644 $(DEFCONFIG) $(SOURCE_DIR)/platform/generic/configs/riscbox
 	install -m 644 config $@
 
 $(SOURCE_READY): $(VERIFIED)

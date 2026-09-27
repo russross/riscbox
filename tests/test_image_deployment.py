@@ -42,11 +42,11 @@ class ImageDeploymentTests(unittest.TestCase):
                 'fs0:{file:"fs/head"},drive0:{file:"drive/blk.txt"}}'
             )
             helper.rewrite_config(
-                source, output, "fw_dynamic.bin-11111111", "linux-22222222", "drive-33333333"
+                source, output, "fw_dynamic.bin-11111111.gz", "linux-22222222", "drive-33333333"
             )
             self.assertEqual(
                 output.read_text(),
-                '{bios:"fw_dynamic.bin-11111111",kernel:"linux-22222222",'
+                '{bios:"fw_dynamic.bin-11111111.gz",kernel:"linux-22222222",'
                 'fs0:{file:"fs/head"},drive0:{file:"drive-33333333/blk.txt"}}',
             )
 
@@ -54,10 +54,10 @@ class ImageDeploymentTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             deployment = Path(temporary)
             (deployment / "riscbox.cfg").write_text(
-                '{bios:"fw_dynamic.bin-11111111",kernel:"linux-22222222",'
+                '{bios:"fw_dynamic.bin-11111111.gz",kernel:"linux-22222222",'
                 'drive0:{file:"drive-33333333/blk.txt"}}'
             )
-            for name in ["fw_dynamic.bin-11111111", "fw_dynamic.bin-aaaaaaaa", "fw_jump.bin-bbbbbbbb", "linux-22222222", "linux-bbbbbbbb", "index.html"]:
+            for name in ["fw_dynamic.bin-11111111.gz", "fw_dynamic.bin-aaaaaaaa", "fw_jump.bin-bbbbbbbb", "linux-22222222", "linux-bbbbbbbb", "index.html"]:
                 (deployment / name).write_text(name)
             (deployment / "drive-33333333").mkdir()
             (deployment / "drive-cccccccc").mkdir()
@@ -82,13 +82,13 @@ class ImageDeploymentTests(unittest.TestCase):
             helper.rewrite_config(
                 source,
                 deployment / "riscbox.cfg",
-                "fw_dynamic.bin-11111111",
+                "fw_dynamic.bin-11111111.gz",
                 "u-boot.bin-22222222.gz",
                 "drive-33333333",
             )
             self.assertEqual(
                 helper.referenced_assets((deployment / "riscbox.cfg").read_text()),
-                {"fw_dynamic.bin-11111111", "u-boot.bin-22222222.gz", "drive-33333333"},
+                {"fw_dynamic.bin-11111111.gz", "u-boot.bin-22222222.gz", "drive-33333333"},
             )
             (deployment / "u-boot.bin-22222222.gz").write_bytes(b"current")
             (deployment / "u-boot.bin-aaaaaaaa.gz").write_bytes(b"old")

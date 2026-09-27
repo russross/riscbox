@@ -10,8 +10,9 @@ Files
 *   `riscbox.js` and `riscbox.wasm` are the emulator runtime.
 *   `riscbox.cfg` describes the virtual machine. Boot paths are relative to
     this file.
-*   `fw_dynamic.bin-HASH` is OpenSBI firmware. `linux-HASH.gz` is the
-    gzip-compressed guest kernel for direct Linux boots. The Risclet image uses
+*   `fw_dynamic.bin-HASH.gz` is gzip-compressed OpenSBI firmware.
+    `linux-HASH.gz` is the gzip-compressed guest kernel for direct Linux boots.
+    The Risclet image uses
     `u-boot.bin-HASH.gz` as its next stage and stores Linux on disk. Payload
     hashes identify the uncompressed images.
 *   `drive-HASH/blk.txt` describes the HTTP disk; its
@@ -55,7 +56,7 @@ typical disk-backed VM is:
     version: 1,
     machine: "riscv64",
     memory_size: 256,
-    bios: "fw_dynamic.bin-81ceef21",
+    bios: "fw_dynamic.bin-81ceef21.gz",
     kernel: "linux-a837bc72.gz",
     cmdline: "root=/dev/vda rw rootfstype=ext4 console=hvc0",
     drive0: { file: "drive-827a7b2f/blk.txt" },
@@ -185,5 +186,5 @@ current config with:
     ../../tools/image_deployment.py clean ./dist
 
 The cleaner only considers `drive-HASH`, `linux-HASH`, `linux-HASH.gz`,
-`u-boot.bin-HASH.gz`, and `fw_dynamic.bin-HASH` assets. It leaves the active
+`u-boot.bin-HASH.gz`, and `fw_dynamic.bin-HASH.gz` assets. It leaves the active
 generation and unrelated deployment files intact.

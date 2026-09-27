@@ -63,7 +63,7 @@ Build targets
 | `make check`   | Tests, strict Clippy, TypeScript, and Python type checks       |
 | `make wasm`    | `target/wasm32-unknown-unknown/release/riscbox_wasm.wasm`      |
 | `make kernel`  | Canonical custom kernel at `kernel/linux`                     |
-| `make opensbi` | Pinned firmware at `opensbi/fw_dynamic.bin`                   |
+| `make opensbi` | Riscbox-configured firmware at `opensbi/fw_dynamic.bin`       |
 | `make uboot`   | Pinned EROFS-capable S-mode bootloader at `uboot/u-boot.bin`   |
 | `make dist`    | WASM, generated JavaScript, kernel, OpenSBI, and U-Boot        |
 

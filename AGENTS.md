@@ -58,7 +58,8 @@ Repository map and terminology
 *   `opensbi/` and `uboot/` own pinned firmware and bootloader builds. Each
     tracks its Makefile, version, and config; downloads, sources, and outputs
     are ignored. The shared image helpers use `opensbi/fw_dynamic.bin`, and
-    Risclet uses `uboot/u-boot.bin` as OpenSBI's S-mode next stage.
+    Risclet uses `uboot/u-boot.bin` as OpenSBI's S-mode next stage. OpenSBI's
+    `defconfig` selects the one-hart Riscbox SBI services and FDT drivers.
 *   `c/` is a read-only historical TinyEMU-derived archive. It is not an
     implementation source, compatibility target, build dependency, parity
     requirement, or validation surface.
@@ -101,8 +102,8 @@ tree physical addresses; the loader validates their RAM bounds and overlap.
 The reset ROM passes OpenSBI `fw_dynamic.bin` a dynamic-info block with the
 next-stage address. Without firmware, the kernel starts directly in M-mode.
 Decompressed output is bounded by the boot layout. Image
-deployments gzip the next-stage payload while naming it from the uncompressed
-hash. HTTP
+deployments gzip firmware and the next-stage payload while naming them from
+their uncompressed hashes. HTTP
 disk writes are session-local. The browser adapter uses `force-cache` for
 content-hash-named boot and disk assets and `no-store` for the configuration.
 HTTP block stores start with a 64 MiB in-memory cache limit that grows to

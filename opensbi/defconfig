@@ -1,0 +1,35 @@
+# OpenSBI generic platform for the single-hart Riscbox machine.
+# The FDT platform supplies domain and PMU plumbing selected by OpenSBI.
+CONFIG_PLATFORM_GENERIC_NAME="Riscbox"
+
+# Linux and U-Boot use timer, reset, and console SBI calls. Legacy console
+# remains needed by the Alpine earlycon=sbi boot configuration.
+CONFIG_SBI_ECALL_TIME=y
+# CONFIG_SBI_ECALL_RFENCE is not set
+# CONFIG_SBI_ECALL_IPI is not set
+# CONFIG_SBI_ECALL_HSM is not set
+CONFIG_SBI_ECALL_SRST=y
+# CONFIG_SBI_ECALL_SUSP is not set
+# CONFIG_SBI_ECALL_PMU is not set
+CONFIG_SBI_ECALL_DBCN=y
+# CONFIG_SBI_ECALL_CPPC is not set
+# CONFIG_SBI_ECALL_FWFT is not set
+CONFIG_SBI_ECALL_LEGACY=y
+# CONFIG_SBI_ECALL_VENDOR is not set
+# CONFIG_SBI_ECALL_DBTR is not set
+# CONFIG_SBI_ECALL_SSE is not set
+# CONFIG_SBI_ECALL_MPXY is not set
+
+# Only the devices present in the generated Riscbox FDT need drivers.
+CONFIG_FDT_IPI=y
+CONFIG_FDT_IPI_MSWI=y
+CONFIG_FDT_IRQCHIP=y
+CONFIG_FDT_IRQCHIP_PLIC=y
+CONFIG_FDT_REGMAP=y
+CONFIG_FDT_REGMAP_SYSCON=y
+CONFIG_FDT_RESET=y
+CONFIG_FDT_RESET_SYSCON=y
+CONFIG_FDT_SERIAL=y
+CONFIG_FDT_SERIAL_UART8250=y
+CONFIG_FDT_TIMER=y
+CONFIG_FDT_TIMER_MTIMER=y

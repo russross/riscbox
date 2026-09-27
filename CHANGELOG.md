@@ -4,6 +4,11 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Tuned the pinned OpenSBI 1.6 `fw_dynamic.bin` build for Riscbox's one-hart
+    ACLINT, PLIC, UART, and syscon-reset platform. The raw firmware shrank
+    from 273,472 to 135,616 bytes. Browser distributions now gzip it under
+    names derived from the uncompressed hash; the measured compressed size is
+    58,865 bytes, down from 91,853 bytes for the generic image.
 *   Described the existing local interrupt register map as separate ACLINT
     MSWI and MTIMER devices in the guest device tree. OpenSBI discovers the
     current addresses through the modern bindings; the one-hart interrupt and

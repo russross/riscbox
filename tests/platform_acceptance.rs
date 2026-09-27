@@ -108,6 +108,62 @@ fn alpine_reaches_login_and_shuts_down() {
 }
 
 #[test]
+#[ignore = "requires built OpenSBI, U-Boot, and Risclet EROFS assets"]
+fn risclet_uboot_reaches_linux_userspace() {
+    let firmware = read(Path::new("opensbi/fw_dynamic.bin"));
+    let bootloader = read(Path::new("uboot/u-boot.bin"));
+    let disk = read(Path::new("images/risclet/build/rootfs.erofs"));
+    let mut machine = Machine::new(MachineConfig {
+        ram_size: 256 << 20,
+        framebuffer: None,
+    })
+    .expect("Risclet machine");
+    machine
+        .add_block_device(
+            Box::new(ImageBlock { bytes: disk }),
+            *b"riscbox-http-disk-00",
+        )
+        .expect("Risclet block device");
+    let console = machine.add_console_device(80, 25).expect("VirtIO console");
+    machine
+        .load_boot(BootImages {
+            firmware: Some(&firmware),
+            kernel: Some(&bootloader),
+            initrd: None,
+            command_line: "",
+        })
+        .expect("OpenSBI and U-Boot images");
+
+    // The image's init script attempts a 9p mount after Linux mounts EROFS.
+    // No 9p backend is installed here, so that error marks userspace startup.
+    let mut transcript = Vec::new();
+    for batch in 0..10_000_u64 {
+        let ticks = batch * 10_000;
+        machine.present_guest_clocks(ticks, ticks * 100);
+        for _ in 0..15 {
+            let _ = machine.run_cpu(200_000);
+        }
+        let output = machine.take_console_output();
+        trace_guest_output(&output);
+        transcript.extend(output);
+        let output = machine
+            .take_virtio_console_output(console)
+            .expect("VirtIO console output");
+        trace_guest_output(&output);
+        transcript.extend(output);
+        let text = String::from_utf8_lossy(&transcript);
+        if text.contains("mounting risclet") {
+            return;
+        }
+        assert!(!text.contains("Kernel panic"), "Risclet panic\n{text}");
+    }
+    panic!(
+        "Risclet U-Boot boot timed out\n{}",
+        String::from_utf8_lossy(&transcript)
+    );
+}
+
+#[test]
 #[ignore = "requires a flat xv6 kernel and fs.img and runs the complete user suite"]
 fn xv6_boots_over_uart_and_passes_user_tests() {
     let kernel_path = required_path("RISCBOX_XV6_KERNEL");

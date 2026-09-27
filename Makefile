@@ -9,13 +9,14 @@ test: wasm js
 	cargo test --workspace
 	uv run -q --script tests/test_splitimg.py
 	uv run -q --script tests/test_image_deployment.py
+	uv run -q --script tests/test_risclet_disk.py
 	node --test js/network.test.mjs js/p9.test.mjs js/riscbox.test.cjs
 	node --test tests/network_browser.test.mjs
 
 check: test
 	$(MAKE) js-check
 	cargo clippy --all-targets --workspace -- -D warnings
-	uvx --quiet ty check tools/splitimg.py tools/image_deployment.py
+	uvx --quiet ty check tools/splitimg.py tools/image_deployment.py images/risclet/assemble-disk
 
 wasm: $(RUSTBOX_WASM)
 

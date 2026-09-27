@@ -3,10 +3,11 @@ Image builds
 
 Each subdirectory is a complete image definition. Its tracked `build.sh`,
 `setup.sh`, `riscbox.cfg`, and optional `web/` directory are inputs. Running
-`build.sh` creates two ignored outputs:
+`build.sh` creates ignored outputs:
 
 *   `build/rootfs.ext4` is the writable setup image used under QEMU.
-    Risclet and xv6 profile also create `build/rootfs.erofs` for distribution.
+    Risclet and xv6 profile also create `build/rootfs.erofs`. Risclet adds
+    `build/risclet.img`, with an ext4 boot partition and EROFS root partition.
 *   `dist/` is the self-contained browser deployment. It retains hashed boot
     and chunked-disk generations until the operator cleans them.
 
@@ -38,7 +39,10 @@ Risclet and xv6 profile finish setup on ext4, then mount it read-only and use
 ensure passwordless `sudo` can mount the ext4 image and run `mkfs.erofs` for
 these builds. Their guest roots mount read-only; tmpfs supplies `/tmp` and the
 upper layers for `/var` and `/home`. The Alpine definition still distributes
-ext4. Split HTTP disks use 512 KiB chunks by default.
+ext4. Risclet needs `dpkg-deb` and `mkfs.ext4` to unpack its pinned Debian
+U-Boot binary and build its boot partition. The boot partition contains the
+custom Linux Image and `extlinux.conf`; the guest mounts the EROFS root from
+`/dev/vda2`. Split HTTP disks use 512 KiB chunks by default.
 
 The shared helpers under `bin/` download and verify the pinned Alpine
 minirootfs, consume the root-owned `kernel/linux` and Rust WASM build, boot
@@ -94,8 +98,11 @@ Keep downloads and generated files under `build/`. A normal build should leave
 only intentional image inputs visible to Git.
 
 The distribution builder accepts `--erofs` for completed ext4 setup images,
-compresses the kernel with `gzip -9`, and writes
-content-addressed boot and disk assets. The kernel name uses the uncompressed
-kernel's hash with a `.gz` suffix. It replaces `dist/riscbox.cfg` last. Remove
+compresses the next-stage payload with `gzip -9`, and writes
+content-addressed boot and disk assets. The payload name uses the uncompressed
+payload's hash with a `.gz` suffix. Set `BOOT_PAYLOAD` and
+`BOOT_PAYLOAD_NAME` to package a next stage other than the default Linux
+kernel; Risclet uses the pinned S-mode U-Boot binary. The builder replaces
+`dist/riscbox.cfg` last. Remove
 superseded generations when appropriate
 with `../../tools/image_deployment.py clean ./dist` from an image directory.

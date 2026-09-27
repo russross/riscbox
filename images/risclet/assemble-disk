@@ -1,0 +1,111 @@
+#!/usr/bin/env -S uv run -q --script
+# /// script
+# requires-python = ">=3.13"
+# dependencies = [
+# ]
+# ///
+
+"""Assemble an ext4 boot partition and EROFS root for the Risclet VM."""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+import shutil
+import struct
+import subprocess
+import sys
+import tempfile
+
+SECTOR_SIZE = 512
+BOOT_START = 2048
+BOOT_SIZE = 16 * 1024 * 1024
+KERNEL_ARGS = "root=/dev/vda2 ro rootfstype=erofs console=hvc0 quiet loglevel=0"
+
+
+def partition_entry(bootable: bool, start: int, sectors: int) -> bytes:
+    """Encode an MBR Linux partition with LBA positions."""
+    return struct.pack(
+        "<B3sB3sII",
+        0x80 if bootable else 0,
+        b"\0\2\0",
+        0x83,
+        b"\xfe\xff\xff",
+        start,
+        sectors,
+    )
+
+
+def assemble(kernel: Path, root: Path, output: Path) -> None:
+    """Write both filesystems and their partition table atomically."""
+    if not kernel.is_file() or not root.is_file():
+        raise ValueError("kernel and EROFS root must be existing files")
+    if kernel.stat().st_size == 0 or root.stat().st_size == 0:
+        raise ValueError("kernel and EROFS root must be nonempty")
+
+    # U-Boot's extlinux boot method reads the raw Image from the first partition.
+    # The Linux command line selects the second partition as the EROFS root.
+    with tempfile.TemporaryDirectory(dir=output.parent) as temporary:
+        stage = Path(temporary)
+        boot_tree = stage / "boot-tree"
+        (boot_tree / "extlinux").mkdir(parents=True)
+        shutil.copyfile(kernel, boot_tree / "Image")
+        (boot_tree / "extlinux/extlinux.conf").write_text(
+            "default risclet\n"
+            "label risclet\n"
+            "    linux /Image\n"
+            f"    append {KERNEL_ARGS}\n",
+            encoding="ascii",
+        )
+
+        # mkfs.ext4 populates the boot partition without mounting a loop device.
+        # The builder retains the existing read-only EROFS root byte for byte.
+        boot_image = stage / "boot.ext4"
+        with boot_image.open("wb") as boot_file:
+            boot_file.truncate(BOOT_SIZE)
+        mkfs = os.environ.get("MKFS_EXT4", "/usr/sbin/mkfs.ext4")
+        subprocess.run(
+            [mkfs, "-q", "-F", "-L", "risclet-boot", "-d", str(boot_tree), str(boot_image)],
+            check=True,
+        )
+
+        # Reserve 1 MiB for the MBR and align both partitions to sectors.
+        # The EROFS tail is padded only to satisfy the block device size.
+        boot_sectors = BOOT_SIZE // SECTOR_SIZE
+        root_start = BOOT_START + boot_sectors
+        root_size = root.stat().st_size
+        root_sectors = (root_size + SECTOR_SIZE - 1) // SECTOR_SIZE
+        if root_start + root_sectors > 0xFFFFFFFF:
+            raise ValueError("disk exceeds the MBR sector limit")
+        mbr = bytearray(SECTOR_SIZE)
+        mbr[446:462] = partition_entry(True, BOOT_START, boot_sectors)
+        mbr[462:478] = partition_entry(False, root_start, root_sectors)
+        mbr[510:512] = b"\x55\xaa"
+
+        disk_part = stage / "disk.img"
+        with disk_part.open("wb") as disk:
+            disk.write(mbr)
+            disk.write(bytes(BOOT_START * SECTOR_SIZE - SECTOR_SIZE))
+            with boot_image.open("rb") as boot_file:
+                shutil.copyfileobj(boot_file, disk)
+            with root.open("rb") as root_file:
+                shutil.copyfileobj(root_file, disk)
+            disk.write(bytes(root_sectors * SECTOR_SIZE - root_size))
+        disk_part.replace(output)
+
+
+def main(arguments: list[str]) -> int:
+    """Report expected image errors without a Python traceback."""
+    if len(arguments) != 3:
+        print("usage: assemble-disk KERNEL_IMAGE ROOT.erofs OUTPUT.img", file=sys.stderr)
+        return 2
+    try:
+        assemble(*(Path(argument) for argument in arguments))
+    except (OSError, ValueError, subprocess.CalledProcessError) as error:
+        print(f"assemble-disk: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

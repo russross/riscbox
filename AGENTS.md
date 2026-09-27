@@ -97,11 +97,21 @@ tree physical addresses; the loader validates their RAM bounds and overlap.
 The reset ROM passes OpenSBI `fw_dynamic.bin` a dynamic-info block with the
 next-stage address. Without firmware, the kernel starts directly in M-mode.
 Decompressed output is bounded by the boot layout. Image
-deployments gzip the kernel while naming it from the uncompressed hash. HTTP
+deployments gzip the next-stage payload while naming it from the uncompressed
+hash. HTTP
 disk writes are session-local. The browser adapter uses `force-cache` for
 content-hash-named boot and disk assets and `no-store` for the configuration.
 HTTP block stores start with a 64 MiB in-memory cache limit that grows to
 cover a single request when needed.
+
+The Risclet demo instead supplies S-mode U-Boot as the OpenSBI next stage.
+Its HTTP disk has an ext4 boot partition with the custom Linux Image and
+`extlinux.conf`, followed by the read-only EROFS root at `/dev/vda2`.
+The custom kernel enables DOS partition discovery for this layout. The Risclet
+build uses the pinned Debian `u-boot-qemu` S-mode binary; U-Boot is external
+to the emulator and loads Linux from the disk. Its early output uses UART,
+while the Linux login uses the VirtIO console.
+
 Rust sizes each execution quantum from a measured emulated cycle rate and a
 target duration, twenty milliseconds by default. Each quantum locks its rate
 and maps consumed cycles to 10 MHz guest timer ticks using integer arithmetic.
@@ -124,7 +134,8 @@ clamping of repeated zero-delay timers; delayed wakeups still use `setTimeout`.
 The C interpreter may pass a requested cycle limit at a code-block boundary,
 and Rust accounts for the actual emulated cycles consumed.
 Risclet and xv6 profile image setup boots writable ext4 under QEMU, then
-converts the finished filesystem to a read-only EROFS distribution image.
+converts the finished filesystem to a read-only EROFS root. Risclet adds its
+ext4 boot partition before splitting the disk for HTTP delivery.
 Their guests mount tmpfs at `/tmp` and session-local tmpfs-backed overlays at
 `/var` and `/home`. Split HTTP disks use 512 KiB chunks by default.
 

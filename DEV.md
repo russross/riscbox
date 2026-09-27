@@ -96,14 +96,6 @@ size).
 
 ### Bootloader and installation media
 
-The raw-image loader now supports OpenSBI `fw_dynamic`, direct M-mode boot,
-optional initrds, and configurable payload addresses. Next evaluate an S-mode
-U-Boot image as the next stage at the configured `kernel_address`, using the
-existing `BootImages` and `BootAddresses` loader path. A U-Boot boot test should
-cover block discovery, kernel and initrd loading from attached media, and a
-clean handoff. Keep U-Boot as an external image; do not parse its formats in
-`src/machine.rs`.
-
 Supporting installation media also needs a separate storage milestone. Extend
 the typed `DriveConfig` in `src/config.rs` and block-store construction in
 `src/browser_runtime.rs` to distinguish split HTTP manifests from plain image

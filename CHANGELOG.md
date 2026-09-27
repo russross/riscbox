@@ -4,6 +4,10 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Made the Risclet demo disk self-booting: pinned S-mode U-Boot loads the
+    custom Linux Image from an ext4 boot partition, then Linux mounts the
+    read-only EROFS root from the second partition. Enabled DOS partition
+    discovery in the custom kernel and exposed early UART boot output.
 *   Clear the Risclet demo terminal viewport when rebooting the VM.
 *   Switched image deployments and QEMU setup to OpenSBI `fw_dynamic.bin`.
     The reset ROM supplies dynamic next-stage information. Boot configs may

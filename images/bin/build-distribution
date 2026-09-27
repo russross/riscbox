@@ -5,7 +5,14 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 IMAGES_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 ROOT_DIR=$(CDPATH= cd -- "$IMAGES_DIR/.." && pwd)
 KERNEL_IMAGE=${KERNEL_IMAGE:-"$ROOT_DIR/kernel/linux"}
+BOOT_PAYLOAD=${BOOT_PAYLOAD:-"$KERNEL_IMAGE"}
+BOOT_PAYLOAD_NAME=${BOOT_PAYLOAD_NAME:-linux}
 OPENSBI=${OPENSBI:-/usr/lib/riscv64-linux-gnu/opensbi/generic/fw_dynamic.bin}
+
+case "$BOOT_PAYLOAD_NAME" in
+    linux|u-boot.bin) ;;
+    *) echo "unsupported boot payload name: $BOOT_PAYLOAD_NAME" >&2; exit 2 ;;
+esac
 
 if [ "$#" -lt 2 ] || [ "$#" -gt 3 ] ||
     { [ "$#" -eq 3 ] && [ "$3" != --erofs ]; }; then
@@ -19,7 +26,7 @@ output_dir="$image_dir/dist"
 mkdir -p "$image_dir/build"
 
 for required_file in "$image_dir/riscbox.cfg" "$rootfs_image" \
-    "$KERNEL_IMAGE" "$OPENSBI" "$IMAGES_DIR/DEPLOYMENT.md"; do
+    "$BOOT_PAYLOAD" "$OPENSBI" "$IMAGES_DIR/DEPLOYMENT.md"; do
     if [ ! -f "$required_file" ]; then
         echo "missing required file: $required_file" >&2
         exit 1
@@ -50,9 +57,9 @@ cleanup() {
 }
 trap cleanup EXIT HUP INT TERM
 
-kernel_name=linux-$(sha256sum "$KERNEL_IMAGE" | cut -c 1-8).gz
+kernel_name=$BOOT_PAYLOAD_NAME-$(sha256sum "$BOOT_PAYLOAD" | cut -c 1-8).gz
 bios_name=fw_dynamic.bin-$(sha256sum "$OPENSBI" | cut -c 1-8)
-gzip -9 -n -c "$KERNEL_IMAGE" > "$stage_dir/$kernel_name"
+gzip -9 -n -c "$BOOT_PAYLOAD" > "$stage_dir/$kernel_name"
 chmod 644 "$stage_dir/$kernel_name"
 install -m 644 "$OPENSBI" "$stage_dir/$bios_name"
 install -m 644 "$ROOT_DIR/js/riscbox.js" "$stage_dir/riscbox.js"
@@ -106,7 +113,7 @@ for staged_asset in "$stage_dir"/*; do
         esac
     else
         case "$asset_name" in
-            linux-*|fw_dynamic.bin-*)
+            linux-*|u-boot.bin-*|fw_dynamic.bin-*)
                 if [ ! -f "$output_dir/$asset_name" ]; then
                     mv "$staged_asset" "$output_dir/$asset_name"
                 fi

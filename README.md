@@ -214,16 +214,20 @@ images/my-image/
 
 Use `images/bin/create-alpine-ext4` to create the filesystem,
 `images/bin/run-image-setup` to customize it under QEMU, and
-`images/bin/build-distribution` to produce the browser deployment. Risclet and
-xv6 profile use its `--erofs` mode to convert the completed ext4 setup image
-to a read-only EROFS disk, with session-local writable `/tmp`, `/var`, and
-`/home` mounts. Other image definitions can continue distributing ext4. The
+`images/bin/build-distribution` to produce the browser deployment. Risclet
+converts its completed ext4 setup image to EROFS, then adds an ext4 boot
+partition containing the custom Linux Image and an `extlinux.conf` file.
+OpenSBI starts U-Boot, which loads Linux from that partition; Linux mounts
+the EROFS root at `/dev/vda2`. The xv6 profile uses the builder's `--erofs`
+mode for a single EROFS disk. Both use session-local writable `/tmp`, `/var`,
+and `/home` mounts. Other image definitions can continue distributing ext4. The
 existing build scripts show the exact call order. Keep downloads and generated files
 under `build/`; the final ignored output belongs in `dist/`.
 
 The distribution builder splits the disk into HTTP-loadable blocks, compresses
-the kernel with `gzip -9`, and gives boot and disk assets content-derived names.
-The `.gz` kernel name uses the uncompressed kernel's hash. Publish new assets
+the next-stage payload with `gzip -9`, and gives boot and disk assets
+content-derived names. The `.gz` payload name uses the uncompressed payload's
+hash. Publish new assets
 first and `riscbox.cfg` last so each VM start sees one complete generation.
 The adapter fetches hash-named boot assets and disk chunks with `force-cache`
 and the configuration with `no-store`. Static hosting needs ordinary `GET`

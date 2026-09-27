@@ -71,6 +71,33 @@ class ImageDeploymentTests(unittest.TestCase):
             self.assertTrue((deployment / "drive-33333333").is_dir())
             self.assertTrue((deployment / "index.html").is_file())
 
+    def test_rewrite_and_clean_accept_uboot_next_stage(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            deployment = Path(temporary)
+            source = deployment / "source.cfg"
+            source.write_text(
+                '{bios:"fw_dynamic.bin",kernel:"u-boot.bin",'
+                'drive0:{file:"drive/blk.txt"}}'
+            )
+            helper.rewrite_config(
+                source,
+                deployment / "riscbox.cfg",
+                "fw_dynamic.bin-11111111",
+                "u-boot.bin-22222222.gz",
+                "drive-33333333",
+            )
+            self.assertEqual(
+                helper.referenced_assets((deployment / "riscbox.cfg").read_text()),
+                {"fw_dynamic.bin-11111111", "u-boot.bin-22222222.gz", "drive-33333333"},
+            )
+            (deployment / "u-boot.bin-22222222.gz").write_bytes(b"current")
+            (deployment / "u-boot.bin-aaaaaaaa.gz").write_bytes(b"old")
+            self.assertEqual(
+                {path.name for path in helper.clean_deployment(deployment)},
+                {"u-boot.bin-aaaaaaaa.gz"},
+            )
+            self.assertTrue((deployment / "u-boot.bin-22222222.gz").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

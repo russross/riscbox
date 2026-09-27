@@ -3,7 +3,7 @@ set -eu
 
 apk add --no-cache make python3 tzdata
 install -m 755 /mnt/setup/mount-ephemeral-writes /sbin/mount-ephemeral-writes
-sed -i 's|^/dev/vda  /         ext4   defaults,noatime|/dev/vda  /         erofs  ro,noatime|' /etc/fstab
+sed -i 's|^/dev/vda  /         ext4   defaults,noatime|/dev/vda2 /         erofs  ro,noatime|' /etc/fstab
 ln -sf /usr/share/zoneinfo/America/Denver /etc/localtime
 printf 'America/Denver\n' > /etc/timezone
 

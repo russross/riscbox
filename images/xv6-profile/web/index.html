@@ -49,7 +49,9 @@
   </main>
 
   <script src="./riscbox.js"></script>
-  <script>
+  <script type="module">
+    import { openHttpBlockProvider } from "./block/http.js";
+
     const statusElement = document.querySelector("#status");
     const terminalElement = document.querySelector("#terminal");
     const parameters = new URLSearchParams(location.search);
@@ -104,10 +106,22 @@
         return;
       }
       try {
+        // The deployment config names the content-addressed manifest. Resolve
+        // its URLs before replacing the drive with a host-backed connector.
+        const config = await Riscbox.loadResolvedConfig(configUrl);
+        const manifestUrl = config.drive0?.file;
+        if (typeof manifestUrl !== "string")
+          throw new TypeError("xv6 profile needs an HTTP drive manifest");
+        const disk = await openHttpBlockProvider(manifestUrl);
+        config.drive0 = {
+          provider: 1,
+          capacity_sectors: disk.capacitySectors.toString(),
+        };
         const response = await fetch("./riscbox.wasm", { cache: "no-cache" });
         if (!response.ok)
           throw new Error(`WASM request failed with status ${response.status}`);
         runtime = await Riscbox.instantiate(await response.arrayBuffer(), {
+          blockProviders: new Map([[1, disk]]),
           debugTiming: true,
           consoleWrite: (text) => term.write(text),
           onVmStarted: () => {
@@ -120,7 +134,7 @@
           },
         });
         statusElement.textContent = "Loading VM assets…";
-        if (await runtime.startFromUrl(configUrl, memoryMiB) !== 0)
+        if (await runtime.startResolved(config, memoryMiB) !== 0)
           throw new Error("Riscbox rejected the VM configuration");
       } catch (error) {
         statusElement.textContent = String(error);

@@ -164,6 +164,30 @@ test("configuration URL resolves defaults and assets before the WASM call", asyn
     assert.throws(() => runtime.startResolved({ version: 1 }), /machine must be string/);
 });
 
+test("resolved configuration can replace an HTTP manifest with a host provider", async () => {
+    const fake = fakeModule();
+    const config = await Riscbox.loadResolvedConfig(
+        "https://host/profile/riscbox.cfg", "",
+        async (_url, options) => {
+            assert.deepEqual(options, { cache: "no-store" });
+            return { status: 200, arrayBuffer: async () => Buffer.from(
+                '{version:1,machine:"riscv64",memory_size:256,bios:"fw.bin",' +
+                'drive0:{file:"drive-abcd1234/blk.txt"}}',
+            ) };
+        },
+    );
+    assert.equal(config.drive0.file, "https://host/profile/drive-abcd1234/blk.txt");
+    config.drive0 = { provider: 1, capacity_sectors: "1048576" };
+    const provider = { read() {}, write() {}, reset() {}, close() {} };
+    const runtime = new Riscbox(fake.exports, { blockProviders: new Map([[1, provider]]) });
+    runtime.startResolved(config, 512);
+    const call = fake.calls.find((entry) => entry[0] === "start_resolved");
+    const resolved = JSON.parse(new TextDecoder().decode(runtime.bytes(call[1], call[2])));
+    assert.deepEqual(resolved.drive0, { provider: 1, capacity_sectors: "1048576" });
+    assert.equal(resolved.bios, "https://host/profile/fw.bin");
+    assert.equal(call[3], 512);
+});
+
 test("adapter copies host input into WASM memory and releases it", () => {
     const fake = fakeModule();
     const runtime = new Riscbox(fake.exports);

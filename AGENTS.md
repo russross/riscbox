@@ -127,6 +127,8 @@ Rust HTTP store remains supported while performance and memory behavior are
 compared. The TypeScript array provider writes through to the caller's exact
 whole-sector `Uint8Array` view and retains it across VM resets. Host image
 export requires guest filesystem synchronization or orderly shutdown.
+The xv6 profile browser page resolves its deployed config, opens the HTTP
+manifest through the TypeScript provider, and attaches it as a host drive.
 Resolved `driveN` entries may attach a host block provider by numeric ID and
 512-byte sector capacity. HTTP and host drives occupy guest slots in the
 configured order. The host provider owns its bytes and handles asynchronous

@@ -68,6 +68,22 @@ test("HTTP failures and wrong block lengths reject guest requests", async () => 
     await assert.rejects(provider.read(0n, 512), /expected 1024/);
 });
 
+test("HTTP provider keeps the native fetch receiver for block reads", async () => {
+    const original = globalThis.fetch;
+    globalThis.fetch = async function (url) {
+        assert.equal(this, globalThis);
+        return url.endsWith("blk.txt")
+            ? { ok: true, text: async () => "{ block_size: 1, n_block: 1 }" }
+            : { ok: true, arrayBuffer: async () => new Uint8Array(1024).fill(5).buffer };
+    };
+    try {
+        const provider = await openHttpBlockProvider("https://example.test/blk.txt");
+        assert.deepEqual(await provider.read(0n, 512), new Uint8Array(512).fill(5));
+    } finally {
+        globalThis.fetch = original;
+    }
+});
+
 test("HTTP reset retires an in-flight write without changing its overlay", async () => {
     let release;
     const body = new Promise((resolve) => { release = resolve; });

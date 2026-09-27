@@ -127,7 +127,9 @@ matched runs and compare Risclet login, xv6 profile compilation, and browser
 memory under controlled cache conditions. The earlier Rust-only baseline used
 warm cache for Risclet login (1.98 seconds, 21 responses), and separate runs
 for Alpine login (0.92 seconds, 10 responses) and xv6 compilation (99.77
-seconds, 159 responses). Those results do not measure run-to-run variation.
+seconds, 159 responses). One TypeScript HTTP xv6 run completed with guest
+`time make` at 102.71 seconds. These results do not measure run-to-run
+variation.
 
 ### WASI integration
 

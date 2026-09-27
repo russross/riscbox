@@ -77,7 +77,11 @@ export function parseBlockManifest(source: string): BlockManifest {
 export async function openHttpBlockProvider(
     manifestUrl: string, options: HttpBlockOptions = {},
 ): Promise<HttpBlockProvider> {
-    const request = options.fetch ?? globalThis.fetch;
+    // Native browser fetch requires its global receiver when called later
+    // through the provider's stored request function.
+    const nativeFetch = globalThis.fetch;
+    const request = options.fetch ?? (typeof nativeFetch === "function"
+        ? nativeFetch.bind(globalThis) : undefined);
     if (typeof request !== "function") throw new Error("HTTP fetch is not available");
     // Content-named paths may use the browser's cache across VM sessions.
     const response = await request(manifestUrl, { cache: cacheMode(manifestUrl) });

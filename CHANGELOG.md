@@ -4,6 +4,15 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Switched the xv6 profile browser page to the TypeScript HTTP block
+    provider. It resolves the deployed configuration and manifest URL, then
+    supplies the provider and sector capacity to the existing host block
+    connector. The deployment configuration keeps its content-addressed disk
+    reference for the image builder. In one headless Chrome run, the xv6
+    profile reached `XV6_PROFILE_BUILD_COMPLETE`; guest `time make` reported
+    1m 42.71s. The HTTP provider now binds native browser `fetch` correctly
+    when no custom fetch function is supplied.
+
 *   Added a parallel TypeScript split-HTTP block provider using the existing
     manifest format, a bounded clean-block cache, and session-local CoW
     clusters. A fresh-profile Chrome Alpine login used 10 blocks (5 MiB) on

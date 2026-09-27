@@ -350,16 +350,21 @@
             return result;
         }
 
-        async startFromUrl(configUrl, ramMiB = 0, commandLine = "", width = 0,
-                           height = 0, hasNetwork = false) {
-            const fetchRequest = this.options.fetch ?? globalThis.fetch;
+        static async loadResolvedConfig(configUrl, commandLine = "", fetchRequest = globalThis.fetch) {
             if (typeof fetchRequest !== "function")
                 throw new Error("Riscbox HTTP fetch is not available");
             const response = await fetchRequest(configUrl, { cache: "no-store" });
             if (response.status < 200 || response.status >= 300)
                 throw new Error(`configuration HTTP status ${response.status}`);
             const source = decoder.decode(await response.arrayBuffer());
-            const resolved = resolveConfig(parseConfig(source), configUrl, commandLine);
+            return resolveConfig(parseConfig(source), configUrl, commandLine);
+        }
+
+        async startFromUrl(configUrl, ramMiB = 0, commandLine = "", width = 0,
+                           height = 0, hasNetwork = false) {
+            const resolved = await Riscbox.loadResolvedConfig(
+                configUrl, commandLine, this.options.fetch ?? globalThis.fetch,
+            );
             this.configUrl = configUrl;
             return this.startResolved(resolved, ramMiB, width, height, hasNetwork);
         }

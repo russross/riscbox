@@ -199,7 +199,10 @@ JavaScript, then passes the result to Rust for validation and machine setup.
 `startResolved(config, ramMiB?, width?, height?, hasNetwork?)` accepts a host
 object directly. Its asset paths are used as given; callers supply absolute
 URLs when needed. `ramMiB` of zero uses the configuration's `memory_size`.
-Both methods load boot assets asynchronously, and the `onVmStarted` callback
+`Riscbox.loadResolvedConfig(url, commandLine?, fetch?)` fetches a deployed
+configuration with `no-store` and returns the resolved object, so an embedding
+page can replace a drive entry before calling `startResolved`.
+Both startup methods load boot assets asynchronously, and the `onVmStarted` callback
 reports when the machine is ready. The older synchronous `start()` method
 remains for integrations using the legacy Rust config fetch path.
 
@@ -325,7 +328,9 @@ disk for an extlinux configuration, then scans partitions for bootflows. Its
 build excludes network, PCI, USB, video, EFI, FAT, and ISO boot support. The
 xv6 profile also uses
 the builder's `--erofs` mode. Both use session-local writable `/tmp`, `/var`,
-and `/home` mounts. Other image definitions can continue distributing ext4. The
+and `/home` mounts. The xv6 profile browser page attaches its split disk through
+the TypeScript HTTP provider for local performance testing. Other image
+definitions can continue distributing ext4. The
 existing build scripts show the exact call order. Keep downloads and generated files
 under `build/`; the final ignored output belongs in `dist/`.
 

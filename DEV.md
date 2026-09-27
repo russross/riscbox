@@ -106,6 +106,11 @@ size).
 
 ### Bootloader and installation media
 
+ISO boot remains deferred until a concrete guest image requires it. The
+trimmed U-Boot build lacks ISO9660, El Torito, EFI, and FAT support, and the
+custom Linux kernel lacks ISO9660. Revisit the required firmware, boot image,
+filesystem, and storage path together against an actual ISO.
+
 Supporting installation media also needs a separate storage milestone. Extend
 the typed `DriveConfig` in `src/config.rs` and block-store construction in
 `src/browser_runtime.rs` to distinguish split HTTP manifests from plain image

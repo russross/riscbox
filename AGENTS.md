@@ -111,9 +111,11 @@ cover a single request when needed.
 
 The Risclet demo supplies S-mode U-Boot as the OpenSBI next stage. Its single
 EROFS disk contains `/boot/Image` and `/boot/extlinux/extlinux.conf` along with
-the root filesystem. The tracked U-Boot config enables EROFS and sets a boot
-command that reads extlinux from the whole VirtIO disk. U-Boot is external to
-the emulator and loads Linux from the disk. OpenSBI and U-Boot suppress normal
+the root filesystem. The tracked U-Boot config keeps VirtIO MMIO block,
+ext4 and EROFS readers, DOS and GPT partitions, and extlinux boot. Its boot
+command first reads extlinux from the whole VirtIO disk, then scans bootflows
+for partitioned disks. U-Boot is external to the emulator and loads Linux
+from the disk. OpenSBI and U-Boot suppress normal
 startup output, and U-Boot starts without a countdown. The device tree model
 identifies the platform as `riscbox`; QEMU names remain in functional board
 bindings and build targets. Linux uses UART early and the VirtIO console for

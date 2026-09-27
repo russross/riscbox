@@ -4,6 +4,12 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Trimmed pinned U-Boot 2025.01 to the Riscbox VirtIO MMIO block platform,
+    ext4 and EROFS readers, and extlinux boot. Whole-disk Risclet EROFS boot
+    remains the first path, with a bootflow scan for partitioned images.
+    Removed unused network, PCI, USB, video, EFI, FAT, and ISO support. The
+    raw binary is 339,848 bytes (186,778 bytes with gzip), down from roughly
+    950 KiB in the general build; ISO boot is deferred.
 *   Tuned the pinned OpenSBI 1.6 `fw_dynamic.bin` build for Riscbox's one-hart
     ACLINT, PLIC, UART, and syscon-reset platform. The raw firmware shrank
     from 273,472 to 135,616 bytes. Browser distributions now gzip it under

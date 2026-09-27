@@ -4,6 +4,11 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Changed Risclet to load the explicit custom Linux kernel through OpenSBI
+    without U-Boot. Its EROFS root no longer stores a kernel or extlinux
+    configuration; tmpfs supplies writable `/tmp`, `/var`, and `/home` layers.
+    Updated the guest MOTD instructions for Risclet and make.
+
 *   Kept Chrome/WASM network integration testing in the local development
     checks while limiting GitHub release validation to unit tests, type checks,
     Clippy, and builds. The network probe now starts after WebSocket carrier

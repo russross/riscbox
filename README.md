@@ -320,19 +320,14 @@ images/my-image/
 Use `images/bin/create-alpine-ext4` to create the filesystem,
 `images/bin/run-image-setup` to customize it under QEMU, and
 `images/bin/build-distribution` to produce the browser deployment. Risclet
-installs the custom Linux Image and `extlinux.conf` into its root filesystem,
-then converts the completed ext4 setup image to one EROFS disk. OpenSBI starts
-the pinned U-Boot build with VirtIO MMIO block and ext4/EROFS support. U-Boot
-loads Linux from that disk, which Linux then mounts at `/dev/vda`. OpenSBI and
-U-Boot boot quietly, and U-Boot has no startup countdown. It first checks the whole
-disk for an extlinux configuration, then scans partitions for bootflows. Its
-build excludes network, PCI, USB, video, EFI, FAT, and ISO boot support. The
-xv6 profile also uses
-the builder's `--erofs` mode. Both use session-local writable `/tmp`, `/var`,
+converts the completed ext4 setup image to one EROFS disk. Its configuration
+loads the custom Linux Image directly through OpenSBI; Linux mounts the disk
+read-only at `/dev/vda`. The xv6 profile also uses the builder's `--erofs`
+mode. Both use session-local writable `/tmp`, `/var`,
 and `/home` mounts. The xv6 profile browser page attaches its split disk through
 the TypeScript HTTP provider for local performance testing. Other image
-definitions can continue distributing ext4. The
-existing build scripts show the exact call order. Keep downloads and generated files
+definitions can continue distributing ext4. The existing build scripts show
+the exact call order. Keep downloads and generated files
 under `build/`; the final ignored output belongs in `dist/`.
 
 The distribution builder splits the disk into HTTP-loadable blocks, compresses

@@ -4,14 +4,6 @@ set -eu
 apk add --no-cache make python3 tzdata
 install -m 755 /mnt/setup/mount-ephemeral-writes /sbin/mount-ephemeral-writes
 sed -i 's|^/dev/vda  /         ext4   defaults,noatime|/dev/vda  /         erofs  ro,noatime|' /etc/fstab
-mkdir -p /boot/extlinux
-cp /mnt/setup/linux /boot/Image
-cat > /boot/extlinux/extlinux.conf <<'EOF'
-default risclet
-label risclet
-    linux /boot/Image
-    append root=/dev/vda ro rootfstype=erofs console=hvc0 quiet loglevel=0
-EOF
 ln -sf /usr/share/zoneinfo/America/Denver /etc/localtime
 printf 'America/Denver\n' > /etc/timezone
 
@@ -73,13 +65,12 @@ mkdir -p /home/student /usr/local/bin /etc/profile.d
 chown 1000:1000 /home/student
 
 cat > /etc/motd <<'EOF'
-Note: "grind" is not available on this VM, but "make" is.
 
 To test your code:
 
-    make                (run with testing)
     risclet run         (run without testing)
     risclet             (run the debugger)
+    make                (run with testing)
 
 EOF
 cat > /etc/profile.d/risclet.sh <<'EOF'

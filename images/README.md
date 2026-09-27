@@ -38,10 +38,8 @@ Risclet and xv6 profile finish setup on ext4, then mount it read-only and use
 ensure passwordless `sudo` can mount the ext4 image and run `mkfs.erofs` for
 these builds. Their guest roots mount read-only; tmpfs supplies `/tmp` and the
 upper layers for `/var` and `/home`. The Alpine definition still distributes
-ext4. Risclet uses the tracked U-Boot build with EROFS support, installs the
-custom Linux Image and `extlinux.conf` in `/boot` during setup, and boots the
-single EROFS disk as `/dev/vda`. The U-Boot build needs the RISC-V cross
-compiler, Bison, Flex, and standard host build tools. Split HTTP disks use
+ext4. Risclet loads the custom Linux Image through OpenSBI and mounts its
+single EROFS disk as `/dev/vda`. Split HTTP disks use
 512 KiB chunks by default.
 
 The shared helpers under `bin/` download and verify the pinned Alpine
@@ -108,7 +106,6 @@ compresses the next-stage payload with `gzip -9`, and writes
 content-addressed boot and disk assets. The payload name uses the uncompressed
 payload's hash with a `.gz` suffix. Set `BOOT_PAYLOAD` and
 `BOOT_PAYLOAD_NAME` to package a next stage other than the default Linux
-kernel; Risclet uses its pinned S-mode U-Boot build. The builder replaces
-`dist/riscbox.cfg` last. Remove
-superseded generations when appropriate
+kernel. Risclet uses that default. The builder replaces `dist/riscbox.cfg`
+last. Remove superseded generations when appropriate
 with `../../tools/image_deployment.py clean ./dist` from an image directory.

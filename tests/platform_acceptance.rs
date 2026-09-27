@@ -108,10 +108,10 @@ fn alpine_reaches_login_and_shuts_down() {
 }
 
 #[test]
-#[ignore = "requires built OpenSBI, U-Boot, and Risclet EROFS assets"]
-fn risclet_uboot_reaches_linux_userspace() {
+#[ignore = "requires built OpenSBI, Linux, and Risclet EROFS assets"]
+fn risclet_direct_kernel_reaches_linux_userspace() {
     let firmware = read(Path::new("opensbi/fw_dynamic.bin"));
-    let bootloader = read(Path::new("uboot/u-boot.bin"));
+    let kernel = read(Path::new("kernel/linux"));
     let disk = read(Path::new("images/risclet/build/rootfs.erofs"));
     let mut machine = Machine::new(MachineConfig {
         ram_size: 256 << 20,
@@ -128,11 +128,11 @@ fn risclet_uboot_reaches_linux_userspace() {
     machine
         .load_boot(BootImages {
             firmware: Some(&firmware),
-            kernel: Some(&bootloader),
+            kernel: Some(&kernel),
             initrd: None,
-            command_line: "",
+            command_line: "root=/dev/vda ro rootfstype=erofs console=hvc0 quiet loglevel=0",
         })
-        .expect("OpenSBI and U-Boot images");
+        .expect("OpenSBI and Linux images");
 
     // The image's init script attempts a 9p mount after Linux mounts EROFS.
     // No 9p backend is installed here, so that error marks userspace startup.
@@ -158,7 +158,7 @@ fn risclet_uboot_reaches_linux_userspace() {
         assert!(!text.contains("Kernel panic"), "Risclet panic\n{text}");
     }
     panic!(
-        "Risclet U-Boot boot timed out\n{}",
+        "Risclet direct kernel boot timed out\n{}",
         String::from_utf8_lossy(&transcript)
     );
 }

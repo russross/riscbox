@@ -67,7 +67,7 @@ Repository map and terminology
 *   `opensbi/` and `uboot/` own pinned firmware and bootloader builds. Each
     tracks its Makefile, version, and config; downloads, sources, and outputs
     are ignored. The shared image helpers use `opensbi/fw_dynamic.bin`, and
-    Risclet uses `uboot/u-boot.bin` as OpenSBI's S-mode next stage. OpenSBI's
+    Risclet uses `kernel/linux` as OpenSBI's S-mode next stage. OpenSBI's
     `defconfig` selects the one-hart Riscbox SBI services and FDT drivers.
 *   `c/` is a read-only historical TinyEMU-derived archive. It is not an
     implementation source, compatibility target, build dependency, parity
@@ -148,14 +148,9 @@ RAM mappings. Pending 9p work is retired by generation; pending HTTP requests
 are retired without reusing request IDs. Console and framebuffer host callbacks
 receive reset notifications. Destroy releases the machine and 9p sessions.
 
-The Risclet demo supplies S-mode U-Boot as the OpenSBI next stage. Its single
-EROFS disk contains `/boot/Image` and `/boot/extlinux/extlinux.conf` along with
-the root filesystem. The tracked U-Boot config keeps VirtIO MMIO block,
-ext4 and EROFS readers, DOS and GPT partitions, and extlinux boot. Its boot
-command first reads extlinux from the whole VirtIO disk, then scans bootflows
-for partitioned disks. U-Boot is external to the emulator and loads Linux
-from the disk. OpenSBI and U-Boot suppress normal
-startup output, and U-Boot starts without a countdown. The device tree model
+The Risclet demo loads the custom Linux kernel directly through OpenSBI. Its
+single EROFS disk is the read-only root filesystem; tmpfs supplies `/tmp` and
+the writable overlay layers for `/var` and `/home`. The device tree model
 identifies the platform as `riscbox`; QEMU names remain in functional board
 bindings and build targets. Linux uses UART early and the VirtIO console for
 login.

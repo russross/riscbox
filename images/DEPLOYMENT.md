@@ -12,15 +12,13 @@ Files
     this file.
 *   `fw_dynamic.bin-HASH.gz` is gzip-compressed OpenSBI firmware.
     `linux-HASH.gz` is the gzip-compressed guest kernel for direct Linux boots.
-    The Risclet image uses
-    `u-boot.bin-HASH.gz` as its next stage and stores Linux on disk. Payload
+    The Risclet image also loads `linux-HASH.gz` directly. Payload
     hashes identify the uncompressed images.
 *   `drive-HASH/blk.txt` describes the HTTP disk; its
     `blkNNNNNNNNN.bin` files are 512 KiB blocks by default. The drive hash
     identifies source content and block size, so assets with different layouts have
     distinct URLs. Risclet and xv6 profile distribute single EROFS roots;
-    Alpine distributes ext4. Risclet's EROFS root includes its kernel and
-    `extlinux.conf` for U-Boot.
+    Alpine distributes ext4.
 *   `p9/` contains the generated browser-backed 9p server modules and
     declarations.
 

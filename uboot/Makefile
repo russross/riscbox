@@ -24,8 +24,9 @@ $(BUILT): $(CONFIGURED)
 	test -s $(IMAGE)
 	touch $@
 
-$(CONFIGURED): config $(SOURCE_READY)
+$(CONFIGURED): config default.env $(SOURCE_READY)
 	mkdir -p $(BUILD_DIR)
+	install -m 644 default.env $(SOURCE_DIR)/board/emulation/qemu-riscv/riscbox.env
 	install -m 644 config $@
 	$(MAKE) -C $(SOURCE_DIR) O=$(abspath $(BUILD_DIR)) \
 		CROSS_COMPILE=$(CROSS_COMPILE) olddefconfig

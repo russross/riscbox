@@ -24,6 +24,12 @@ fn platform_tree_has_standard_layout_and_required_nodes() {
     assert_eq!(be32(&tree, 20), 17);
     assert_eq!(be32(&tree, 24), 16);
     assert_eq!(&tree[40..56], &[0; 16]);
+    assert!(tree.windows(8).any(|window| window == b"riscbox\0"));
+    assert!(
+        !tree
+            .windows(b"riscv-virtio,riscbox\0".len())
+            .any(|window| window == b"riscv-virtio,riscbox\0")
+    );
     for text in [
         "cpu@0",
         "memory@80000000",

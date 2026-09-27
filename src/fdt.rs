@@ -161,7 +161,7 @@ pub fn build(config: FdtConfig<'_>) -> Vec<u8> {
     fdt.property_u32("#address-cells", 2);
     fdt.property_u32("#size-cells", 2);
     fdt.property_string("compatible", "riscv-virtio");
-    fdt.property_string("model", "riscv-virtio,riscbox");
+    fdt.property_string("model", "riscbox");
 
     add_cpu_nodes(&mut fdt);
 

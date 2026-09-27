@@ -4,10 +4,12 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Suppressed OpenSBI and U-Boot startup messages, removed the U-Boot boot
+    countdown, and identified the Riscbox platform by its device tree model.
 *   Made the Risclet demo disk self-booting: pinned upstream S-mode U-Boot,
     built with EROFS support, loads the custom Linux Image from the same
-    read-only EROFS filesystem that Linux mounts as root. Early boot output
-    appears on UART.
+    read-only EROFS filesystem that Linux mounts as root. Linux's early console
+    uses UART.
 *   Added tracked Makefiles, versions, and configurations for OpenSBI and
     U-Boot. Their pinned source archives, trees, and build products are
     fetched and built lazily. Image setup and deployment use the built OpenSBI

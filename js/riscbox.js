@@ -200,7 +200,7 @@
                 nextReport: performance.now() + 1_000,
                 quanta: 0, cpuRuns: 0, cycles: 0, activeMs: 0,
                 timerReprogrammingExits: 0, wfiQuanta: 0, wfiMs: 0,
-                catchUpWaits: 0, catchUpMs: 0,
+                carriedGuestMs: 0,
                 timerIntervals: [],
                 intervalNoCatchUpSkew: 0,
                 sessionCatchUpSkews: [],
@@ -372,17 +372,13 @@
         requestReboot() { return this.control("request_reboot"); }
 
         scheduleWakeup(delay) {
-            // A guest-clock lead delays the next browser task until host time catches up.
+            // The machine preserves the requested wake delay between quanta.
             if (this.quantumRunning)
                 return;
             const now = Date.now();
             const adjusted = this.exports.riscbox_wake_delay_ms(
                 now >>> 0, Math.floor(now / 0x1_0000_0000) >>> 0, delay,
             );
-            if (this.timing && adjusted > delay) {
-                this.timing.catchUpWaits++;
-                this.timing.catchUpMs += adjusted - delay;
-            }
             this.cancelWakeup();
             const token = this.wakeupToken;
             if (adjusted === 0) {
@@ -436,8 +432,7 @@
                 cpuRunsPerQuantum, timerReprogrammingExits: timing.timerReprogrammingExits,
                 medianTimerIntervalMs: medianTicks / GUEST_TICKS_PER_MILLISECOND,
                 wfiQuanta: timing.wfiQuanta, wfiMs: timing.wfiMs,
-                catchUpWaits: timing.catchUpWaits, catchUpMs: timing.catchUpMs,
-                adaptiveGuestClockSkewPercent: this.exports.riscbox_timing_stat(6) * 100,
+                carriedGuestMs: timing.carriedGuestMs,
                 intervalNoCatchUpSkewPercent: timing.intervalNoCatchUpSkew * 100,
                 sessionPotentialCatchUpSkewP50Percent: skewPercentile(0.50),
                 sessionPotentialCatchUpSkewP90Percent: skewPercentile(0.90),
@@ -446,7 +441,7 @@
             timing.nextReport = now + 5_000;
             timing.quanta = timing.cpuRuns = timing.cycles = timing.activeMs = 0;
             timing.timerReprogrammingExits = timing.wfiQuanta = timing.wfiMs = 0;
-            timing.catchUpWaits = timing.catchUpMs = 0;
+            timing.carriedGuestMs = 0;
             timing.timerIntervals = [];
             timing.intervalNoCatchUpSkew = 0;
         }
@@ -461,12 +456,8 @@
             );
             if (begin === QUANTUM_START_VM_INACTIVE)
                 return;
-            if (begin < QUANTUM_START_VM_INACTIVE)
+            if (begin !== 0)
                 throw new Error(`Riscbox WASM could not begin a quantum: ${begin}`);
-            if (begin > 0) {
-                this.scheduleWakeup(begin);
-                return;
-            }
             this.cancelWakeup();
             if (this.timing && this.wfiStartedAt !== undefined) {
                 this.timing.wfiMs += performance.now() - this.wfiStartedAt;
@@ -516,6 +507,8 @@
                     timing.cpuRuns += this.exports.riscbox_timing_stat(1);
                     timing.timerReprogrammingExits += this.exports.riscbox_timing_stat(2);
                     timing.cycles += this.exports.riscbox_timing_stat(4);
+                    timing.carriedGuestMs += this.exports.riscbox_timing_stat(6)
+                        / GUEST_TICKS_PER_MILLISECOND;
                     const interval = this.exports.riscbox_timing_stat(3);
                     if (interval > 0 && timing.timerIntervals.length < 10_000)
                         timing.timerIntervals.push(interval);

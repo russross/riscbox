@@ -285,7 +285,6 @@ pub extern "C" fn riscbox_quantum_begin(host_epoch_ms_low: u32, host_epoch_ms_hi
             .begin_quantum(u64_from_parts(host_epoch_ms_low, host_epoch_ms_high))
         {
             QuantumStart::Ready => 0,
-            QuantumStart::CatchUpDelayMs(delay) => i32::try_from(delay).unwrap_or(i32::MAX),
             QuantumStart::VmInactive => -1,
             QuantumStart::AlreadyActive => -2,
         }

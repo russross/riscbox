@@ -34,11 +34,12 @@ fn c_core_exits_after_the_mmio_store_retires_and_resumes_the_unused_budget() {
     core.register_device(0x1000_0000, 0x1000, 4)
         .expect("device aperture");
     let firmware = core.ram_range(0x1000, 16, true).expect("firmware");
-    for (bytes, instruction) in
-        firmware
-            .chunks_exact_mut(4)
-            .zip([0x1000_0137_u32, 0x02a0_0093, 0x0011_2023, 0x1050_0073])
-    {
+    for (bytes, instruction) in firmware.as_chunks_mut::<4>().0.iter_mut().zip([
+        0x1000_0137_u32,
+        0x02a0_0093,
+        0x0011_2023,
+        0x1050_0073,
+    ]) {
         bytes.copy_from_slice(&instruction.to_le_bytes());
     }
     let mut device = Device {
@@ -61,7 +62,9 @@ fn c_core_reports_code_block_overrun_to_the_driver() {
     core.register_ram(0, 0x3000, 0).expect("instruction RAM");
     core.ram_range(0x1000, 0x1000, true)
         .expect("code page")
-        .chunks_exact_mut(2)
+        .as_chunks_mut::<2>()
+        .0
+        .iter_mut()
         .for_each(|bytes| bytes.copy_from_slice(&0x0001_u16.to_le_bytes()));
     let result = core.run_cpu(1);
     assert!(result.consumed_cycles > 1);
@@ -88,11 +91,12 @@ fn c_core_routes_device_accesses_within_one_cpu_run() {
     core.register_device(0x1000_0000, 0x1000, 4)
         .expect("device aperture");
     let bytes = core.ram_range(0x1000, 16, true).expect("instruction RAM");
-    for (chunk, instruction) in
-        bytes
-            .chunks_exact_mut(4)
-            .zip([0x1000_0137_u32, 0x0001_2083, 0x0011_2223, 0x1050_0073])
-    {
+    for (chunk, instruction) in bytes.as_chunks_mut::<4>().0.iter_mut().zip([
+        0x1000_0137_u32,
+        0x0001_2083,
+        0x0011_2223,
+        0x1050_0073,
+    ]) {
         chunk.copy_from_slice(&instruction.to_le_bytes());
     }
     let mut device = Device::default();

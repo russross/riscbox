@@ -144,19 +144,18 @@ login.
 Rust sizes each execution quantum from a measured emulated cycle rate and a
 target duration, twenty milliseconds by default. Each quantum locks its rate
 and maps consumed cycles to 10 MHz guest timer ticks using integer arithmetic.
-An adaptive guest-clock skew uses the exponentially decayed P99 threshold from
-runnable quanta. Its ten-second half-life is shared with the cycle-rate estimate.
-The skew slows the within-quantum cycle-to-tick mapping without reducing its
-cycle budget. The next quantum starts from host epoch time, subject to the
-guest-clock floor.
+Each quantum retains its cycle budget and targets a guest finish time of the
+later of host time plus the configured duration and the previous guest time
+plus that duration. It starts at the later current clock and advances at the
+usual cycle-to-tick rate. Cycle-rate estimates have a
+ten-second half-life; timing diagnostics retain rate-variance samples.
 Timer writes exit the C loop so Rust can size the next CPU run to the earliest ACLINT,
 supervisor, or RTC deadline. C also exits after MMIO requests for 9p or HTTP
 block work; Rust releases the exclusive CPU-run borrow before JavaScript
 dispatches actions. JavaScript resumes the same quantum after resident 9p
 replies and wakes a WFI sleeping guest on later completions. JavaScript measures
 the complete quantum with a monotonic clock and supplies its elapsed time to
-Rust for calibration. A guest-clock lead delays the next quantum until host
-epoch time catches up. WFI sleeping guests wake at the next timer deadline or
+Rust for calibration. WFI sleeping guests wake at the next timer deadline or
 a 100-millisecond fallback; asynchronous completions can replace that wakeup.
 Runnable quanta continue through `MessageChannel` tasks to avoid browser
 clamping of repeated zero-delay timers; delayed wakeups still use `setTimeout`.
@@ -195,8 +194,8 @@ Timing and execution lexicon
 *   **Timer reprogramming** changes a future deadline; a **due timer** sets an
     interrupt pending. **WFI sleep** means the guest CPU waits for an interrupt.
     **VM inactive** refers only to the VM lifecycle. A **guest-clock lead** is
-    the last presented guest time ahead of host epoch time; a **catch-up wait**
-    delays the next quantum until host time reaches it.
+    the last presented guest time ahead of host epoch time; the next quantum
+    carries that lead into its guest-time window.
 
 VirtIO 9p is a generic concurrent asynchronous transport. Rust validates
 descriptors and message envelopes but does not implement filesystem semantics.

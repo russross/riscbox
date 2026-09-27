@@ -418,10 +418,10 @@ test("configured quantum duration and diagnostics are passed to WASM", () => {
     assert.throws(() => new Riscbox(fake.exports, { timesliceMs: 5 }), /renamed to targetQuantumMs/);
 });
 
-test("timing diagnostics report skew thresholds from zero-skew catch-up samples", async () => {
+test("timing diagnostics report carried guest time and rate variance", async () => {
     const fake = fakeModule();
     fake.exports.riscbox_quantum_run = () => 0;
-    fake.exports.riscbox_timing_stat = (kind) => kind === 5 ? 0.25 : kind === 6 ? 0.20 : 0;
+    fake.exports.riscbox_timing_stat = (kind) => kind === 5 ? 0.25 : kind === 6 ? 200 : 0;
     const runtime = new Riscbox(fake.exports, { debugTiming: true });
     runtime.scheduleWakeup = () => {};
     await runtime.runQuantum();
@@ -436,7 +436,7 @@ test("timing diagnostics report skew thresholds from zero-skew catch-up samples"
     } finally {
         console.log = originalLog;
     }
-    assert.equal(report.adaptiveGuestClockSkewPercent, 20);
+    assert.equal(report.carriedGuestMs, 0.02);
     assert.equal(report.intervalNoCatchUpSkewPercent, 25);
     assert.equal(report.sessionPotentialCatchUpSkewP50Percent, 20);
     assert.equal(report.sessionPotentialCatchUpSkewP90Percent, 30);
@@ -458,19 +458,6 @@ test("WASM chooses the scheduled wake delay", () => {
     } finally {
         global.setTimeout = originalTimeout;
     }
-});
-
-test("a catch-up wait does not start a CPU run", async () => {
-    const fake = fakeModule();
-    let calls = 0;
-    fake.exports.riscbox_quantum_begin = () => 5;
-    fake.exports.riscbox_quantum_run = () => { calls++; return 3; };
-    const runtime = new Riscbox(fake.exports);
-    let scheduled;
-    runtime.scheduleWakeup = (delay) => { scheduled = delay; };
-    await runtime.runQuantum();
-    assert.equal(calls, 0);
-    assert.equal(scheduled, 5);
 });
 
 test("an already active quantum reports an error", async () => {

@@ -183,7 +183,7 @@ fn complete_quantum_resumes_after_host_action_and_updates_rate() {
     assert_eq!(runtime.finish_quantum(2.0, 1_000_002).expect("finish"), 0);
     assert!(runtime.timing_stat(0) > 0.0);
     assert!(runtime.timing_stat(1) >= 1.0);
-    assert_eq!(runtime.begin_quantum(1_000_002), QuantumStart::Ready);
+    assert_eq!(runtime.begin_quantum(1_000_000), QuantumStart::Ready);
     runtime.abort_quantum();
 }
 

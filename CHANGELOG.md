@@ -4,6 +4,10 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Removed guest-clock catch-up waits and adaptive skew from execution.
+    Quanta keep their cycle budgets and start from the later of host time and
+    the previous guest time. Timing diagnostics retain variance
+    samples and report carried guest time.
 *   Added automatic GitHub releases when the workspace version increases.
     Both Rust crates inherit one version. A single gzip level 9 archive holds
     deployable WASM, browser modules, the pinned Linux, OpenSBI, and U-Boot

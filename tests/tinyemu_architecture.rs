@@ -21,7 +21,7 @@ fn put(core: &mut Core, address: u64, instructions: &[u32]) {
     let bytes = core
         .ram_range(address, instructions.len() * 4, true)
         .expect("instruction range should be guest RAM");
-    for (word, instruction) in bytes.chunks_exact_mut(4).zip(instructions) {
+    for (word, instruction) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(instructions) {
         word.copy_from_slice(&instruction.to_le_bytes());
     }
 }

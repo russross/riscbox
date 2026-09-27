@@ -119,23 +119,19 @@ await runtime.startFromUrl(new URL("./riscbox.cfg", location.href).href, 256);
 The adapter schedules execution automatically. Runnable guests request an
 immediate next execution quantum through a browser task; WFI sleeping guests
 wake at the nearest guest timer deadline or after at most 100 milliseconds.
-A completed asynchronous device request can wake a WFI sleeping guest when
-host time has caught up with guest time. Rust calibrates the quantum cycle
+A completed asynchronous device request can wake a WFI sleeping guest. Rust calibrates the quantum cycle
 budget from complete quanta timed by JavaScript. Set `targetQuantumMs` in the
 instantiate options to choose a nominal duration greater than zero and at most
 100 milliseconds (default 20); this bounds latency for host input and
-completed I/O. Rust adapts the within-quantum guest-clock skew from a decayed
-P99 of all runnable quantum samples, including zero-skew samples. It uses the
-same ten-second half-life as the
-cycle-rate estimate. The cycle budget stays based on the target duration; the
-next quantum starts from host time and may jump forward. Set `debugTiming: true`
+completed I/O. The cycle-rate estimate uses a ten-second half-life. The cycle
+budget stays based on the target duration; each quantum's guest-time window
+extends by any guest-clock lead from the previous quantum. Guest time remains
+monotonic without delaying runnable quanta. Set `debugTiming: true`
 to log estimated and active emulated
-Mcycles/s, CPU runs per quantum, timer intervals, WFI sleep time, and catch-up
-waits. The log includes the skew used by the last completed quantum. The other
-skew fields report the maximum needed to avoid a zero-skew catch-up
-wait in the latest interval and the 50th, 90th, and 99th percentiles across
-all such potential waits since boot. Quanta requiring no skew are excluded from
-those percentiles. Integrations can also provide
+Mcycles/s, CPU runs per quantum, timer intervals, WFI sleep time, and carried
+guest time. The variance fields retain the latest interval maximum and the
+50th, 90th, and 99th percentiles across runnable quanta since boot.
+Integrations can also provide
 `networkWrite`, `framebufferRefresh`, and `p9Servers`. Host input methods are
 `consoleInput(bytes)`, `consoleResize(columns, rows)`, `keyEvent()`,
 `pointerEvent()`, `wheelEvent()`, `networkInput()`, and `networkCarrier()`.

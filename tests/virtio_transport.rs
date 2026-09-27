@@ -160,7 +160,7 @@ fn fragmented_chain_copies_and_publishes_used_entry() {
     descriptor(&mut memory, 3, RAM + 0x4fff, 3, 1, 4);
     descriptor(&mut memory, 4, RAM + 0x6000, 5, 2, 0);
     write(&mut memory, RAM + 0x4000, AccessWidth::Word, 0x0063_6261);
-    for (offset, byte) in [b'd', b'e', b'f'].into_iter().enumerate() {
+    for (offset, byte) in b"def".iter().copied().enumerate() {
         write(
             &mut memory,
             RAM + 0x4fff + offset as u64,

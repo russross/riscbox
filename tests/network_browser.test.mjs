@@ -191,6 +191,7 @@ test("real WASM exchanges Ethernet frames through Chrome and a local origin", as
         "--headless=new", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage",
         `--user-data-dir=${profile}`, `http://127.0.0.1:${port}/test.html`,
     ], { stdio: ["ignore", "pipe", "pipe"] });
+    const chromeClosed = new Promise((resolveClose) => chrome.once("close", resolveClose));
     let chromeError = "";
     chrome.stderr.on("data", (data) => {
         chromeError += data.toString();
@@ -214,13 +215,13 @@ test("real WASM exchanges Ethernet frames through Chrome and a local origin", as
         assert.equal(transmitted, true);
     } finally {
         globalThis.clearTimeout(timeout);
-        if (chrome.exitCode === null) {
+        // Wait for Chrome's pipes to close before removing its profile files.
+        if (chrome.exitCode === null && chrome.signalCode === null)
             chrome.kill("SIGTERM");
-            await new Promise((resolveExit) => chrome.once("exit", resolveExit));
-        }
+        await chromeClosed;
         for (const connection of connections)
             connection.destroy();
         await new Promise((resolveClose) => server.close(resolveClose));
-        await rm(temporary, { recursive: true, force: true });
+        await rm(temporary, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     }
 });

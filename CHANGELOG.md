@@ -4,6 +4,10 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Stabilized the Chrome network integration test during release builds by
+    waiting for process closure and retrying temporary-profile cleanup while
+    Chrome child processes finish writing.
+
 *   Switched the xv6 profile browser page to the TypeScript HTTP block
     provider. It resolves the deployed configuration and manifest URL, then
     supplies the provider and sector capacity to the existing host block

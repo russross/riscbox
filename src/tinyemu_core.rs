@@ -44,6 +44,7 @@ mod ffi {
     unsafe extern "C" {
         fn tinyemu_core_create() -> *mut CoreState;
         fn tinyemu_core_destroy(core: *mut CoreState);
+        fn tinyemu_core_reset_cpu(core: *mut CoreState) -> i32;
         fn tinyemu_core_register_ram(core: *mut CoreState, base: u64, len: u64, flags: i32) -> i32;
         fn tinyemu_core_register_device(
             core: *mut CoreState,
@@ -167,6 +168,13 @@ mod ffi {
             // SAFETY: The C constructor returns an owned pointer or null.
             let state = NonNull::new(unsafe { tinyemu_core_create() })?;
             Some(Self { state })
+        }
+
+        /// Restarts the CPU while preserving registered RAM and MMIO mappings.
+        pub fn reset_cpu(&mut self) -> bool {
+            // SAFETY: The replacement CPU is installed only between interpreter
+            // calls. C keeps the live memory map and restores its time source.
+            unsafe { tinyemu_core_reset_cpu(self.state.as_ptr()) == 0 }
         }
 
         pub fn register_ram(&mut self, base: u64, len: u64, flags: i32) -> Option<usize> {

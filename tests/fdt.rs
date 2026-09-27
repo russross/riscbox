@@ -45,6 +45,8 @@ fn platform_tree_has_standard_layout_and_required_nodes() {
         "framebuffer@4100000",
         "console=ttyS0",
         "rng-seed",
+        "syscon-reboot",
+        "syscon-poweroff",
     ] {
         assert!(
             tree.windows(text.len())

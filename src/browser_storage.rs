@@ -82,6 +82,11 @@ impl HttpQueue {
         !self.outgoing.is_empty()
     }
 
+    pub fn clear(&mut self) {
+        self.pending.clear();
+        self.outgoing.clear();
+    }
+
     /// Completes a pending request and returns its URL.
     ///
     /// # Errors
@@ -170,6 +175,11 @@ impl HttpBlockStore {
     #[must_use]
     pub fn has_outgoing(&self) -> bool {
         self.queue.has_outgoing()
+    }
+
+    pub fn reset_requests(&mut self) {
+        self.pending.clear();
+        self.queue.clear();
     }
 
     /// Accepts one block response and makes it available to subsequent reads.
@@ -325,6 +335,10 @@ impl HttpBlockStore {
 impl BlockBackend for HttpBlockStore {
     fn capacity_sectors(&self) -> u64 {
         self.capacity_sectors()
+    }
+
+    fn reset(&mut self) {
+        self.reset_requests();
     }
 
     fn read(&mut self, sector: u64, data: &mut [u8]) -> Result<(), DeviceError> {

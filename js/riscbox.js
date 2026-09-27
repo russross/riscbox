@@ -10,6 +10,10 @@
     const QUANTUM_HOST_SERVICE_REQUIRED = 2;
     const QUANTUM_VM_INACTIVE = 3;
     const QUANTUM_START_VM_INACTIVE = -1;
+    const LIFECYCLE_CAUSES = [
+        "guest-poweroff", "guest-reboot", "host-halt", "host-reset",
+        "host-boot", "guest-failure",
+    ];
 
     class Riscbox {
         constructor(exports, options = {}) {
@@ -52,6 +56,7 @@
             this.wakeupToken = 0;
             this.wakeupChannel = null;
             this.started = false;
+            this.pendingControls = [];
         }
 
         static hostImports(options = {}) {
@@ -146,6 +151,42 @@
             this.drainActions();
             return result;
         }
+
+        control(name) {
+            return new Promise((resolve, reject) => {
+                const run = () => {
+                    try {
+                        const command = this.exports[`riscbox_${name}`];
+                        if (typeof command !== "function" || command() !== 0)
+                            throw new Error(`Riscbox could not ${name} the VM`);
+                        this.drainActions();
+                        if (name === "reset" || name === "request_shutdown" ||
+                            name === "request_reboot") this.scheduleWakeup(0);
+                        if (name === "destroy") {
+                            this.cancelWakeup();
+                            for (const [endpoint, current] of this.p9Sessions) {
+                                this.retireP9(endpoint, current.generation);
+                                current.session.close();
+                            }
+                            this.p9Sessions.clear();
+                            this.options.onVmDestroyed?.();
+                        }
+                        resolve();
+                    } catch (error) {
+                        reject(error);
+                    }
+                };
+                if (this.quantumRunning) this.pendingControls.push(run);
+                else run();
+            });
+        }
+
+        halt() { return this.control("halt"); }
+        reset() { return this.control("reset"); }
+        boot() { return this.control("reset"); }
+        destroy() { return this.control("destroy"); }
+        requestShutdown() { return this.control("request_shutdown"); }
+        requestReboot() { return this.control("request_reboot"); }
 
         scheduleWakeup(delay) {
             // A guest-clock lead delays the next browser task until host time catches up.
@@ -312,10 +353,11 @@
                 if (!completed)
                     this.exports.riscbox_quantum_abort();
                 this.quantumRunning = false;
+                for (const control of this.pendingControls.splice(0)) control();
             }
             if (wfiSleep && this.timing)
                 this.wfiStartedAt = performance.now();
-            if (!vmInactive)
+            if (!vmInactive && this.started)
                 this.scheduleWakeup(nextDelay);
         }
 
@@ -454,6 +496,21 @@
                         this.p9Sessions.delete(endpoint);
                         current.session.close();
                     }
+                } else if (kind === 10) {
+                    const cause = LIFECYCLE_CAUSES[value];
+                    if (cause === undefined)
+                        throw new Error(`invalid VM halt cause ${value}`);
+                    this.started = false;
+                    this.cancelWakeup();
+                    this.options.onVmHalted?.(cause);
+                } else if (kind === 11) {
+                    const cause = LIFECYCLE_CAUSES[value];
+                    if (cause === undefined)
+                        throw new Error(`invalid VM reset cause ${value}`);
+                    this.started = true;
+                    this.options.consoleReset?.();
+                    this.options.framebufferClear?.();
+                    this.options.onVmReset?.(cause);
                 } else {
                     throw new Error(`unknown Riscbox host action ${kind}`);
                 }
@@ -473,7 +530,8 @@
             if (result !== 0)
                 throw new Error(`Riscbox rejected 9p completion ${requestId}`);
             this.drainActions();
-            this.scheduleWakeup(0);
+            if (this.started)
+                this.scheduleWakeup(0);
         }
 
         retireP9(endpoint, generation) {

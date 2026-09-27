@@ -20,6 +20,7 @@ typedef struct {
 
 TinyemuCore *tinyemu_core_create(void);
 void tinyemu_core_destroy(TinyemuCore *core);
+int tinyemu_core_reset_cpu(TinyemuCore *core);
 int tinyemu_core_register_ram(TinyemuCore *core, uint64_t base, uint64_t len,
                               int flags);
 int tinyemu_core_register_device(TinyemuCore *core, uint64_t base, uint64_t len,

@@ -106,8 +106,19 @@ deployments gzip firmware and the next-stage payload while naming them from
 their uncompressed hashes. HTTP
 disk writes are session-local. The browser adapter uses `force-cache` for
 content-hash-named boot and disk assets and `no-store` for the configuration.
-HTTP block stores start with a 64 MiB in-memory cache limit that grows to
+HTTP block stores start with a 16 MiB in-memory cache limit that grows to
 cover a single request when needed.
+
+The host can deliver soft shutdown and reboot input events, force an immediate
+halt or reset, boot a halted machine, and destroy a halted machine. The prepared
+Alpine and Risclet guests use BusyBox `acpid` to turn the two input events into
+orderly userspace actions. Guest poweroff halts without teardown; guest reboot
+uses the QEMU `virt` syscon reset value. In-place reset restarts the C CPU,
+reloads boot images, and clears platform and VirtIO interface state while
+retaining host backends, 9p servers, HTTP clean cache and CoW data, and guest
+RAM mappings. Pending 9p work is retired by generation; pending HTTP requests
+are retired without reusing request IDs. Console and framebuffer host callbacks
+receive reset notifications. Destroy releases the machine and 9p sessions.
 
 The Risclet demo supplies S-mode U-Boot as the OpenSBI next stage. Its single
 EROFS disk contains `/boot/Image` and `/boot/extlinux/extlinux.conf` along with

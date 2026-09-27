@@ -56,6 +56,36 @@ test("adapter copies host input into WASM memory and releases it", () => {
     assert.deepEqual(fake.calls[1], ["free", 1024, 3]);
 });
 
+test("lifecycle controls forward to WASM and report guest and host causes", async () => {
+    const fake = fakeModule();
+    const actions = [10, 0, 11, 0];
+    let current = 0;
+    fake.exports.riscbox_next_action = () => { current = actions.shift() ?? 0; return current; };
+    fake.exports.riscbox_action_value = () => current === 10 ? 0 : 3;
+    for (const name of ["halt", "reset", "destroy"]) {
+        fake.exports[`riscbox_${name}`] = () => {
+            fake.calls.push([name]);
+            return 0;
+        };
+    }
+    const events = [];
+    const runtime = new Riscbox(fake.exports, {
+        onVmHalted: (cause) => events.push(["halted", cause]),
+        onVmReset: (cause) => events.push(["reset", cause]),
+        consoleReset: () => events.push(["terminal reset"]),
+        framebufferClear: () => events.push(["screen clear"]),
+    });
+    await runtime.halt();
+    await runtime.reset();
+    await runtime.destroy();
+    assert.deepEqual(fake.calls.filter(([name]) => ["halt", "reset", "destroy"].includes(name)),
+        [["halt"], ["reset"], ["destroy"]]);
+    assert.deepEqual(events, [
+        ["halted", "guest-poweroff"], ["terminal reset"], ["screen clear"],
+        ["reset", "host-reset"],
+    ]);
+});
+
 test("HTTP actions complete requests and continue draining startup", async () => {
     const fake = fakeModule();
     const url = Buffer.from("https://host/vm.cfg");

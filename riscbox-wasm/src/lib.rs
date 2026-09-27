@@ -65,6 +65,31 @@ pub extern "C" fn riscbox_start(
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn riscbox_halt() -> i32 {
+    browser_abi::riscbox_halt()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn riscbox_reset() -> i32 {
+    browser_abi::riscbox_reset()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn riscbox_destroy() -> i32 {
+    browser_abi::riscbox_destroy()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn riscbox_request_shutdown() -> i32 {
+    browser_abi::riscbox_request_shutdown()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn riscbox_request_reboot() -> i32 {
+    browser_abi::riscbox_request_reboot()
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn riscbox_console_input(address: u32, length: u32) -> u32 {
     browser_abi::riscbox_console_input(address, length)
 }

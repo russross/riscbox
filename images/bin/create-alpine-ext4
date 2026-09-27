@@ -68,7 +68,8 @@ trap cleanup EXIT HUP INT TERM
 
 tar -xpf "$archive" -C "$rootfs_dir"
 mkdir -p "$rootfs_dir/dev" "$rootfs_dir/etc/init.d" "$rootfs_dir/mnt/setup" \
-    "$rootfs_dir/proc" "$rootfs_dir/run" "$rootfs_dir/sys" "$rootfs_dir/tmp"
+    "$rootfs_dir/proc" "$rootfs_dir/run" "$rootfs_dir/sys" "$rootfs_dir/tmp" \
+    "$rootfs_dir/etc/acpi"
 chmod 1777 "$rootfs_dir/tmp"
 
 cat > "$rootfs_dir/etc/apk/repositories" <<EOF
@@ -98,8 +99,24 @@ if ip link show eth0 >/dev/null 2>&1; then
     ip link set eth0 up
     udhcpc -q -b -i eth0
 fi
+acpid
 EOF
 chmod 755 "$rootfs_dir/etc/init.d/rcS"
+
+cat > "$rootfs_dir/etc/acpi.map" <<'EOF'
+EV_KEY 0x01 KEY_POWER 116 1 shutdown
+EV_KEY 0x01 KEY_RESTART 408 1 reboot
+EOF
+
+cat > "$rootfs_dir/etc/acpi/shutdown" <<'EOF'
+#!/bin/sh
+exec /sbin/poweroff
+EOF
+cat > "$rootfs_dir/etc/acpi/reboot" <<'EOF'
+#!/bin/sh
+exec /sbin/reboot
+EOF
+chmod 755 "$rootfs_dir/etc/acpi/shutdown" "$rootfs_dir/etc/acpi/reboot"
 
 cat > "$rootfs_dir/etc/init.d/getty-console" <<'EOF'
 #!/bin/sh

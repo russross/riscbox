@@ -15,12 +15,14 @@ pub const MIP_MEIP: u32 = 1 << 11;
 
 pub const TEST_FINISHER_FAIL: u16 = 0x3333;
 pub const TEST_FINISHER_PASS: u16 = 0x5555;
+pub const TEST_FINISHER_RESET: u16 = 0x7777;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum FinishStatus {
     #[default]
     Running,
     Passed,
+    Reset,
     Failed(u16),
 }
 
@@ -37,6 +39,7 @@ impl Finisher {
         let bytes = value.to_le_bytes();
         self.status = match u16::from_le_bytes([bytes[0], bytes[1]]) {
             TEST_FINISHER_PASS => FinishStatus::Passed,
+            TEST_FINISHER_RESET => FinishStatus::Reset,
             TEST_FINISHER_FAIL => FinishStatus::Failed((value >> 16) as u16),
             _ => self.status,
         };

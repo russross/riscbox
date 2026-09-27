@@ -674,3 +674,31 @@ fn timer_deadlines_use_guest_ticks_and_drop_due_compares() {
     machine.present_guest_clocks(1_000_015, 100_001_500);
     assert_eq!(machine.next_timer_remaining_guest_ticks(), None);
 }
+
+#[test]
+fn reset_restarts_cpu_and_interface_state_without_replacing_ram() {
+    let mut machine = machine(false);
+    machine
+        .load_boot(BootImages {
+            firmware: Some(&0x0000_006f_u32.to_le_bytes()),
+            kernel: None,
+            initrd: None,
+            command_line: "",
+        })
+        .expect("boot image");
+    let original = machine.read_ram(RAM_BASE, 4).expect("firmware").to_vec();
+    machine.run_cpu(50);
+    assert_ne!(machine.cpu().pc(), 0x1000);
+    machine
+        .bus_mut()
+        .write(GuestAddress(0x10_0000), AccessWidth::Word, 0x7777)
+        .expect("guest reboot register");
+    assert_eq!(machine.finish_status(), FinishStatus::Reset);
+    machine.reset().expect("machine reset");
+    assert_eq!(machine.finish_status(), FinishStatus::Running);
+    assert_eq!(machine.cpu().pc(), 0x1000);
+    assert_eq!(
+        machine.read_ram(RAM_BASE, 4).expect("retained RAM"),
+        original
+    );
+}

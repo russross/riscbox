@@ -1,7 +1,7 @@
 use riscbox::browser_input::BrowserInputQueue;
 use riscbox::browser_runtime::{
-    BrowserNineP, BrowserRuntime, HostAction, QuantumOutcome, QuantumStart, RuntimeError,
-    RuntimeStart,
+    BrowserNineP, BrowserRuntime, HostAction, LifecycleCause, QuantumOutcome, QuantumStart,
+    RuntimeError, RuntimeStart,
 };
 use riscbox::virtio_devices::{
     NinePBackend, NinePEndpointId, NinePGeneration, NinePRequestId, NinePTransportAction,
@@ -15,6 +15,94 @@ fn start() -> RuntimeStart {
         width: 0,
         height: 0,
         has_network: false,
+    }
+}
+
+#[test]
+fn host_halt_boot_reset_and_destroy_preserve_the_vm_until_destroyed() {
+    let mut runtime = start_uart_writer(
+        br#"{version:1,machine:"riscv64",memory_size:32,bios:"fw.bin",console:"uart"}"#,
+    );
+    runtime.request_shutdown().expect("deliver power key");
+    runtime.request_reboot().expect("deliver restart key");
+    assert!(runtime.is_running());
+    runtime.halt().expect("forced halt");
+    assert!(runtime.request_shutdown().is_err());
+    assert!(runtime.is_halted());
+    assert_eq!(
+        runtime.next_action(),
+        Some(HostAction::Halted(LifecycleCause::HostHalt))
+    );
+    assert_eq!(runtime.begin_quantum(1_000_000), QuantumStart::VmInactive);
+    runtime.reset().expect("boot retained machine");
+    assert!(runtime.is_running());
+    assert_eq!(
+        runtime.next_action(),
+        Some(HostAction::Reset(LifecycleCause::HostBoot))
+    );
+    runtime.reset().expect("forced reset");
+    assert_eq!(
+        runtime.next_action(),
+        Some(HostAction::Reset(LifecycleCause::HostReset))
+    );
+    runtime.halt().expect("halt before destroy");
+    assert_eq!(
+        runtime.next_action(),
+        Some(HostAction::Halted(LifecycleCause::HostHalt))
+    );
+    runtime.destroy().expect("destroy halted VM");
+    assert!(!runtime.is_halted());
+    assert!(runtime.reset().is_err());
+}
+
+#[test]
+fn guest_finisher_reset_reboots_in_place_and_poweroff_halts() {
+    for (value, expected) in [
+        (0x7777_u32, HostAction::Reset(LifecycleCause::GuestReboot)),
+        (
+            0x5555_u32,
+            HostAction::Halted(LifecycleCause::GuestPoweroff),
+        ),
+    ] {
+        let mut runtime = BrowserRuntime::default();
+        runtime.start(start()).expect("start");
+        let (config_id, _) = request(&mut runtime);
+        runtime
+            .complete_http(
+                config_id,
+                200,
+                br#"{version:1,machine:"riscv64",memory_size:32,bios:"fw.bin",console:"uart"}"#
+                    .to_vec(),
+            )
+            .expect("config");
+        let (firmware_id, _) = request(&mut runtime);
+        let upper = value >> 12;
+        let lower = value & 0xfff;
+        let instructions = [
+            0x0010_00b7_u32,
+            (upper << 12) | 0x137,
+            (lower << 20) | (2 << 15) | (2 << 7) | 0x13,
+            0x0020_a023,
+            0x0000_006f,
+        ];
+        let firmware = instructions
+            .into_iter()
+            .flat_map(u32::to_le_bytes)
+            .collect();
+        runtime
+            .complete_http(firmware_id, 200, firmware)
+            .expect("firmware");
+        assert_eq!(runtime.next_action(), Some(HostAction::Started));
+        let mut input = BrowserInputQueue::default();
+        runtime
+            .run_cpu_once(&mut input, 0, 0, 100)
+            .expect("guest run");
+        assert_eq!(runtime.next_action(), Some(expected));
+        if value == 0x7777 {
+            assert!(runtime.is_running());
+        } else {
+            assert!(runtime.is_halted());
+        }
     }
 }
 
@@ -313,8 +401,18 @@ fn drive_manifest_precedes_machine_start_and_prefetch_requests_follow_it() {
         )
         .expect("manifest");
     assert_eq!(runtime.next_action(), Some(HostAction::Started));
-    let (_, url) = request(&mut runtime);
+    let (old_request, url) = request(&mut runtime);
     assert_eq!(url, "https://host/vm/disk/blk000000001.bin");
+    runtime.reset().expect("reset with pending prefetch");
+    assert_eq!(
+        runtime.next_action(),
+        Some(HostAction::Reset(LifecycleCause::HostReset))
+    );
+    assert_eq!(
+        runtime.complete_http(old_request, 200, vec![0; 1024]),
+        Ok(())
+    );
+    assert_eq!(runtime.next_action(), None);
 }
 
 #[test]
@@ -328,6 +426,8 @@ fn configured_9p_servers_are_connected() {
             server_key: "workspace".into(),
         })
     );
+    let old_message = [7, 0, 0, 0, 100, 1, 0];
+    backend.submit(NinePRequestId(9), old_message.to_vec(), 4096);
     backend.reset(NinePGeneration(2));
     assert_eq!(
         backend.next_transport_action(),
@@ -390,6 +490,28 @@ fn configured_9p_servers_are_connected() {
     );
     assert_eq!(runtime.next_action(), Some(HostAction::Started));
     assert_eq!(runtime.next_action(), None);
+    runtime.reset().expect("reset 9p transport");
+    assert_eq!(
+        runtime.next_action(),
+        Some(HostAction::Reset(LifecycleCause::HostReset))
+    );
+    for endpoint in [1, 2] {
+        assert_eq!(
+            runtime.next_action(),
+            Some(HostAction::NineP(NinePTransportAction::Close {
+                endpoint: NinePEndpointId(endpoint),
+                generation: NinePGeneration(1),
+            }))
+        );
+        assert_eq!(
+            runtime.next_action(),
+            Some(HostAction::NineP(NinePTransportAction::Open {
+                endpoint: NinePEndpointId(endpoint),
+                generation: NinePGeneration(2),
+                server_key: "workspace".into(),
+            }))
+        );
+    }
 }
 
 #[test]

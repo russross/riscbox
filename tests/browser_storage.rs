@@ -42,6 +42,7 @@ fn writes_are_copy_on_write_and_ranges_are_checked() {
         .complete(request.id, vec![3; 4096])
         .expect("block response");
     store.write_sectors(2, &[7; 512]).expect("overlay write");
+    store.reset_requests();
     store.read_sectors(2, &mut byte).expect("overlay read");
     assert_eq!(byte, [7; 512]);
     assert_eq!(
@@ -100,4 +101,30 @@ fn one_request_can_span_more_blocks_than_the_initial_cache_limit() {
         .expect("complete spanning read");
     assert_eq!(&output[..4096], &[0x11; 4096]);
     assert_eq!(&output[4096..], &[0x22; 4096]);
+}
+
+#[test]
+fn reset_retires_pending_http_requests_without_reusing_their_ids() {
+    let mut store = HttpBlockStore::from_manifest(
+        "https://host/disk/blk.txt",
+        "{block_size:1,n_block:1}",
+        1024,
+    )
+    .expect("disk");
+    assert_eq!(
+        store.read_sectors(0, &mut [0; 512]),
+        Err(StorageError::MissingBlock(0))
+    );
+    let old = store.next_request().expect("first request");
+    store.reset_requests();
+    assert_eq!(
+        store.complete(old.id, vec![1; 1024]),
+        Err(StorageError::UnknownRequest)
+    );
+    assert_eq!(
+        store.read_sectors(0, &mut [0; 512]),
+        Err(StorageError::MissingBlock(0))
+    );
+    let new = store.next_request().expect("replacement request");
+    assert_ne!(old.id, new.id);
 }

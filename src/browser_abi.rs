@@ -112,6 +112,43 @@ pub extern "C" fn riscbox_start(
 }
 
 #[must_use]
+pub extern "C" fn riscbox_halt() -> i32 {
+    STATE.with_borrow_mut(|state| state.runtime.halt().map_or(-1, |()| 0))
+}
+
+#[must_use]
+pub extern "C" fn riscbox_reset() -> i32 {
+    STATE.with_borrow_mut(|state| {
+        if state.runtime.reset().is_err() {
+            return -1;
+        }
+        state.input_queue = BrowserInputQueue::default();
+        0
+    })
+}
+
+#[must_use]
+pub extern "C" fn riscbox_destroy() -> i32 {
+    STATE.with_borrow_mut(|state| {
+        if state.runtime.destroy().is_err() {
+            return -1;
+        }
+        state.input_queue = BrowserInputQueue::default();
+        0
+    })
+}
+
+#[must_use]
+pub extern "C" fn riscbox_request_shutdown() -> i32 {
+    STATE.with_borrow_mut(|state| state.runtime.request_shutdown().map_or(-1, |()| 0))
+}
+
+#[must_use]
+pub extern "C" fn riscbox_request_reboot() -> i32 {
+    STATE.with_borrow_mut(|state| state.runtime.request_reboot().map_or(-1, |()| 0))
+}
+
+#[must_use]
 pub extern "C" fn riscbox_console_input(address: u32, length: u32) -> u32 {
     STATE.with_borrow_mut(|state| {
         let Some(bytes) = allocated_bytes(state, address, length).map(<[u8]>::to_vec) else {
@@ -270,6 +307,8 @@ pub extern "C" fn riscbox_next_action() -> u32 {
             Some(HostAction::NineP(NinePTransportAction::Open { .. })) => 7,
             Some(HostAction::NineP(NinePTransportAction::Request { .. })) => 8,
             Some(HostAction::NineP(NinePTransportAction::Close { .. })) => 9,
+            Some(HostAction::Halted(_)) => 10,
+            Some(HostAction::Reset(_)) => 11,
             None => 0,
         }
     })
@@ -279,6 +318,7 @@ pub extern "C" fn riscbox_next_action() -> u32 {
 pub extern "C" fn riscbox_action_value() -> u32 {
     STATE.with_borrow(|state| match state.action.as_ref() {
         Some(HostAction::Request(request)) => request.id,
+        Some(HostAction::Halted(cause) | HostAction::Reset(cause)) => *cause as u32,
         _ => 0,
     })
 }
@@ -455,7 +495,10 @@ fn action_bytes(state: &AbiState) -> Option<&[u8]> {
         HostAction::NineP(NinePTransportAction::Open { server_key, .. }) => {
             Some(server_key.as_bytes())
         }
-        HostAction::NineP(NinePTransportAction::Close { .. }) | HostAction::Started => None,
+        HostAction::NineP(NinePTransportAction::Close { .. })
+        | HostAction::Started
+        | HostAction::Halted(_)
+        | HostAction::Reset(_) => None,
     }
 }
 

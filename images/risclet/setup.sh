@@ -46,6 +46,7 @@ if [ -n "$aname" ]; then
     mount_options="$mount_options,aname=$aname"
 fi
 mount -t 9p -o "$mount_options" risclet /home/student
+acpid
 EOF
 chmod 755 /etc/init.d/rcS
 

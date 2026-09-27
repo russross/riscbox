@@ -90,6 +90,17 @@ void tinyemu_core_destroy(TinyemuCore *core)
     tinyemu_free(core);
 }
 
+int tinyemu_core_reset_cpu(TinyemuCore *core)
+{
+    RISCVCPUState *replacement = riscv_cpu_init(core->map);
+    if (!replacement)
+        return -1;
+    riscv_cpu_set_time_source(replacement, get_time, core);
+    riscv_cpu_end(core->cpu);
+    core->cpu = replacement;
+    return 0;
+}
+
 int tinyemu_core_register_ram(TinyemuCore *core, uint64_t base, uint64_t len,
                               int flags)
 {

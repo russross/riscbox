@@ -194,6 +194,12 @@ pub fn build(config: FdtConfig<'_>) -> Vec<u8> {
     fdt.property_u32("offset", 0);
     fdt.property_u32("value", 0x5555);
     fdt.end_node();
+    fdt.node("reboot");
+    fdt.property_string("compatible", "syscon-reboot");
+    fdt.property_u32("regmap", 3);
+    fdt.property_u32("offset", 0);
+    fdt.property_u32("value", 0x7777);
+    fdt.end_node();
     fdt.node("chosen");
     fdt.property_string("bootargs", config.command_line);
     fdt.property_string("stdout-path", "/soc/serial@10000000");

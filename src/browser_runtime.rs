@@ -2,7 +2,7 @@
 
 use core::fmt;
 use std::cell::RefCell;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::rc::Rc;
 
 use crate::browser_input::{BrowserEvent, BrowserInputQueue};
@@ -13,6 +13,7 @@ use crate::machine::{
     BootAddresses, BootImages, FramebufferConfig, FramebufferUpdate, Machine, MachineConfig,
     MachineError,
 };
+use crate::platform::FinishStatus;
 use crate::tinyemu_core::CpuRunExitReason;
 use crate::virtio_devices::{
     DeviceError, InputKind, NetworkBackend, NinePBackend, NinePEndpointId, NinePGeneration,
@@ -68,6 +69,7 @@ impl NinePBackend for BrowserNineP {
     }
 
     fn reset(&mut self, generation: NinePGeneration) {
+        self.actions.clear();
         self.actions.push_back(NinePTransportAction::Close {
             endpoint: self.endpoint,
             generation: self.generation,
@@ -113,7 +115,23 @@ pub enum HostAction {
     Network(Vec<u8>),
     Framebuffer(FramebufferUpdate),
     NineP(NinePTransportAction),
+    Halted(LifecycleCause),
+    Reset(LifecycleCause),
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(u32)]
+pub enum LifecycleCause {
+    GuestPoweroff,
+    GuestReboot,
+    HostHalt,
+    HostReset,
+    HostBoot,
+    GuestFailure,
+}
+
+const KEY_POWER: u16 = 116;
+const KEY_RESTART: u16 = 408;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PlatformRunResult {
@@ -366,12 +384,33 @@ struct Loading {
     drive_manifests: Vec<Option<(String, Vec<u8>)>>,
 }
 
+struct BootState {
+    firmware: Option<Vec<u8>>,
+    kernel: Option<Vec<u8>>,
+    initrd: Option<Vec<u8>>,
+    command_line: String,
+    addresses: BootAddresses,
+}
+
+impl BootState {
+    fn images(&self) -> BootImages<'_> {
+        BootImages {
+            firmware: self.firmware.as_deref(),
+            kernel: self.kernel.as_deref(),
+            initrd: self.initrd.as_deref(),
+            command_line: &self.command_line,
+        }
+    }
+}
+
 struct Running {
     machine: Machine,
+    boot: BootState,
     console_slot: Option<usize>,
     uart_output: bool,
     network_slot: Option<usize>,
     keyboard_slot: Option<usize>,
+    power_slot: usize,
     pointer_slot: Option<usize>,
     pointer_dimensions: Option<(u32, u32)>,
     network_output: Rc<RefCell<VecDeque<Vec<u8>>>>,
@@ -438,12 +477,14 @@ enum State {
     },
     Loading(Box<Loading>),
     Running(Box<Running>),
+    Halted(Box<Running>),
 }
 
 pub struct BrowserRuntime {
     state: State,
     next_request_id: u32,
     actions: VecDeque<HostAction>,
+    retired_http: BTreeSet<u32>,
     entropy: Option<EntropyCallback>,
     target_quantum_ms: f64,
     adaptive_skew: AdaptiveSkew,
@@ -460,6 +501,7 @@ impl Default for BrowserRuntime {
             state: State::VmInactive,
             next_request_id: 1,
             actions: VecDeque::new(),
+            retired_http: BTreeSet::new(),
             entropy: None,
             target_quantum_ms: 20.0,
             adaptive_skew: AdaptiveSkew::default(),
@@ -788,6 +830,10 @@ impl BrowserRuntime {
         if !matches!(self.state, State::VmInactive) {
             return Err(RuntimeError::AlreadyStarted);
         }
+        self.guest_clock_floor_ticks = 0;
+        self.cycle_rate_estimate = RateEstimate::default();
+        self.adaptive_skew = AdaptiveSkew::default();
+        self.last_quantum = QuantumStatistics::default();
         let request_id = self.allocate_request(&start.config_url);
         self.state = State::Config { start, request_id };
         Ok(())
@@ -805,9 +851,13 @@ impl BrowserRuntime {
         status: u16,
         bytes: Vec<u8>,
     ) -> Result<(), RuntimeError> {
+        if self.retired_http.remove(&id) {
+            return Ok(());
+        }
         if !(200..300).contains(&status) {
             return Err(RuntimeError::HttpStatus(status));
         }
+        let halted = matches!(self.state, State::Halted(_));
         let state = core::mem::replace(&mut self.state, State::VmInactive);
         match state {
             State::Config { start, request_id } if request_id == id => {
@@ -871,9 +921,13 @@ impl BrowserRuntime {
                 self.state = State::Loading(loading);
                 self.request_next_asset()
             }
-            State::Running(mut running) => {
+            State::Running(mut running) | State::Halted(mut running) => {
                 let Some(pending) = running.pending_http.remove(&id) else {
-                    self.state = State::Running(running);
+                    self.state = if halted {
+                        State::Halted(running)
+                    } else {
+                        State::Running(running)
+                    };
                     return Err(RuntimeError::UnexpectedResponse(id));
                 };
                 match pending {
@@ -881,8 +935,16 @@ impl BrowserRuntime {
                         .machine
                         .complete_http_block_request(slot, request, bytes)?,
                 }
-                self.state = State::Running(running);
-                self.pump_http_requests()
+                self.state = if halted {
+                    State::Halted(running)
+                } else {
+                    State::Running(running)
+                };
+                if halted {
+                    Ok(())
+                } else {
+                    self.pump_http_requests()
+                }
             }
             other => {
                 self.state = other;
@@ -904,14 +966,20 @@ impl BrowserRuntime {
         request_id: NinePRequestId,
         outcome: NinePOutcome,
     ) -> Result<(), RuntimeError> {
-        let State::Running(mut running) = core::mem::replace(&mut self.state, State::VmInactive)
-        else {
-            return Err(RuntimeError::Machine(
-                "9p completion without a running VM".into(),
-            ));
+        let halted = self.is_halted();
+        let mut running = match core::mem::replace(&mut self.state, State::VmInactive) {
+            State::Running(running) | State::Halted(running) => running,
+            other => {
+                self.state = other;
+                return Err(RuntimeError::Machine("9p completion without a VM".into()));
+            }
         };
         let Some(slot) = running.ninep_endpoints.get(&endpoint).copied() else {
-            self.state = State::Running(running);
+            self.state = if halted {
+                State::Halted(running)
+            } else {
+                State::Running(running)
+            };
             return Err(RuntimeError::Machine("unknown 9p endpoint".into()));
         };
         let endpoint_failure = matches!(outcome, NinePOutcome::EndpointFailure);
@@ -919,13 +987,26 @@ impl BrowserRuntime {
             .machine
             .complete_ninep_transport_request(slot, generation, request_id, outcome);
         if let Err(error) = result {
+            self.state = if halted {
+                State::Halted(running)
+            } else {
+                State::Running(running)
+            };
             if endpoint_failure {
                 return Ok(());
             }
             return Err(error.into());
         }
-        self.state = State::Running(running);
-        self.pump_http_requests()
+        self.state = if halted {
+            State::Halted(running)
+        } else {
+            State::Running(running)
+        };
+        if halted {
+            Ok(())
+        } else {
+            self.pump_http_requests()
+        }
     }
 
     /// Runs one bounded interpreter slice and collects host-facing output.
@@ -999,6 +1080,27 @@ impl BrowserRuntime {
             }
         }
         self.pump_http_requests()?;
+        let finish = match &self.state {
+            State::Running(running) => running.machine.finish_status(),
+            _ => FinishStatus::Running,
+        };
+        if finish == FinishStatus::Reset {
+            self.reset_machine(LifecycleCause::GuestReboot)?;
+            *input_queue = BrowserInputQueue::default();
+        } else if finish != FinishStatus::Running {
+            let State::Running(running) = core::mem::replace(&mut self.state, State::VmInactive)
+            else {
+                unreachable!();
+            };
+            self.state = State::Halted(running);
+            let cause = if matches!(finish, FinishStatus::Failed(_)) {
+                LifecycleCause::GuestFailure
+            } else {
+                LifecycleCause::GuestPoweroff
+            };
+            self.actions.push_back(HostAction::Halted(cause));
+            return Ok(None);
+        }
         Ok(Some(PlatformRunResult {
             consumed_cycles: outcome.consumed_cycles,
             state: outcome.state,
@@ -1034,6 +1136,116 @@ impl BrowserRuntime {
         matches!(self.state, State::Running(_))
     }
 
+    #[must_use]
+    pub fn is_halted(&self) -> bool {
+        matches!(self.state, State::Halted(_))
+    }
+
+    /// Stops CPU execution without disposing of the machine or its backends.
+    ///
+    /// # Errors
+    /// Returns an error unless a VM is running between CPU calls.
+    pub fn halt(&mut self) -> Result<(), RuntimeError> {
+        if self.active_quantum.is_some() {
+            return Err(RuntimeError::Machine("quantum is active".into()));
+        }
+        let running = match core::mem::replace(&mut self.state, State::VmInactive) {
+            State::Running(running) => running,
+            other => {
+                self.state = other;
+                return Err(RuntimeError::Machine("VM is not running".into()));
+            }
+        };
+        self.state = State::Halted(running);
+        self.actions
+            .push_back(HostAction::Halted(LifecycleCause::HostHalt));
+        Ok(())
+    }
+
+    /// Boots a halted VM or forcibly resets a running VM in place.
+    ///
+    /// # Errors
+    /// Returns an error for an invalid state or failed CPU or boot reset.
+    pub fn reset(&mut self) -> Result<(), RuntimeError> {
+        if self.active_quantum.is_some() {
+            return Err(RuntimeError::Machine("quantum is active".into()));
+        }
+        let cause = if self.is_halted() {
+            LifecycleCause::HostBoot
+        } else {
+            LifecycleCause::HostReset
+        };
+        self.reset_machine(cause)
+    }
+
+    /// Delivers a power key to the guest; shutdown depends on guest policy.
+    ///
+    /// # Errors
+    /// Returns an error unless a VM is running or input delivery fails.
+    pub fn request_shutdown(&mut self) -> Result<(), RuntimeError> {
+        self.request_power_key(KEY_POWER)
+    }
+
+    /// Delivers a restart key to the guest; reboot depends on guest policy.
+    ///
+    /// # Errors
+    /// Returns an error unless a VM is running or input delivery fails.
+    pub fn request_reboot(&mut self) -> Result<(), RuntimeError> {
+        self.request_power_key(KEY_RESTART)
+    }
+
+    fn request_power_key(&mut self, code: u16) -> Result<(), RuntimeError> {
+        let State::Running(running) = &mut self.state else {
+            return Err(RuntimeError::Machine("VM is not running".into()));
+        };
+        running
+            .machine
+            .virtio_key_event(running.power_slot, code, true)?;
+        running
+            .machine
+            .virtio_key_event(running.power_slot, code, false)?;
+        Ok(())
+    }
+
+    /// Disposes of a halted VM and releases its attached machine resources.
+    ///
+    /// # Errors
+    /// Returns an error unless a VM is halted.
+    pub fn destroy(&mut self) -> Result<(), RuntimeError> {
+        let running = match core::mem::replace(&mut self.state, State::VmInactive) {
+            State::Halted(running) => running,
+            other => {
+                self.state = other;
+                return Err(RuntimeError::Machine("VM is not halted".into()));
+            }
+        };
+        self.retired_http.extend(running.pending_http.keys());
+        self.actions.clear();
+        Ok(())
+    }
+
+    fn reset_machine(&mut self, cause: LifecycleCause) -> Result<(), RuntimeError> {
+        let state = core::mem::replace(&mut self.state, State::VmInactive);
+        let mut running = match state {
+            State::Running(running) | State::Halted(running) => running,
+            other => {
+                self.state = other;
+                return Err(RuntimeError::Machine("VM is not initialized".into()));
+            }
+        };
+        self.retired_http.extend(running.pending_http.keys());
+        running.pending_http.clear();
+        running.machine.reset()?;
+        running
+            .machine
+            .load_boot_at(running.boot.images(), running.boot.addresses)?;
+        running.network_output.borrow_mut().clear();
+        self.state = State::Running(running);
+        self.actions.push_back(HostAction::Reset(cause));
+        self.pump_ninep_transport_actions()?;
+        self.pump_http_requests()
+    }
+
     fn allocate_request(&mut self, url: &str) -> u32 {
         let id = self.next_request_id;
         self.next_request_id = self.next_request_id.wrapping_add(1).max(1);
@@ -1060,7 +1272,6 @@ impl BrowserRuntime {
 
     fn finish_loading(&mut self, mut loading: Loading) -> Result<(), RuntimeError> {
         let config = loading.config.take().expect("loading state retains config");
-        let firmware = loading.firmware.as_deref();
         let ram_size = u64::from(loading.start.ram_mib)
             .checked_shl(20)
             .ok_or_else(|| RuntimeError::Machine("RAM size overflow".into()))?;
@@ -1114,26 +1325,31 @@ impl BrowserRuntime {
             (None, None)
         };
         machine.add_entropy_device()?;
-        machine.load_boot_at(
-            BootImages {
-                firmware,
-                kernel: loading.kernel.as_deref(),
-                initrd: loading.initrd.as_deref(),
-                command_line: config.command_line.as_deref().unwrap_or_default(),
-            },
-            BootAddresses {
+        let power_slot = match keyboard_slot {
+            Some(slot) => slot,
+            None => machine.add_input_device(InputKind::Keyboard)?,
+        };
+        let boot = BootState {
+            firmware: loading.firmware,
+            kernel: loading.kernel,
+            initrd: loading.initrd,
+            command_line: config.command_line.clone().unwrap_or_default(),
+            addresses: BootAddresses {
                 firmware: config.bios_address,
                 kernel: config.kernel_address,
                 initrd: config.initrd_address,
                 fdt: config.fdt_address,
             },
-        )?;
+        };
+        machine.load_boot_at(boot.images(), boot.addresses)?;
         self.state = State::Running(Box::new(Running {
             machine,
+            boot,
             console_slot,
             uart_output: config.console == Console::Uart || config.uart_output,
             network_slot,
             keyboard_slot,
+            power_slot,
             pointer_slot,
             pointer_dimensions: dimensions,
             network_output,

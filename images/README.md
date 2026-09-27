@@ -52,6 +52,9 @@ Run `make kernel`, `make opensbi`, `make uboot`, or `make wasm` at the
 repository root to build those components independently. The firmware and
 bootloader source archives, extracted trees, and objects are ignored; their
 Makefiles rebuild only when the tracked version or config changes.
+The prepared Alpine base image configures BusyBox `acpid` to handle the host's
+power and restart input events with orderly `/sbin/poweroff` and `/sbin/reboot`.
+Risclet starts the same daemon after mounting its shared filesystem.
 
 The browser Risclet application loads its workspaces from the tracked
 `risclet/examples/` directory. `examples.json` names each example and lists

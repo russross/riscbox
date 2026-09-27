@@ -287,6 +287,14 @@ fn http_block_read_waits_for_completion_before_updating_the_used_ring() {
     );
     machine_configure(&mut machine, slot, 0);
     machine_kick(&mut machine, slot, 0);
+    let replacement = machine
+        .next_http_block_request(slot)
+        .expect("slot exists")
+        .expect("replacement HTTP request");
+    assert_ne!(replacement.id, request.id);
+    machine
+        .complete_http_block_request(slot, replacement.id, vec![0x6d; 1024])
+        .expect("replacement response");
     assert_eq!(
         u16::from_le_bytes(machine.read_ram(USED + 2, 2).unwrap().try_into().unwrap()),
         1
@@ -771,7 +779,7 @@ fn ninep_validates_messages_and_input_emits_events() {
     machine_write(&mut input, VIRTIO_BASE + 0x101, AccessWidth::Byte, 1);
     assert_eq!(
         machine_read(&mut input, VIRTIO_BASE + 0x102, AccessWidth::Byte),
-        16
+        64
     );
     assert_eq!(
         machine_read(&mut input, VIRTIO_BASE + 0x108, AccessWidth::Byte),

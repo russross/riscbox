@@ -44,6 +44,10 @@ interface RiscboxRuntime {
     start(configUrl: string, memoryMiB: number): number;
     consoleInput(bytes: Uint8Array): void;
     consoleResize(columns: number, rows: number): void;
+    boot(): Promise<void>;
+    reset(): Promise<void>;
+    halt(): Promise<void>;
+    destroy(): Promise<void>;
 }
 
 interface RiscboxOptions {
@@ -58,7 +62,10 @@ interface RiscboxOptions {
         };
     }>;
     readonly consoleWrite: (text: string | Uint8Array) => void;
+    readonly consoleReset?: () => void;
     readonly onVmStarted: () => void;
+    readonly onVmHalted?: (cause: string) => void;
+    readonly onVmReset?: (cause: string) => void;
     readonly onError: (error: unknown) => void;
     readonly framebufferRefresh?: (bytes: Uint8Array, geometry: FramebufferGeometry) => void;
 }
@@ -422,7 +429,7 @@ class VmController {
     private runtime: RiscboxRuntime | undefined;
     private target: ExampleState | undefined;
     private generation = 0;
-    private state: "ready" | "loading" | "running" | "failed" = "ready";
+    private state: "ready" | "loading" | "running" | "halted" | "failed" = "ready";
 
     constructor(host: HTMLElement, bootButton: HTMLButtonElement) {
         this.bootButton = bootButton;
@@ -446,6 +453,8 @@ class VmController {
         this.bootButton.addEventListener("click", (): void => {
             if (this.state === "ready") {
                 void this.boot();
+            } else if (this.state === "halted") {
+                void this.bootRetained();
             } else {
                 void this.reboot();
             }
@@ -470,6 +479,8 @@ class VmController {
     bootIfInactive(): void {
         if (this.state === "ready") {
             void this.boot();
+        } else if (this.state === "halted") {
+            void this.bootRetained();
         } else if (this.state === "failed") {
             void this.reboot();
         } else if (this.state === "running") {
@@ -479,8 +490,15 @@ class VmController {
 
     private stop(): void {
         this.generation += 1;
+        const runtime = this.runtime;
+        const halted = this.state === "halted";
         this.runtime = undefined;
         this.state = "ready";
+        if (runtime) {
+            void (halted ? Promise.resolve() : runtime.halt())
+                .then(() => runtime.destroy())
+                .catch((error: unknown) => console.error("Could not release VM", error));
+        }
     }
 
     private resetTerminal(): void {
@@ -490,9 +508,29 @@ class VmController {
     }
 
     private async reboot(): Promise<void> {
+        if (this.state === "running" && this.runtime) {
+            try {
+                await this.runtime.reset();
+            } catch (error: unknown) {
+                this.fail(error instanceof Error ? error.message : String(error));
+            }
+            return;
+        }
         this.stop();
         this.resetTerminal();
         await this.boot();
+    }
+
+    private async bootRetained(): Promise<void> {
+        if (!this.runtime) {
+            this.fail("VM is unavailable");
+            return;
+        }
+        try {
+            await this.runtime.boot();
+        } catch (error: unknown) {
+            this.fail(error instanceof Error ? error.message : String(error));
+        }
     }
 
     private async boot(): Promise<void> {
@@ -517,6 +555,9 @@ class VmController {
                         this.terminal.write(text);
                     }
                 },
+                consoleReset: (): void => {
+                    if (generation === this.generation) this.resetTerminal();
+                },
                 onVmStarted: (): void => {
                     if (generation !== this.generation) {
                         return;
@@ -525,6 +566,20 @@ class VmController {
                     this.updateControls();
                     requiredElement("status").textContent = `Running · ${target.description.title}`;
                     this.fit();
+                    runtime.consoleResize(this.terminal.cols, this.terminal.rows);
+                    this.terminal.focus();
+                },
+                onVmHalted: (): void => {
+                    if (generation !== this.generation) return;
+                    this.state = "halted";
+                    this.updateControls();
+                    requiredElement("status").textContent = `Halted · ${target.description.title}`;
+                },
+                onVmReset: (): void => {
+                    if (generation !== this.generation) return;
+                    this.state = "running";
+                    this.updateControls();
+                    requiredElement("status").textContent = `Running · ${target.description.title}`;
                     runtime.consoleResize(this.terminal.cols, this.terminal.rows);
                     this.terminal.focus();
                 },

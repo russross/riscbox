@@ -116,6 +116,21 @@ resume a VM; normal wakeups are scheduled by the browser adapter.
 Framebuffer callbacks receive a zero-copy WASM view plus `x`, `y`, `width`,
 `height`, and full-frame `stride`; consume the view synchronously.
 
+Lifecycle methods return promises. `requestShutdown()` and `requestReboot()`
+deliver guest input events and return before the guest has acted; the guest OS
+must handle those events. The prepared Alpine and Risclet images run BusyBox
+`acpid` for them. `halt()` immediately stops CPU execution and retains the
+machine, attached devices, 9p servers, and disk contents. `boot()` starts a
+halted VM from its boot images; `reset()` immediately resets a running VM. A
+guest-initiated poweroff halts the VM, and a guest-initiated reboot resets it
+in place. `destroy()` releases a halted VM; a later boot then needs a new VM.
+`onVmHalted(cause)` and `onVmReset(cause)` report `guest-poweroff`,
+`guest-reboot`, `host-halt`, `host-reset`, `host-boot`, or `guest-failure` as
+applicable. `onVmDestroyed()` reports teardown. `consoleReset()` and
+`framebufferClear()` let host displays clear themselves on reset. A forced
+halt or reset does not let the guest flush filesystem buffers. Wait for an
+observed guest halt or reboot before treating a writable disk as synchronized.
+
 For the supplied WebSocket network frontend, import the generated TypeScript
 module and attach it before starting a network-enabled VM:
 

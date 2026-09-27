@@ -187,6 +187,18 @@ enum VirtioSlot {
 }
 
 impl VirtioSlot {
+    fn reset(&mut self) {
+        match self {
+            Self::Block(device) => device.reset(),
+            Self::HttpBlock(device) => device.reset(),
+            Self::Console(device) => device.reset(),
+            Self::Network(device) => device.reset(),
+            Self::NineP(device) => device.reset(),
+            Self::Input(device) => device.reset(),
+            Self::Entropy(device) => device.reset(),
+        }
+    }
+
     fn needs_host(&self) -> bool {
         // Queue notifications handled entirely in Rust leave these queues empty.
         match self {
@@ -369,6 +381,7 @@ impl PlatformBus {
         {
             self.finisher
                 .write(offset(address, FINISHER_BASE)?, value32);
+            self.host_service_requested |= self.finisher.status() != FinishStatus::Running;
         } else if (RTC_BASE..RTC_BASE + 0x1000).contains(&address) && width == AccessWidth::Word {
             let device_offset = offset(address, RTC_BASE)?;
             self.rtc.write(device_offset, value32, self.guest_rtc_ns);
@@ -509,6 +522,32 @@ impl Machine {
             config,
             entropy,
         })
+    }
+
+    /// Resets guest-facing state while retaining RAM mappings and host backends.
+    /// Boot images must be loaded again before the next CPU run.
+    ///
+    /// # Errors
+    /// Returns an error if a replacement CPU cannot be allocated.
+    pub fn reset(&mut self) -> Result<(), MachineError> {
+        if !self.cpu.reset_cpu() {
+            return Err(MachineError::CoreAllocation);
+        }
+        self.bus.aclint = Aclint::default();
+        self.bus.plic = Plic::default();
+        self.bus.uart = Uart16550::default();
+        self.bus.rtc = GoldfishRtc::default();
+        self.bus.finisher = Finisher::default();
+        self.bus.guest_timer_ticks = 0;
+        self.bus.guest_rtc_ns = 0;
+        self.bus.host_service_requested = false;
+        self.bus.timer_reprogrammed = false;
+        for device in &mut self.bus.virtio {
+            device.reset();
+        }
+        self.bus.update_device_irqs();
+        self.sync_interrupts();
+        Ok(())
     }
 
     /// Adds a `VirtIO` block device and returns its MMIO slot.
@@ -1017,7 +1056,11 @@ impl Machine {
         else {
             return Err(MachineError::WrongVirtioDevice);
         };
-        device.device.backend_mut().complete(request, data)?;
+        match device.device.backend_mut().complete(request, data) {
+            Ok(()) => {}
+            Err(StorageError::UnknownRequest) => return Ok(()),
+            Err(error) => return Err(error.into()),
+        }
         device.device.resume(&mut device.transport, memory)?;
         self.bus.update_device_irqs();
         Ok(())

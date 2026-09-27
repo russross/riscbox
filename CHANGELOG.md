@@ -4,6 +4,14 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Added guest-initiated reboot and retained guest poweroff on the QEMU
+    `virt` syscon device. Host APIs now deliver soft shutdown and reboot input
+    events, force halt/reset, boot a halted VM, and destroy it. In-place reset
+    preserves block contents and host connections while resetting CPU and
+    device interface state. The browser adapter reports lifecycle causes and
+    reset notifications for terminal and framebuffer integrations. Prepared
+    Alpine and Risclet images handle soft requests through BusyBox `acpid`.
+    The Risclet reboot button now resets its existing VM and 9p sessions.
 *   Trimmed pinned U-Boot 2025.01 to the Riscbox VirtIO MMIO block platform,
     ext4 and EROFS readers, and extlinux boot. Whole-disk Risclet EROFS boot
     remains the first path, with a bootflow scan for partitioned images.

@@ -63,6 +63,11 @@ impl<D: VirtioDevice> VirtioMmioDevice<D> {
         Self { transport, device }
     }
 
+    pub fn reset(&mut self) {
+        self.device.reset();
+        self.transport.reset();
+    }
+
     #[must_use]
     pub fn read(&self, offset: u32, width: AccessWidth) -> u32 {
         if offset >= CONFIG_BASE {
@@ -112,6 +117,8 @@ impl<D: VirtioDevice> VirtioMmioDevice<D> {
 
 pub trait BlockBackend {
     fn capacity_sectors(&self) -> u64;
+    /// Retires guest-facing work while preserving stored bytes.
+    fn reset(&mut self) {}
     /// Reads whole sectors into `data`.
     ///
     /// # Errors
@@ -163,6 +170,9 @@ pub enum BlockRequestStatus {
 impl<T: BlockBackend + ?Sized> BlockBackend for Box<T> {
     fn capacity_sectors(&self) -> u64 {
         (**self).capacity_sectors()
+    }
+    fn reset(&mut self) {
+        (**self).reset();
     }
     fn read(&mut self, sector: u64, data: &mut [u8]) -> Result<(), DeviceError> {
         (**self).read(sector, data)
@@ -267,6 +277,7 @@ impl<B: BlockBackend> VirtioDevice for BlockDevice<B> {
     fn write_config(&mut self, _: u32, _: u32, _: AccessWidth) {}
     fn reset(&mut self) {
         self.pending = None;
+        self.backend.reset();
     }
     fn notify(
         &mut self,
@@ -455,6 +466,10 @@ impl VirtioDevice for ConsoleDevice {
         )
     }
     fn write_config(&mut self, _: u32, _: u32, _: AccessWidth) {}
+    fn reset(&mut self) {
+        self.input.clear();
+        self.output.clear();
+    }
     fn notify(
         &mut self,
         transport: &mut VirtioTransport,
@@ -1063,6 +1078,12 @@ impl VirtioDevice for InputDevice {
             }
         }
     }
+    fn reset(&mut self) {
+        self.select = 0;
+        self.subsel = 0;
+        self.events.clear();
+        self.buttons = 0;
+    }
     fn notify(
         &mut self,
         transport: &mut VirtioTransport,
@@ -1099,8 +1120,8 @@ fn validate_9p(message: &[u8]) -> Result<(), DeviceError> {
 fn input_event_bits(kind: InputKind, event: u8, config: &mut [u8]) {
     match (kind, event) {
         (InputKind::Keyboard, 1) => {
-            config[2] = 16;
-            config[8..24].fill(0xff);
+            config[2] = 64;
+            config[8..72].fill(0xff);
         }
         (InputKind::Keyboard, 0x14) => config[2] = 1,
         (InputKind::Mouse | InputKind::Tablet, 1) => {

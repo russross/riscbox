@@ -117,40 +117,45 @@ plain image assets or installation media. Select read-only, session CoW, or
 mutable behavior explicitly. Validate multiple attached drives, failed reads,
 and write behavior before documenting ISO or installer boot as supported.
 
-### Host controls and block providers
+### Block provider migration
 
 Problem and evidence: the current runtime reads a configuration file and HTTP
 drive manifests in Rust, and `HttpBlockStore` owns both the clean-block cache
 and the session CoW overlay. A host byte array cannot receive guest writes
-through that store. Guest poweroff currently makes the VM inactive; the
-finisher does not handle the QEMU `virt` reset value. The host has no power
-request, forced halt, in-place reset, or destroy control. A block transport
-that crosses the WASM boundary on every guest request may materially affect
-HTTP-backed guest performance, so retain the existing HTTP path in parallel
-until a measured decision about consolidation.
+through that store. A block transport that crosses the WASM boundary on every
+guest request may materially affect HTTP-backed guest performance, so retain
+the existing HTTP path in parallel until a measured decision about
+consolidation.
+
+HTTP baseline from one headless Chrome run per workload, before migration:
+
+*   Risclet login: 1.98 seconds from boot click, 21 block responses totaling
+    11,010,048 bytes from 12 distinct block URLs. This run reused a Chrome
+    profile after an earlier Risclet boot, so browser cache was warm.
+*   Prepared Alpine login: 0.92 seconds from page startup, 10 block responses
+    totaling 5,242,880 bytes from 10 distinct block URLs. The current Rust
+    HTTP store was unchanged; the image included the new power handlers.
+*   xv6 profile compile marker: 99.77 seconds from page startup, 159 block
+    responses totaling 83,361,792 bytes from 157 distinct block URLs. The
+    guest shell reported 98.80 seconds for the compile. This used a fresh page
+    load of the existing xv6 distribution. These single runs do not establish
+    run-to-run variance or a performance target by themselves.
+
+The current block response path copies fetched bytes into a WASM allocation
+and then into an owned Rust vector before the clean cache takes ownership.
+`fetchMs` sums from the three probes were 2.02 seconds, 0.02 seconds, and
+0.42 seconds respectively; overlapping requests make those sums unsuitable as
+wall-time costs. Repeat fixed image and cache conditions when comparing the
+new provider, including browser memory use and complete guest workload time.
 
 Data and ownership:
 
-*   Rust owns validated machine configuration, machine construction, guest RAM,
-    VirtIO descriptor validation, device ordering, run state, and reset of CPU
-    and platform interface state. JavaScript resolves configuration defaults,
+*   Rust will keep validated machine configuration, machine construction,
+    guest RAM, VirtIO descriptor validation, and device ordering. JavaScript
+    will resolve configuration defaults,
     asset URLs, and host provider references before passing a resolved startup
     structure across the raw WASM ABI. A configuration URL remains a JavaScript
     convenience; callers may also provide the resolved structure directly.
-*   Distinguish `running`, `halted`, and `destroyed` lifetimes. Guest poweroff
-    and forced host halt retain the machine and host connections. Guest reboot,
-    forced reset, and boot after halt run one machine reset path. Destroy
-    releases the machine and connectors. Report lifecycle cause separately
-    from state; a soft request completes when delivered, not when the guest
-    acts on it. Only an observed guest shutdown or reboot establishes that the
-    guest had an opportunity to flush and unmount.
-*   Separate each device's resettable guest-facing interface from its durable
-    host resource. Reset clears queues, interrupts, pending requests, and old
-    completion generations. Block contents, HTTP CoW overlays, and 9p server
-    data survive reset. A 9p session may close and reopen against the same
-    server. Console connectors survive and receive terminal reset and screen
-    clear notifications. Destroy closes host resources. Specify reset and
-    close methods for applicable provider and connector APIs.
 *   Add a generic asynchronous block transport alongside `HttpBlockStore`.
     Rust validates sector alignment, capacity, descriptor shape, and returned
     read length, then passes read/write sector requests to JavaScript and
@@ -163,39 +168,25 @@ Data and ownership:
 
 Milestones and acceptance, in dependency order:
 
-1.  Establish lifecycle semantics and baseline measurements. Trace guest
-    shutdown and reboot through OpenSBI, the SiFive test register, machine
-    status, raw ABI, and adapter. Record HTTP block request counts, bytes,
-    copies, host elapsed time, and guest workload time for fixed xv6 and
-    prepared Alpine workloads. Define reset retention for each attached device
-    and identify the guest OS mechanism for soft power and reboot requests.
-2.  Implement reset and halt without changing block transport. Add the QEMU
-    `virt` reset value and device-tree reset binding, a scheduled machine reset
-    outside MMIO callbacks, explicit device interface resets, lifecycle
-    events, host forced halt/reset, boot after halt, and destroy. Add guest
-    poweroff and reboot coverage, including late 9p/HTTP completions and
-    retained disk data. Add soft power and reboot requests only after a guest
-    probe confirms that the prepared userspace handles the chosen signal;
-    document that request acceptance does not imply shutdown.
-3.  Refactor startup configuration at the JavaScript/Rust boundary. Define a
+1.  Refactor startup configuration at the JavaScript/Rust boundary. Define a
     typed resolved configuration in `src/config.rs` and an ABI transfer in
     `src/browser_abi.rs` and `riscbox-wasm/src/lib.rs`. Move file parsing,
     defaults, and relative URL resolution to JavaScript while Rust validates
     the received values and builds the machine. Preserve existing deployed
     configuration behavior and direct native Rust machine construction. Test
     missing/invalid values, device ordering, and browser asset loading.
-4.  Add the parallel generic VirtIO block connector in `src/virtio_devices.rs`,
+2.  Add the parallel generic VirtIO block connector in `src/virtio_devices.rs`,
     `src/machine.rs`, `src/browser_runtime.rs`, the raw ABI, and
     `js/riscbox.js`. Define typed request ID, device ID, generation, sector,
     length, result, reset, and close operations. Keep the old HTTP store and
     configuration route available. Test reads, writes, malformed replies,
     failures, multiple drives, reset during I/O, and WASM memory ownership.
-5.  Add a TypeScript HTTP provider that parses existing split-image manifests,
+3.  Add a TypeScript HTTP provider that parses existing split-image manifests,
     fetches clean blocks, retains bounded cache and session CoW semantics,
     and follows current cache headers. Compare actual guest results and the
-    baseline from milestone 1 in Chrome. Keep both HTTP implementations until
+    baseline above in Chrome. Keep both HTTP implementations until
     performance and memory behavior justify a separate consolidation decision.
-6.  Add an array-backed TypeScript provider with direct write-through to a
+4.  Add an array-backed TypeScript provider with direct write-through to a
     host-supplied byte array. Define alignment, capacity, partial final block,
     and ownership of the array at construction. Test host-visible writes,
     preserved bytes across halt/reboot, and teardown. Validate orderly guest

@@ -9,7 +9,7 @@ test: wasm js
 	cargo test --workspace
 	uv run -q --script tests/test_splitimg.py
 	uv run -q --script tests/test_image_deployment.py
-	node --test js/network.test.mjs js/p9.test.mjs js/riscbox.test.cjs
+	node --test js/block.test.mjs js/network.test.mjs js/p9.test.mjs js/riscbox.test.cjs
 	node --test tests/network_browser.test.mjs
 
 check: test

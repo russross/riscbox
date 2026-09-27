@@ -216,6 +216,37 @@ adapter copies guest write bytes and provider read replies across WASM memory.
 Observe an orderly guest shutdown before treating a writable host image as
 synchronized, since the guest kernel may buffer writes.
 
+The parallel TypeScript HTTP provider opens an existing split-image manifest.
+Its `capacitySectors` supplies the resolved drive capacity; it keeps a bounded
+clean-block cache (16 MiB initially, growing for a single request) and a
+session-local 4 KiB copy-on-write overlay. The original `drive0: { file: ... }`
+path remains available. Import the generated module and register the provider:
+
+```js
+import { openHttpBlockProvider } from "./block/http.js";
+
+const disk = await openHttpBlockProvider(new URL("./drive/blk.txt", location.href).href);
+const runtime = await Riscbox.instantiate(wasmBytes, {
+    blockProviders: new Map([[1, disk]]),
+});
+await runtime.startResolved({
+    version: 1, machine: "riscv64", memory_size: 256,
+    bios: firmwareUrl, kernel: kernelUrl,
+    drive0: { provider: 1, capacity_sectors: disk.capacitySectors.toString() },
+});
+```
+
+For a writable host image, import `ArrayBlockProvider` from
+`./block/array.js` and register `new ArrayBlockProvider(bytes)` in the same
+`blockProviders` map. Pass its `capacitySectors` as the resolved drive
+capacity. The provider uses the caller's exact `Uint8Array` view. The array must
+contain a positive whole number of 512-byte sectors; a partial final sector
+is rejected. Reads return copies, and writes directly change the supplied
+array. `reset()` retains its contents. `close()` makes the provider unusable
+but leaves the caller's array intact for export. Use a clone when the source
+must remain pristine, and inspect or export a filesystem image after orderly
+guest shutdown.
+
 ```js
 {
     version: 1,

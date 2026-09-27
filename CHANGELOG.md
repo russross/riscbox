@@ -4,6 +4,18 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Added a parallel TypeScript split-HTTP block provider using the existing
+    manifest format, a bounded clean-block cache, and session-local CoW
+    clusters. A fresh-profile Chrome Alpine login used 10 blocks (5 MiB) on
+    each HTTP path: 0.72 seconds with either provider in single runs. Reported
+    JS heap at login was about 6.1 MiB for Rust HTTP and 8.2 MiB for the new
+    provider. The Rust HTTP path remains available.
+*   Added a direct write-through `Uint8Array` block provider. Its capacity is
+    the array's whole 512-byte sectors, its reads return copies, and its data
+    survives VM reset and remains owned by the host after teardown. In Chrome,
+    Alpine wrote a file, shut down, booted again on the same array, and read
+    the file before teardown.
+
 *   Added parallel host-backed VirtIO block transport. Resolved drive entries
     select registered browser providers in guest order beside existing HTTP
     drives. Sector requests cross the raw WASM ABI with device, generation,

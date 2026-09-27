@@ -112,81 +112,22 @@ custom Linux kernel lacks ISO9660. Revisit the required firmware, boot image,
 filesystem, and storage path together against an actual ISO.
 
 Supporting installation media also needs a separate storage milestone. Extend
-the resolved drive configuration and host block providers described below for
+the resolved drive configuration and host block providers for
 plain image assets or installation media. Select read-only, session CoW, or
 mutable behavior explicitly. Validate multiple attached drives, failed reads,
 and write behavior before documenting ISO or installer boot as supported.
 
-### Block provider migration
+### HTTP block consolidation
 
-Problem and evidence: the current runtime reads a configuration file and HTTP
-drive manifests in Rust, and `HttpBlockStore` owns both the clean-block cache
-and the session CoW overlay. A host byte array cannot receive guest writes
-through that store. A block transport that crosses the WASM boundary on every
-guest request may materially affect HTTP-backed guest performance, so retain
-the existing HTTP path in parallel until a measured decision about
-consolidation.
-
-HTTP baseline from one headless Chrome run per workload, before migration:
-
-*   Risclet login: 1.98 seconds from boot click, 21 block responses totaling
-    11,010,048 bytes from 12 distinct block URLs. This run reused a Chrome
-    profile after an earlier Risclet boot, so browser cache was warm.
-*   Prepared Alpine login: 0.92 seconds from page startup, 10 block responses
-    totaling 5,242,880 bytes from 10 distinct block URLs. The current Rust
-    HTTP store was unchanged; the image included the new power handlers.
-*   xv6 profile compile marker: 99.77 seconds from page startup, 159 block
-    responses totaling 83,361,792 bytes from 157 distinct block URLs. The
-    guest shell reported 98.80 seconds for the compile. This used a fresh page
-    load of the existing xv6 distribution. These single runs do not establish
-    run-to-run variance or a performance target by themselves.
-
-The current block response path copies fetched bytes into a WASM allocation
-and then into an owned Rust vector before the clean cache takes ownership.
-`fetchMs` sums from the three probes were 2.02 seconds, 0.02 seconds, and
-0.42 seconds respectively; overlapping requests make those sums unsuitable as
-wall-time costs. Repeat fixed image and cache conditions when comparing the
-new provider, including browser memory use and complete guest workload time.
-
-Data and ownership:
-
-*   Rust will keep validated machine configuration, machine construction,
-    guest RAM, VirtIO descriptor validation, and device ordering. JavaScript
-    will resolve configuration defaults,
-    asset URLs, and host provider references before passing a resolved startup
-    structure across the raw WASM ABI. A configuration URL remains a JavaScript
-    convenience; callers may also provide the resolved structure directly.
-*   Add a generic asynchronous block transport alongside `HttpBlockStore`.
-    Rust validates sector alignment, capacity, descriptor shape, and returned
-    read length, then passes read/write sector requests to JavaScript and
-    completes VirtIO status. The new TypeScript HTTP provider owns its cache
-    and CoW overlay. The array provider reads and writes a host-supplied byte
-    array directly, without another cache or overlay. Provider failure must
-    complete the guest request with an I/O error; reset retires late replies.
-    Do not promise a consistent host export until the guest has shut down or
-    otherwise completed its own filesystem synchronization.
-
-Milestones and acceptance, in dependency order:
-
-1.  Add a TypeScript HTTP provider that parses existing split-image manifests,
-    fetches clean blocks, retains bounded cache and session CoW semantics,
-    and follows current cache headers. Compare actual guest results and the
-    baseline above in Chrome. Keep both HTTP implementations until
-    performance and memory behavior justify a separate consolidation decision.
-2.  Add an array-backed TypeScript provider with direct write-through to a
-    host-supplied byte array. Define alignment, capacity, partial final block,
-    and ownership of the array at construction. Test host-visible writes,
-    preserved bytes across halt/reboot, and teardown. Validate orderly guest
-    shutdown before exporting a writable filesystem image.
-
-Cross-cutting acceptance: run `make check`, build clean WASM, exercise headed
-or headless Chrome with a temporary profile, and boot the relevant real guests
-at each platform milestone. Update `AGENTS.md`, `README.md`, and `CHANGELOG.md`
-as behavior lands; remove completed steps from this plan. Keep the QEMU-like
-distinction between soft guest requests and forced host actions. Defer a block
-flush feature until a guest or persistence contract requires it; kernel write
-back is the guest's responsibility. Suspend/resume and adjustable CPU idle
-policy remain separate future work.
+Keep the Rust and TypeScript HTTP paths in parallel. A single fresh-profile
+Alpine Chrome run per path reached login in about 0.72 seconds and fetched the
+same 10 blocks (5 MiB), while reported JS heap at login was about 6.1 MiB for
+Rust HTTP and 8.2 MiB for TypeScript HTTP. Before removing either path, repeat
+matched runs and compare Risclet login, xv6 profile compilation, and browser
+memory under controlled cache conditions. The earlier Rust-only baseline used
+warm cache for Risclet login (1.98 seconds, 21 responses), and separate runs
+for Alpine login (0.92 seconds, 10 responses) and xv6 compilation (99.77
+seconds, 159 responses). Those results do not measure run-to-run variation.
 
 ### WASI integration
 

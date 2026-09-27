@@ -4,6 +4,9 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Disabled U-Boot's unused EFI capsule host tool so release builds do not
+    require GnuTLS development headers.
+
 *   Stabilized the Chrome network integration test during release builds by
     waiting for process closure and retrying temporary-profile cleanup while
     Chrome child processes finish writing.

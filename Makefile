@@ -5,11 +5,13 @@ all: release
 release:
 	cargo build --release --workspace
 
-test: wasm js
+test-unit: js
 	cargo test --workspace
 	uv run -q --script tests/test_splitimg.py
 	uv run -q --script tests/test_image_deployment.py
 	node --test js/block.test.mjs js/network.test.mjs js/p9.test.mjs js/riscbox.test.cjs
+
+test: test-unit wasm
 	node --test tests/network_browser.test.mjs
 
 check: test
@@ -47,4 +49,4 @@ clean-all: clean
 	$(MAKE) -C opensbi clean
 	$(MAKE) -C uboot clean
 
-.PHONY: all release test check wasm js js-check kernel opensbi uboot dist clean clean-all
+.PHONY: all release test-unit test check wasm js js-check kernel opensbi uboot dist clean clean-all

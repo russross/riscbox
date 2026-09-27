@@ -277,8 +277,11 @@ intended loadable section explicitly.
 Validation
 ----------
 
-*   `make test` runs Rust, Python tool, and JavaScript adapter/server tests.
-*   `make check` adds strict Clippy and Python type checks.
+*   `make test-unit` runs Rust, Python tool, and JavaScript adapter/server tests.
+*   `make test` adds the real WASM/Chrome network integration test for development.
+*   `make check` adds strict Clippy and Python type checks. The GitHub release
+    workflow runs unit tests, type checks, Clippy, and builds without Chrome or
+    full-guest tests.
 *   `make wasm` builds the deployed Rust WebAssembly artifact.
 *   `make kernel`, `make opensbi`, and `make uboot` build the pinned guest
     components; `make dist` builds them with the core WASM and JavaScript.

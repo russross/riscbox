@@ -4,6 +4,11 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Kept Chrome/WASM network integration testing in the local development
+    checks while limiting GitHub release validation to unit tests, type checks,
+    Clippy, and builds. The network probe now starts after WebSocket carrier
+    comes up, avoiding an outbound-frame race during browser startup.
+
 *   Disabled U-Boot's unused EFI capsule host tool so release builds do not
     require GnuTLS development headers.
 

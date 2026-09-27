@@ -84,7 +84,9 @@ jobs:
       - name: Build and validate
         if: steps.version.outputs.build == 'true'
         run: |
-          make check
+          make test-unit js-check
+          cargo clippy --all-targets --workspace -- -D warnings
+          uvx --quiet ty check tools/splitimg.py tools/image_deployment.py
           uvx --quiet ty check .github/scripts/release_version.py
           make -B wasm
           make kernel opensbi uboot

@@ -93,9 +93,25 @@ try {
         networkWrite: network.transmit,
         onError: (error) => report("runtime: " + error.message),
     });
-    network.attach(runtime);
+    let started = false;
+    network.attach({
+        networkInput(packet) {
+            return runtime.networkInput(packet);
+        },
+        networkCarrier(up) {
+            const result = runtime.networkCarrier(up);
+            if (up && !started) {
+                started = true;
+                try {
+                    runtime.start("/riscbox.cfg", 32, "", 0, 0, true);
+                } catch (error) {
+                    report("startup: " + error.message);
+                }
+            }
+            return result;
+        },
+    });
     network.connect();
-    runtime.start("/riscbox.cfg", 32, "", 0, 0, true);
 } catch (error) {
     report("startup: " + error.message);
 }
@@ -164,13 +180,18 @@ test("real WASM exchanges Ethernet frames through Chrome and a local origin", as
         const accept = createHash("sha1")
             .update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
             .digest("base64");
-        socket.write(
-            "HTTP/1.1 101 Switching Protocols\r\n" +
-            "Upgrade: websocket\r\n" +
-            "Connection: Upgrade\r\n" +
-            `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
-        );
-        socket.write(encodeFrame(Buffer.from(fixture)));
+        // Keep the socket opening while the page loads so the probe exercises startup ordering.
+        globalThis.setTimeout(() => {
+            if (socket.destroyed)
+                return;
+            socket.write(
+                "HTTP/1.1 101 Switching Protocols\r\n" +
+                "Upgrade: websocket\r\n" +
+                "Connection: Upgrade\r\n" +
+                `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
+            );
+            socket.write(encodeFrame(Buffer.from(fixture)));
+        }, 250);
         let pending = Buffer.alloc(0);
         socket.on("data", (data) => {
             pending = Buffer.concat([pending, data]);

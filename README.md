@@ -83,16 +83,17 @@ console page.
 Build targets
 -------------
 
-| Target         | Result                                                        |
-| -------------- | ------------------------------------------------------------- |
-| `make release` | Optimized Rust workspace for development and native tests     |
-| `make test`    | Rust, Python tool, and JavaScript tests                       |
-| `make check`   | Tests, strict Clippy, TypeScript, and Python type checks       |
-| `make wasm`    | `target/wasm32-unknown-unknown/release/riscbox_wasm.wasm`      |
-| `make kernel`  | Canonical custom kernel at `kernel/linux`                     |
-| `make opensbi` | Riscbox-configured firmware at `opensbi/fw_dynamic.bin`       |
-| `make uboot`   | Pinned EROFS-capable S-mode bootloader at `uboot/u-boot.bin`   |
-| `make dist`    | WASM, generated JavaScript, kernel, OpenSBI, and U-Boot        |
+| Target           | Result                                                        |
+| ---------------- | ------------------------------------------------------------- |
+| `make release`   | Optimized Rust workspace for development and native tests     |
+| `make test-unit` | Rust, Python tool, and JavaScript unit tests                   |
+| `make test`      | Unit tests and the Chrome/WASM network integration test       |
+| `make check`     | Full tests, strict Clippy, TypeScript, and Python type checks  |
+| `make wasm`      | `target/wasm32-unknown-unknown/release/riscbox_wasm.wasm`      |
+| `make kernel`    | Canonical custom kernel at `kernel/linux`                     |
+| `make opensbi`   | Riscbox-configured firmware at `opensbi/fw_dynamic.bin`       |
+| `make uboot`     | Pinned EROFS-capable S-mode bootloader at `uboot/u-boot.bin`   |
+| `make dist`      | WASM, generated JavaScript, kernel, OpenSBI, and U-Boot        |
 
 Browser library
 ---------------

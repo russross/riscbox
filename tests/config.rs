@@ -53,6 +53,11 @@ fn pseudo_json_value_api_handles_arrays_comments_and_escapes() {
     assert!(parse_value("-1").is_err());
     assert!(parse_value("{} trailing").is_err());
     assert!(parse_value("/* unterminated").is_err());
+    assert_eq!(
+        parse_value(r#""\u00e9\uD83D\uDE00\b\/""#).expect("JSON string"),
+        Value::String("é😀\u{0008}/".into())
+    );
+    assert!(parse_value(r#""\uD83D""#).is_err());
 }
 
 #[test]
@@ -127,4 +132,18 @@ fn resolves_assets_relative_to_the_configuration() {
     );
     assert_eq!(resolve_asset_path(Some("riscbox.cfg"), "fw.bin"), "fw.bin");
     assert_eq!(resolve_asset_path(None, "fw.bin"), "fw.bin");
+}
+
+#[test]
+fn resolved_config_requires_explicit_defaults_and_validates_devices() {
+    let source = r#"{"version":1,"machine":"riscv64","memory_size":128,
+        "console":"virtio","uart_output":false,"rtc_local_time":false,
+        "cmdline":"","drive0":{"file":"https://host/disk/blk.txt"}}"#;
+    let config = VmConfig::from_resolved(source).expect("resolved config");
+    assert_eq!(config.drives[0].file, "https://host/disk/blk.txt");
+    assert!(
+        VmConfig::from_resolved(r#"{"version":1,"machine":"riscv64","memory_size":128}"#).is_err()
+    );
+    assert!(VmConfig::from_resolved(&source.replace("riscv64", "other")).is_err());
+    assert!(VmConfig::from_resolved(&source.replace("https://host/disk/blk.txt", "")).is_err());
 }

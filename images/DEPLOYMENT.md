@@ -105,7 +105,7 @@ network frontend. Riscbox has no native user-mode or TAP backend.
 
 The distribution contains `network/index.js` and its declaration file. Create
 a `WebSocketNetwork`, pass its bound `transmit` method as `networkWrite`, attach
-the runtime, connect it, and pass `true` as the final `runtime.start()` argument.
+the runtime, connect it, and pass `true` as the final `runtime.startFromUrl()` argument.
 The endpoint URL belongs to the page integration rather than `riscbox.cfg`.
 See `network/README.md` in the distribution for the binary Ethernet protocol,
 limits, reconnect behavior, and production origin-service requirements.
@@ -157,7 +157,7 @@ Browser integration
 -------------------
 
 The supplied page loads `riscbox.js`, instantiates `riscbox.wasm`, and calls
-`runtime.start()` with the configuration URL. Custom integrations use the same
+`runtime.startFromUrl()` with the configuration URL. Custom integrations use the same
 small adapter:
 
 *   Pass `consoleWrite`, `onVmStarted`, `onError`, and optional scheduling

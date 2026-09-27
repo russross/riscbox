@@ -168,25 +168,18 @@ Data and ownership:
 
 Milestones and acceptance, in dependency order:
 
-1.  Refactor startup configuration at the JavaScript/Rust boundary. Define a
-    typed resolved configuration in `src/config.rs` and an ABI transfer in
-    `src/browser_abi.rs` and `riscbox-wasm/src/lib.rs`. Move file parsing,
-    defaults, and relative URL resolution to JavaScript while Rust validates
-    the received values and builds the machine. Preserve existing deployed
-    configuration behavior and direct native Rust machine construction. Test
-    missing/invalid values, device ordering, and browser asset loading.
-2.  Add the parallel generic VirtIO block connector in `src/virtio_devices.rs`,
+1.  Add the parallel generic VirtIO block connector in `src/virtio_devices.rs`,
     `src/machine.rs`, `src/browser_runtime.rs`, the raw ABI, and
     `js/riscbox.js`. Define typed request ID, device ID, generation, sector,
     length, result, reset, and close operations. Keep the old HTTP store and
     configuration route available. Test reads, writes, malformed replies,
     failures, multiple drives, reset during I/O, and WASM memory ownership.
-3.  Add a TypeScript HTTP provider that parses existing split-image manifests,
+2.  Add a TypeScript HTTP provider that parses existing split-image manifests,
     fetches clean blocks, retains bounded cache and session CoW semantics,
     and follows current cache headers. Compare actual guest results and the
     baseline above in Chrome. Keep both HTTP implementations until
     performance and memory behavior justify a separate consolidation decision.
-4.  Add an array-backed TypeScript provider with direct write-through to a
+3.  Add an array-backed TypeScript provider with direct write-through to a
     host-supplied byte array. Define alignment, capacity, partial final block,
     and ownership of the array at construction. Test host-visible writes,
     preserved bytes across halt/reboot, and teardown. Validate orderly guest

@@ -15,6 +15,164 @@
         "host-boot", "guest-failure",
     ];
 
+    function parseConfig(source) {
+        let offset = 0;
+        const fail = (message) => { throw new SyntaxError(`${message} at offset ${offset}`); };
+        const space = () => {
+            for (;;) {
+                while (/\s/.test(source[offset] ?? "") && offset < source.length) offset++;
+                if (source.startsWith("//", offset)) {
+                    offset = source.indexOf("\n", offset + 2);
+                    if (offset < 0) offset = source.length;
+                } else if (source.startsWith("/*", offset)) {
+                    const end = source.indexOf("*/", offset + 2);
+                    if (end < 0) fail("unterminated comment");
+                    offset = end + 2;
+                } else return;
+            }
+        };
+        const quoted = () => {
+            offset++;
+            let result = "";
+            for (;;) {
+                const ch = source[offset++];
+                if (ch === undefined || ch === "\n" || ch === "\r") fail("unterminated string");
+                if (ch === '"') return result;
+                if (ch !== "\\") { result += ch; continue; }
+                const escape = source[offset++];
+                if (escape === "x") {
+                    const hex = source.slice(offset, offset + 2);
+                    if (!/^[0-9a-fA-F]{2}$/.test(hex)) fail("invalid hex escape");
+                    result += String.fromCharCode(parseInt(hex, 16));
+                    offset += 2;
+                } else if (escape === "n") result += "\n";
+                else if (escape === "r") result += "\r";
+                else if (escape === "t") result += "\t";
+                else if (escape === "\\" || escape === '"' || escape === "'") result += escape;
+                else fail("unknown escape code");
+            }
+        };
+        const identifier = () => {
+            const match = /^[A-Za-z_$][A-Za-z0-9_$]*/.exec(source.slice(offset));
+            if (!match) fail("invalid identifier");
+            offset += match[0].length;
+            return match[0];
+        };
+        const value = () => {
+            space();
+            if (source[offset] === '"') return quoted();
+            if (source[offset] === "{") {
+                offset++;
+                const object = Object.create(null);
+                space();
+                while (source[offset] !== "}") {
+                    const key = source[offset] === '"' ? quoted() : identifier();
+                    space();
+                    if (source[offset++] !== ":") fail("expected ':'");
+                    object[key] = value();
+                    space();
+                    if (source[offset] === "}") break;
+                    if (source[offset++] !== ",") fail("expected ','");
+                    space();
+                }
+                offset++;
+                return object;
+            }
+            if (source[offset] === "[") {
+                offset++;
+                const array = [];
+                space();
+                while (source[offset] !== "]") {
+                    array.push(value());
+                    space();
+                    if (source[offset] === "]") break;
+                    if (source[offset++] !== ",") fail("expected ','");
+                    space();
+                }
+                offset++;
+                return array;
+            }
+            const number = /^(?:0[xX][0-9a-fA-F]+|0[0-7]*|[1-9][0-9]*)/.exec(source.slice(offset));
+            if (number) {
+                offset += number[0].length;
+                return number[0].startsWith("0") && !/^0[xX]/.test(number[0])
+                    ? parseInt(number[0], 8) : Number(number[0]);
+            }
+            const word = identifier();
+            if (word === "true") return true;
+            if (word === "false") return false;
+            if (word === "null") return null;
+            fail("unknown identifier");
+        };
+        const result = value();
+        space();
+        if (offset !== source.length) fail("unexpected characters after value");
+        return result;
+    }
+
+    function resolveConfig(source, baseUrl, commandLine = "") {
+        if (!source || typeof source !== "object" || Array.isArray(source))
+            throw new TypeError("configuration must be an object");
+        const required = (name, type) => {
+            if (typeof source[name] !== type) throw new TypeError(`${name} must be ${type}`);
+            return source[name];
+        };
+        const optional = (name, type, fallback) => {
+            if (source[name] === undefined) return fallback;
+            return required(name, type);
+        };
+        const path = (name) => {
+            const value = optional(name, "string", null);
+            if (value === null || !baseUrl || value.includes(":") || value.startsWith("/"))
+                return value;
+            const slash = baseUrl.lastIndexOf("/");
+            return slash < 0 ? value : baseUrl.slice(0, slash + 1) + value;
+        };
+        if (required("version", "number") !== 1) throw new RangeError("unsupported configuration version");
+        const resolved = {
+            version: 1,
+            machine: required("machine", "string"),
+            memory_size: required("memory_size", "number"),
+            console: optional("console", "string", "virtio"),
+            uart_output: optional("uart_output", "boolean", false),
+            rtc_local_time: optional("rtc_local_time", "boolean", false),
+            cmdline: optional("cmdline", "string", ""),
+        };
+        if (commandLine) resolved.cmdline = commandLine.startsWith("!")
+            ? commandLine.slice(1) : `${resolved.cmdline} ${commandLine}`;
+        for (const name of ["bios", "kernel", "initrd"]) {
+            const url = path(name);
+            if (url !== null) resolved[name] = url;
+        }
+        for (const name of ["bios_address", "kernel_address", "initrd_address", "fdt_address"]) {
+            if (source[name] !== undefined) resolved[name] = source[name];
+        }
+        for (const [prefix, limit] of [["drive", 4], ["fs", 4], ["eth", 1]]) {
+            if (source[`${prefix}${limit}`] !== undefined)
+                throw new RangeError(`too many ${prefix} entries`);
+            for (let index = 0; index < limit; index++) {
+                const name = `${prefix}${index}`;
+                if (source[name] === undefined) break;
+                const entry = source[name];
+                if (!entry || typeof entry !== "object" || Array.isArray(entry))
+                    throw new TypeError(`${name} must be an object`);
+                resolved[name] = prefix === "drive"
+                    ? { ...entry, file: resolveConfigPath(entry.file, baseUrl) } : entry;
+            }
+        }
+        for (const name of ["display0", "input_device"]) {
+            if (source[name] !== undefined) resolved[name] = source[name];
+        }
+        return resolved;
+    }
+
+    function resolveConfigPath(value, baseUrl) {
+        if (typeof value !== "string") throw new TypeError("drive file must be a string");
+        if (!baseUrl || value.includes(":") || value.startsWith("/")) return value;
+        const slash = baseUrl.lastIndexOf("/");
+        return slash < 0 ? value : baseUrl.slice(0, slash + 1) + value;
+    }
+
     class Riscbox {
         constructor(exports, options = {}) {
             if (!(exports.memory instanceof WebAssembly.Memory))
@@ -150,6 +308,31 @@
                     )));
             this.drainActions();
             return result;
+        }
+
+        startResolved(config, ramMiB = 0, width = 0, height = 0, hasNetwork = false) {
+            const resolved = resolveConfig(config, null);
+            const result = this.withBytes(JSON.stringify(resolved), (ptr, length) =>
+                this.exports.riscbox_start_resolved(
+                    ptr, length, ramMiB, width, height, hasNetwork ? 1 : 0,
+                ));
+            if (result !== 0) throw new Error("Riscbox rejected resolved configuration");
+            this.drainActions();
+            return result;
+        }
+
+        async startFromUrl(configUrl, ramMiB = 0, commandLine = "", width = 0,
+                           height = 0, hasNetwork = false) {
+            const fetchRequest = this.options.fetch ?? globalThis.fetch;
+            if (typeof fetchRequest !== "function")
+                throw new Error("Riscbox HTTP fetch is not available");
+            const response = await fetchRequest(configUrl, { cache: "no-store" });
+            if (response.status < 200 || response.status >= 300)
+                throw new Error(`configuration HTTP status ${response.status}`);
+            const source = decoder.decode(await response.arrayBuffer());
+            const resolved = resolveConfig(parseConfig(source), configUrl, commandLine);
+            this.configUrl = configUrl;
+            return this.startResolved(resolved, ramMiB, width, height, hasNetwork);
         }
 
         control(name) {

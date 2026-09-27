@@ -839,6 +839,53 @@ impl BrowserRuntime {
         Ok(())
     }
 
+    /// Starts asset loading from a host-resolved configuration.
+    ///
+    /// # Errors
+    /// Returns an error for an invalid configuration or an active VM.
+    pub fn start_resolved(
+        &mut self,
+        start: RuntimeStart,
+        config: VmConfig,
+    ) -> Result<(), RuntimeError> {
+        if !matches!(self.state, State::VmInactive) {
+            return Err(RuntimeError::AlreadyStarted);
+        }
+        self.guest_clock_floor_ticks = 0;
+        self.cycle_rate_estimate = RateEstimate::default();
+        self.adaptive_skew = AdaptiveSkew::default();
+        self.last_quantum = QuantumStatistics::default();
+        self.begin_loading(start, config)
+    }
+
+    fn begin_loading(&mut self, start: RuntimeStart, config: VmConfig) -> Result<(), RuntimeError> {
+        let mut assets = VecDeque::new();
+        for (kind, path) in [
+            (AssetKind::Firmware, config.bios.as_deref()),
+            (AssetKind::Kernel, config.kernel.as_deref()),
+            (AssetKind::Initrd, config.initrd.as_deref()),
+        ] {
+            if let Some(path) = path {
+                assets.push_back((kind, path.to_owned()));
+            }
+        }
+        for (index, drive) in config.drives.iter().enumerate() {
+            assets.push_back((AssetKind::Drive(index), drive.file.clone()));
+        }
+        let drive_count = config.drives.len();
+        self.state = State::Loading(Box::new(Loading {
+            start,
+            config: Some(config),
+            assets,
+            waiting: None,
+            firmware: None,
+            kernel: None,
+            initrd: None,
+            drive_manifests: (0..drive_count).map(|_| None).collect(),
+        }));
+        self.request_next_asset()
+    }
+
     /// Supplies the response for the currently pending HTTP request.
     ///
     /// # Errors
@@ -869,35 +916,16 @@ impl BrowserRuntime {
                 if !start.command_line.is_empty() {
                     config.apply_command_line(&start.command_line);
                 }
-                let mut assets = VecDeque::new();
-                for (kind, path) in [
-                    (AssetKind::Firmware, config.bios.as_deref()),
-                    (AssetKind::Kernel, config.kernel.as_deref()),
-                    (AssetKind::Initrd, config.initrd.as_deref()),
-                ] {
-                    if let Some(path) = path {
-                        assets.push_back((kind, resolve_asset_path(Some(&start.config_url), path)));
-                    }
+                for value in [&mut config.bios, &mut config.kernel, &mut config.initrd]
+                    .into_iter()
+                    .flatten()
+                {
+                    *value = resolve_asset_path(Some(&start.config_url), value);
                 }
-                for (index, drive) in config.drives.iter().enumerate() {
-                    assets.push_back((
-                        AssetKind::Drive(index),
-                        resolve_asset_path(Some(&start.config_url), &drive.file),
-                    ));
+                for drive in &mut config.drives {
+                    drive.file = resolve_asset_path(Some(&start.config_url), &drive.file);
                 }
-                let drive_count = config.drives.len();
-                let loading = Loading {
-                    start,
-                    config: Some(config),
-                    assets,
-                    waiting: None,
-                    firmware: None,
-                    kernel: None,
-                    initrd: None,
-                    drive_manifests: (0..drive_count).map(|_| None).collect(),
-                };
-                self.state = State::Loading(Box::new(loading));
-                self.request_next_asset()
+                self.begin_loading(start, config)
             }
             State::Loading(mut loading) => {
                 let Some((request_id, kind)) = loading.waiting.take() else {
@@ -914,7 +942,19 @@ impl BrowserRuntime {
                     AssetKind::Kernel => loading.kernel = Some(bytes),
                     AssetKind::Initrd => loading.initrd = Some(bytes),
                     AssetKind::Drive(index) => {
-                        let url = config_asset_url(&loading, index)?;
+                        let url = loading
+                            .config
+                            .as_ref()
+                            .ok_or_else(|| {
+                                RuntimeError::InvalidConfig("missing configuration".into())
+                            })?
+                            .drives
+                            .get(index)
+                            .ok_or_else(|| {
+                                RuntimeError::InvalidConfig("invalid drive index".into())
+                            })?
+                            .file
+                            .clone();
                         loading.drive_manifests[index] = Some((url, bytes));
                     }
                 }
@@ -1423,21 +1463,6 @@ fn scale_pointer_coordinate(value: u32, extent: u32) -> u32 {
     }
     let value = value.min(extent - 1);
     u32::try_from(u64::from(value) * 32_768 / u64::from(extent)).unwrap_or(32_767)
-}
-
-fn config_asset_url(loading: &Loading, index: usize) -> Result<String, RuntimeError> {
-    let config = loading
-        .config
-        .as_ref()
-        .expect("loading state retains config");
-    let drive = config
-        .drives
-        .get(index)
-        .ok_or_else(|| RuntimeError::InvalidConfig("invalid drive index".into()))?;
-    Ok(resolve_asset_path(
-        Some(&loading.start.config_url),
-        &drive.file,
-    ))
 }
 
 struct OutputNetwork(Rc<RefCell<VecDeque<Vec<u8>>>>);

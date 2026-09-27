@@ -35,7 +35,7 @@ function fakeModule() {
         riscbox_action_data_length() { return 0; },
     };
     for (const name of [
-        "start", "console_input", "console_resize", "key_event", "pointer_event",
+        "start", "start_resolved", "console_input", "console_resize", "key_event", "pointer_event",
         "wheel_event", "network_input", "network_carrier",
     ]) {
         exports[`riscbox_${name}`] = (...args) => {
@@ -45,6 +45,31 @@ function fakeModule() {
     }
     return { exports, calls };
 }
+
+test("configuration URL resolves defaults and assets before the WASM call", async () => {
+    const fake = fakeModule();
+    const fetched = [];
+    const runtime = new Riscbox(fake.exports, {
+        fetch: async (url, options) => {
+            fetched.push([url, options.cache]);
+            return { status: 200, arrayBuffer: async () => Buffer.from(
+                '{version:1,machine:"riscv64",memory_size:128,bios:"fw.bin",' +
+                'drive0:{file:"disk/blk.txt"},console:"uart",}',
+            ) };
+        },
+    });
+    await runtime.startFromUrl("https://host/vm/riscbox.cfg", 256, "quiet");
+    assert.deepEqual(fetched, [["https://host/vm/riscbox.cfg", "no-store"]]);
+    const call = fake.calls.find((entry) => entry[0] === "start_resolved");
+    const config = JSON.parse(new TextDecoder().decode(runtime.bytes(call[1], call[2])));
+    assert.equal(call[3], 256);
+    assert.equal(config.bios, "https://host/vm/fw.bin");
+    assert.equal(config.drive0.file, "https://host/vm/disk/blk.txt");
+    assert.equal(config.cmdline, " quiet");
+    assert.equal(config.uart_output, false);
+    assert.equal(config.rtc_local_time, false);
+    assert.throws(() => runtime.startResolved({ version: 1 }), /machine must be string/);
+});
 
 test("adapter copies host input into WASM memory and releases it", () => {
     const fake = fakeModule();

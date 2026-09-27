@@ -6,6 +6,7 @@ use crate::browser_input::{BrowserInputQueue, NetworkInputResult};
 use crate::browser_runtime::{
     BrowserRuntime, EntropyCallback, HostAction, QuantumOutcome, QuantumStart, RuntimeStart,
 };
+use crate::config::VmConfig;
 use crate::virtio_devices::{
     NinePEndpointId, NinePGeneration, NinePOutcome, NinePRequestId, NinePTransportAction,
 };
@@ -108,6 +109,47 @@ pub extern "C" fn riscbox_start(
         } else {
             0
         }
+    })
+}
+
+#[must_use]
+pub extern "C" fn riscbox_start_resolved(
+    config_address: u32,
+    config_length: u32,
+    ram_mib: u32,
+    width: u32,
+    height: u32,
+    has_network: u32,
+) -> i32 {
+    STATE.with_borrow_mut(|state| {
+        let Some(source) = allocated_string(state, config_address, config_length) else {
+            return -1;
+        };
+        let Ok(config) = VmConfig::from_resolved(&source) else {
+            return -1;
+        };
+        let memory = if ram_mib == 0 {
+            u32::try_from(config.memory_size_mib).unwrap_or(0)
+        } else {
+            ram_mib
+        };
+        if memory == 0 {
+            return -1;
+        }
+        state
+            .runtime
+            .start_resolved(
+                RuntimeStart {
+                    config_url: String::new(),
+                    ram_mib: memory,
+                    command_line: String::new(),
+                    width,
+                    height,
+                    has_network: has_network != 0,
+                },
+                config,
+            )
+            .map_or(-1, |()| 0)
     })
 }
 

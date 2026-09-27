@@ -65,6 +65,26 @@ pub extern "C" fn riscbox_start(
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn riscbox_start_resolved(
+    config_address: u32,
+    config_length: u32,
+    ram_mib: u32,
+    width: u32,
+    height: u32,
+    has_network: u32,
+) -> i32 {
+    install_entropy_callback();
+    browser_abi::riscbox_start_resolved(
+        config_address,
+        config_length,
+        ram_mib,
+        width,
+        height,
+        has_network,
+    )
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn riscbox_halt() -> i32 {
     browser_abi::riscbox_halt()
 }

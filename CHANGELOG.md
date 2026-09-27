@@ -4,6 +4,10 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Added `startFromUrl` and `startResolved` browser startup APIs. JavaScript
+    parses deployed configuration syntax, supplies defaults, and resolves
+    asset URLs before passing a validated resolved configuration to Rust. The
+    supplied browser pages use the new path; the legacy `start` ABI remains.
 *   Added guest-initiated reboot and retained guest poweroff on the QEMU
     `virt` syscon device. Host APIs now deliver soft shutdown and reboot input
     events, force halt/reset, boot a halted VM, and destroy it. In-place reset

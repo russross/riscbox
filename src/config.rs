@@ -225,9 +225,33 @@ impl<'a> Parser<'a> {
                 Some(b'\\') => {
                     let escaped = match self.take() {
                         Some(b'\'' | b'"' | b'\\') => self.source[self.offset - 1],
+                        Some(b'/') => b'/',
+                        Some(b'b') => 8,
+                        Some(b'f') => 12,
                         Some(b'n') => b'\n',
                         Some(b'r') => b'\r',
                         Some(b't') => b'\t',
+                        Some(b'u') => {
+                            let high = self.hex_quad()?;
+                            let scalar = if (0xd800..=0xdbff).contains(&high) {
+                                if self.take() != Some(b'\\') || self.take() != Some(b'u') {
+                                    return Err(self.error("missing low Unicode surrogate"));
+                                }
+                                let low = self.hex_quad()?;
+                                if !(0xdc00..=0xdfff).contains(&low) {
+                                    return Err(self.error("invalid low Unicode surrogate"));
+                                }
+                                0x10000 + ((u32::from(high) - 0xd800) << 10) + u32::from(low)
+                                    - 0xdc00
+                            } else {
+                                u32::from(high)
+                            };
+                            let character = char::from_u32(scalar)
+                                .ok_or_else(|| self.error("invalid Unicode escape"))?;
+                            let mut buffer = [0; 4];
+                            bytes.extend_from_slice(character.encode_utf8(&mut buffer).as_bytes());
+                            continue;
+                        }
                         Some(b'x') => {
                             let high = self.hex_digit()?;
                             let low = self.hex_digit()?;
@@ -249,6 +273,14 @@ impl<'a> Parser<'a> {
             Some(byte @ b'A'..=b'F') => Ok(byte - b'A' + 10),
             _ => Err(self.error("invalid hex digit")),
         }
+    }
+
+    fn hex_quad(&mut self) -> Result<u16, ParseError> {
+        let mut value = 0_u16;
+        for _ in 0..4 {
+            value = (value << 4) | u16::from(self.hex_digit()?);
+        }
+        Ok(value)
     }
 
     fn identifier(&mut self) -> Result<String, ParseError> {
@@ -382,6 +414,57 @@ impl From<ParseError> for ConfigError {
 }
 
 impl VmConfig {
+    /// Validates a fully resolved configuration supplied by the browser host.
+    ///
+    /// # Errors
+    /// Returns an error when a required resolved field is absent or invalid.
+    pub fn from_resolved(source: &str) -> Result<Self, ConfigError> {
+        let value = parse_value(source)?;
+        let object = value
+            .as_object()
+            .ok_or_else(|| ConfigError("resolved configuration must be an object".into()))?;
+        for field in [
+            "version",
+            "machine",
+            "memory_size",
+            "console",
+            "uart_output",
+            "rtc_local_time",
+            "cmdline",
+        ] {
+            if !object.contains_key(field) {
+                return Err(ConfigError(format!("missing resolved '{field}'")));
+            }
+        }
+        let config = Self::parse(source)?;
+        config.validate_resolved()?;
+        Ok(config)
+    }
+
+    fn validate_resolved(&self) -> Result<(), ConfigError> {
+        if self.machine != "riscv64" || self.memory_size_mib <= 0 {
+            return Err(ConfigError(
+                "invalid resolved machine or memory size".into(),
+            ));
+        }
+        if self.drives.iter().any(|drive| drive.file.is_empty()) {
+            return Err(ConfigError("drive URL may not be empty".into()));
+        }
+        if self.display.as_ref().is_some_and(|display| {
+            display.device != "simplefb" || display.width <= 0 || display.height <= 0
+        }) {
+            return Err(ConfigError("invalid resolved display".into()));
+        }
+        if self
+            .input_device
+            .as_deref()
+            .is_some_and(|device| device != "virtio")
+        {
+            return Err(ConfigError("invalid resolved input device".into()));
+        }
+        Ok(())
+    }
+
     /// Parses and validates a version-one virtual machine configuration.
     ///
     /// # Errors

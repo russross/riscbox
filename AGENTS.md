@@ -106,6 +106,10 @@ deployments gzip firmware and the next-stage payload while naming them from
 their uncompressed hashes. HTTP
 disk writes are session-local. The browser adapter uses `force-cache` for
 content-hash-named boot and disk assets and `no-store` for the configuration.
+The browser adapter now parses configuration files, supplies defaults, and
+resolves boot and drive URLs through `startFromUrl`; `startResolved` accepts a
+host object. Rust validates the resolved configuration and still constructs
+the machine. The legacy `start` path and native Rust parser remain available.
 HTTP block stores start with a 16 MiB in-memory cache limit that grows to
 cover a single request when needed.
 

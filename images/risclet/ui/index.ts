@@ -41,7 +41,7 @@ interface FramebufferGeometry {
 }
 
 interface RiscboxRuntime {
-    start(configUrl: string, memoryMiB: number): number;
+    startFromUrl(configUrl: string, memoryMiB: number): Promise<number>;
     consoleInput(bytes: Uint8Array): void;
     consoleResize(columns: number, rows: number): void;
     boot(): Promise<void>;
@@ -594,7 +594,7 @@ class VmController {
             }
             this.runtime = runtime;
             this.fit();
-            const result = runtime.start(new URL("riscbox.cfg", window.location.href).href, 256);
+            const result = await runtime.startFromUrl(new URL("riscbox.cfg", window.location.href).href, 256);
             if (result !== 0) {
                 throw new Error("Riscbox rejected the VM configuration");
             }

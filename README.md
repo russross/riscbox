@@ -84,7 +84,7 @@ const runtime = await Riscbox.instantiate(await response.arrayBuffer(), {
     onError: (error) => console.error(error),
 });
 
-runtime.start(new URL("./riscbox.cfg", location.href).href, 256);
+await runtime.startFromUrl(new URL("./riscbox.cfg", location.href).href, 256);
 </script>
 ```
 
@@ -147,7 +147,7 @@ const runtime = await Riscbox.instantiate(await response.arrayBuffer(), {
 });
 network.attach(runtime);
 network.connect();
-runtime.start(new URL("./riscbox.cfg", location.href).href, 256, "", 0, 0, true);
+await runtime.startFromUrl(new URL("./riscbox.cfg", location.href).href, 256, "", 0, 0, true);
 ```
 
 The endpoint uses the protocol documented in `network/README.md`: each binary
@@ -168,6 +168,16 @@ VM configuration
 Riscbox accepts JSON with comments, unquoted property names, and trailing
 commas. Asset paths are resolved relative to the configuration file. A minimal
 disk-backed Linux VM is:
+
+`startFromUrl(url, ramMiB?, commandLine?, width?, height?, hasNetwork?)`
+fetches the file with `no-store`, resolves defaults and asset URLs in
+JavaScript, then passes the result to Rust for validation and machine setup.
+`startResolved(config, ramMiB?, width?, height?, hasNetwork?)` accepts a host
+object directly. Its asset paths are used as given; callers supply absolute
+URLs when needed. `ramMiB` of zero uses the configuration's `memory_size`.
+Both methods load boot assets asynchronously, and the `onVmStarted` callback
+reports when the machine is ready. The older synchronous `start()` method
+remains for integrations using the legacy Rust config fetch path.
 
 ```js
 {

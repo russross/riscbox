@@ -120,7 +120,7 @@
           },
         });
         statusElement.textContent = "Loading VM assets…";
-        if (runtime.start(configUrl, memoryMiB) !== 0)
+        if (await runtime.startFromUrl(configUrl, memoryMiB) !== 0)
           throw new Error("Riscbox rejected the VM configuration");
       } catch (error) {
         statusElement.textContent = String(error);

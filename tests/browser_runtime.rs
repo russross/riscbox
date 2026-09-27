@@ -3,6 +3,7 @@ use riscbox::browser_runtime::{
     BrowserNineP, BrowserRuntime, HostAction, LifecycleCause, QuantumOutcome, QuantumStart,
     RuntimeError, RuntimeStart,
 };
+use riscbox::config::VmConfig;
 use riscbox::virtio_devices::{
     NinePBackend, NinePEndpointId, NinePGeneration, NinePRequestId, NinePTransportAction,
 };
@@ -16,6 +17,20 @@ fn start() -> RuntimeStart {
         height: 0,
         has_network: false,
     }
+}
+
+#[test]
+fn resolved_start_requests_assets_without_fetching_configuration() {
+    let config = VmConfig::from_resolved(
+        r#"{"version":1,"machine":"riscv64","memory_size":32,
+        "console":"uart","uart_output":false,"rtc_local_time":false,
+        "cmdline":"","bios":"https://host/firmware.bin",
+        "drive0":{"file":"https://host/disk/blk.txt"}}"#,
+    )
+    .expect("resolved configuration");
+    let mut runtime = BrowserRuntime::default();
+    runtime.start_resolved(start(), config).expect("start");
+    assert_eq!(request(&mut runtime).1, "https://host/firmware.bin");
 }
 
 #[test]

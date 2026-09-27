@@ -7,7 +7,7 @@ ROOT_DIR=$(CDPATH= cd -- "$IMAGES_DIR/.." && pwd)
 KERNEL_IMAGE=${KERNEL_IMAGE:-"$ROOT_DIR/kernel/linux"}
 BOOT_PAYLOAD=${BOOT_PAYLOAD:-"$KERNEL_IMAGE"}
 BOOT_PAYLOAD_NAME=${BOOT_PAYLOAD_NAME:-linux}
-OPENSBI=${OPENSBI:-/usr/lib/riscv64-linux-gnu/opensbi/generic/fw_dynamic.bin}
+OPENSBI=${OPENSBI:-"$ROOT_DIR/opensbi/fw_dynamic.bin"}
 
 case "$BOOT_PAYLOAD_NAME" in
     linux|u-boot.bin) ;;

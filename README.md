@@ -28,9 +28,10 @@ Quick start
 
 The root build requires Rust, Clang, `ar`, GNU Make, `uv`, Node.js, and the
 `wasm32-unknown-unknown` Rust target. Building the supplied Linux images also
-requires a RISC-V cross compiler, QEMU, ext4 tools, `curl`, and OpenSBI:
+requires a RISC-V cross compiler, QEMU, ext4 tools, and `curl`. The image
+scripts build their pinned OpenSBI firmware from source:
 
-    sudo apt install curl e2fsprogs gcc-riscv64-linux-gnu opensbi qemu-system-misc
+    sudo apt install curl e2fsprogs gcc-riscv64-linux-gnu qemu-system-misc
     rustup target add wasm32-unknown-unknown
 
 Clone, build, and test the emulator:
@@ -55,14 +56,16 @@ console page.
 Build targets
 -------------
 
-| Target         | Result |
-| -------------- | ------ |
-| `make release` | Optimized Rust workspace for development and native tests |
-| `make test`    | Rust, Python tool, and JavaScript tests |
-| `make check`   | Tests, strict Clippy, TypeScript, and Python type checks |
-| `make wasm`    | `target/wasm32-unknown-unknown/release/riscbox_wasm.wasm` |
-| `make kernel`  | Canonical custom kernel at `kernel/linux` |
-| `make dist`    | WASM, generated JavaScript, and kernel artifacts |
+| Target         | Result                                                        |
+| -------------- | ------------------------------------------------------------- |
+| `make release` | Optimized Rust workspace for development and native tests     |
+| `make test`    | Rust, Python tool, and JavaScript tests                       |
+| `make check`   | Tests, strict Clippy, TypeScript, and Python type checks       |
+| `make wasm`    | `target/wasm32-unknown-unknown/release/riscbox_wasm.wasm`      |
+| `make kernel`  | Canonical custom kernel at `kernel/linux`                     |
+| `make opensbi` | Pinned firmware at `opensbi/fw_dynamic.bin`                   |
+| `make uboot`   | Pinned EROFS-capable S-mode bootloader at `uboot/u-boot.bin`   |
+| `make dist`    | WASM, generated JavaScript, kernel, OpenSBI, and U-Boot        |
 
 Browser library
 ---------------
@@ -194,8 +197,9 @@ boundary. Riscbox passes OpenSBI `fw_dynamic.bin` the kernel entry through
 its dynamic-info block in the reset ROM. Omitting `bios` starts the kernel in
 M-mode; this supports bare-metal guests such as xv6. An S-mode U-Boot binary
 can be supplied as `kernel` after OpenSBI. Riscbox does not parse ELF,
-PE/COFF, FIT, qcow2, or other compressed kernel formats and does not bundle
-OpenSBI or U-Boot.
+PE/COFF, FIT, qcow2, or other compressed kernel formats. The runtime loads
+firmware and bootloader binaries supplied by the image; the repository builds
+its pinned OpenSBI and U-Boot binaries separately.
 
 Creating an image project
 -------------------------
@@ -215,11 +219,11 @@ images/my-image/
 Use `images/bin/create-alpine-ext4` to create the filesystem,
 `images/bin/run-image-setup` to customize it under QEMU, and
 `images/bin/build-distribution` to produce the browser deployment. Risclet
-converts its completed ext4 setup image to EROFS, then adds an ext4 boot
-partition containing the custom Linux Image and an `extlinux.conf` file.
-OpenSBI starts U-Boot, which loads Linux from that partition; Linux mounts
-the EROFS root at `/dev/vda2`. The xv6 profile uses the builder's `--erofs`
-mode for a single EROFS disk. Both use session-local writable `/tmp`, `/var`,
+installs the custom Linux Image and `extlinux.conf` into its root filesystem,
+then converts the completed ext4 setup image to one EROFS disk. OpenSBI starts
+the pinned upstream U-Boot build with EROFS support; U-Boot loads Linux from
+that disk, which Linux then mounts at `/dev/vda`. The xv6 profile also uses
+the builder's `--erofs` mode. Both use session-local writable `/tmp`, `/var`,
 and `/home` mounts. Other image definitions can continue distributing ext4. The
 existing build scripts show the exact call order. Keep downloads and generated files
 under `build/`; the final ignored output belongs in `dist/`.

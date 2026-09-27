@@ -5,7 +5,7 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 IMAGES_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 ROOT_DIR=$(CDPATH= cd -- "$IMAGES_DIR/.." && pwd)
 KERNEL_IMAGE=${KERNEL_IMAGE:-"$ROOT_DIR/kernel/linux"}
-OPENSBI=${OPENSBI:-/usr/lib/riscv64-linux-gnu/opensbi/generic/fw_dynamic.bin}
+OPENSBI=${OPENSBI:-"$ROOT_DIR/opensbi/fw_dynamic.bin"}
 QEMU_SYSTEM_RISCV64=${QEMU_SYSTEM_RISCV64:-qemu-system-riscv64}
 
 if [ "$#" -lt 2 ]; then

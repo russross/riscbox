@@ -17,9 +17,9 @@ Files
 *   `drive-HASH/blk.txt` describes the HTTP disk; its
     `blkNNNNNNNNN.bin` files are 512 KiB blocks by default. The drive hash
     identifies source content and block size, so assets with different layouts have
-    distinct URLs. Risclet distributes an ext4 boot partition and EROFS root
-    partition; xv6 profile distributes a single EROFS root, and Alpine
-    distributes ext4.
+    distinct URLs. Risclet and xv6 profile distribute single EROFS roots;
+    Alpine distributes ext4. Risclet's EROFS root includes its kernel and
+    `extlinux.conf` for U-Boot.
 *   `p9/` contains the generated browser-backed 9p server modules and
     declarations.
 

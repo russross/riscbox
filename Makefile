@@ -9,14 +9,13 @@ test: wasm js
 	cargo test --workspace
 	uv run -q --script tests/test_splitimg.py
 	uv run -q --script tests/test_image_deployment.py
-	uv run -q --script tests/test_risclet_disk.py
 	node --test js/network.test.mjs js/p9.test.mjs js/riscbox.test.cjs
 	node --test tests/network_browser.test.mjs
 
 check: test
 	$(MAKE) js-check
 	cargo clippy --all-targets --workspace -- -D warnings
-	uvx --quiet ty check tools/splitimg.py tools/image_deployment.py images/risclet/assemble-disk
+	uvx --quiet ty check tools/splitimg.py tools/image_deployment.py
 
 wasm: $(RUSTBOX_WASM)
 
@@ -32,12 +31,20 @@ $(RUSTBOX_WASM): Cargo.toml Cargo.lock riscbox-wasm/Cargo.toml $(shell find src 
 kernel:
 	$(MAKE) -C kernel
 
-dist: wasm js kernel
+opensbi:
+	$(MAKE) -C opensbi
+
+uboot:
+	$(MAKE) -C uboot
+
+dist: wasm js kernel opensbi uboot
 
 clean:
 	cargo clean
 
 clean-all: clean
 	$(MAKE) -C kernel clean
+	$(MAKE) -C opensbi clean
+	$(MAKE) -C uboot clean
 
-.PHONY: all release test check wasm js js-check kernel dist clean clean-all
+.PHONY: all release test check wasm js js-check kernel opensbi uboot dist clean clean-all

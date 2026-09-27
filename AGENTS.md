@@ -55,6 +55,10 @@ Repository map and terminology
 *   `images/` contains reproducible image definitions and deployment tooling.
     Generated downloads, images, boot assets, and distributions are not source.
 *   `kernel/` owns the canonical custom Linux kernel consumed by image builds.
+*   `opensbi/` and `uboot/` own pinned firmware and bootloader builds. Each
+    tracks its Makefile, version, and config; downloads, sources, and outputs
+    are ignored. The shared image helpers use `opensbi/fw_dynamic.bin`, and
+    Risclet uses `uboot/u-boot.bin` as OpenSBI's S-mode next stage.
 *   `c/` is a read-only historical TinyEMU-derived archive. It is not an
     implementation source, compatibility target, build dependency, parity
     requirement, or validation surface.
@@ -104,13 +108,12 @@ content-hash-named boot and disk assets and `no-store` for the configuration.
 HTTP block stores start with a 64 MiB in-memory cache limit that grows to
 cover a single request when needed.
 
-The Risclet demo instead supplies S-mode U-Boot as the OpenSBI next stage.
-Its HTTP disk has an ext4 boot partition with the custom Linux Image and
-`extlinux.conf`, followed by the read-only EROFS root at `/dev/vda2`.
-The custom kernel enables DOS partition discovery for this layout. The Risclet
-build uses the pinned Debian `u-boot-qemu` S-mode binary; U-Boot is external
-to the emulator and loads Linux from the disk. Its early output uses UART,
-while the Linux login uses the VirtIO console.
+The Risclet demo supplies S-mode U-Boot as the OpenSBI next stage. Its single
+EROFS disk contains `/boot/Image` and `/boot/extlinux/extlinux.conf` along with
+the root filesystem. The tracked U-Boot config enables EROFS and sets a boot
+command that reads extlinux from the whole VirtIO disk. U-Boot is external to
+the emulator and loads Linux from the disk. Its early output uses UART, while
+the Linux login uses the VirtIO console.
 
 Rust sizes each execution quantum from a measured emulated cycle rate and a
 target duration, twenty milliseconds by default. Each quantum locks its rate
@@ -134,8 +137,7 @@ clamping of repeated zero-delay timers; delayed wakeups still use `setTimeout`.
 The C interpreter may pass a requested cycle limit at a code-block boundary,
 and Rust accounts for the actual emulated cycles consumed.
 Risclet and xv6 profile image setup boots writable ext4 under QEMU, then
-converts the finished filesystem to a read-only EROFS root. Risclet adds its
-ext4 boot partition before splitting the disk for HTTP delivery.
+converts the finished filesystem to a read-only EROFS disk.
 Their guests mount tmpfs at `/tmp` and session-local tmpfs-backed overlays at
 `/var` and `/home`. Split HTTP disks use 512 KiB chunks by default.
 
@@ -234,8 +236,8 @@ Validation
 *   `make test` runs Rust, Python tool, and JavaScript adapter/server tests.
 *   `make check` adds strict Clippy and Python type checks.
 *   `make wasm` builds the deployed Rust WebAssembly artifact.
-*   `make kernel` builds the canonical custom kernel; `make dist` builds the
-    core WASM, JavaScript, and kernel artifacts.
+*   `make kernel`, `make opensbi`, and `make uboot` build the pinned guest
+    components; `make dist` builds them with the core WASM and JavaScript.
 
 For CPU or platform milestones, run `make check` and rebuild WASM from a clean
 tree. Current xv6 is the primary UART and supervisor-mode integration guest.

@@ -6,8 +6,7 @@ Each subdirectory is a complete image definition. Its tracked `build.sh`,
 `build.sh` creates ignored outputs:
 
 *   `build/rootfs.ext4` is the writable setup image used under QEMU.
-    Risclet and xv6 profile also create `build/rootfs.erofs`. Risclet adds
-    `build/risclet.img`, with an ext4 boot partition and EROFS root partition.
+    Risclet and xv6 profile also create `build/rootfs.erofs` for distribution.
 *   `dist/` is the self-contained browser deployment. It retains hashed boot
     and chunked-disk generations until the operator cleans them.
 
@@ -39,16 +38,20 @@ Risclet and xv6 profile finish setup on ext4, then mount it read-only and use
 ensure passwordless `sudo` can mount the ext4 image and run `mkfs.erofs` for
 these builds. Their guest roots mount read-only; tmpfs supplies `/tmp` and the
 upper layers for `/var` and `/home`. The Alpine definition still distributes
-ext4. Risclet needs `dpkg-deb` and `mkfs.ext4` to unpack its pinned Debian
-U-Boot binary and build its boot partition. The boot partition contains the
-custom Linux Image and `extlinux.conf`; the guest mounts the EROFS root from
-`/dev/vda2`. Split HTTP disks use 512 KiB chunks by default.
+ext4. Risclet uses the tracked U-Boot build with EROFS support, installs the
+custom Linux Image and `extlinux.conf` in `/boot` during setup, and boots the
+single EROFS disk as `/dev/vda`. The U-Boot build needs the RISC-V cross
+compiler, Bison, Flex, and standard host build tools. Split HTTP disks use
+512 KiB chunks by default.
 
 The shared helpers under `bin/` download and verify the pinned Alpine
-minirootfs, consume the root-owned `kernel/linux` and Rust WASM build, boot
+minirootfs, consume the root-owned `kernel/linux`, `opensbi/fw_dynamic.bin`,
+and Rust WASM build, boot
 setup scripts under QEMU with user networking, and assemble the deployment.
-Run `make kernel` or `make wasm` at the repository root to build those core
-artifacts independently.
+Run `make kernel`, `make opensbi`, `make uboot`, or `make wasm` at the
+repository root to build those components independently. The firmware and
+bootloader source archives, extracted trees, and objects are ignored; their
+Makefiles rebuild only when the tracked version or config changes.
 
 The browser Risclet application loads its workspaces from the tracked
 `risclet/examples/` directory. `examples.json` names each example and lists
@@ -102,7 +105,7 @@ compresses the next-stage payload with `gzip -9`, and writes
 content-addressed boot and disk assets. The payload name uses the uncompressed
 payload's hash with a `.gz` suffix. Set `BOOT_PAYLOAD` and
 `BOOT_PAYLOAD_NAME` to package a next stage other than the default Linux
-kernel; Risclet uses the pinned S-mode U-Boot binary. The builder replaces
+kernel; Risclet uses its pinned S-mode U-Boot build. The builder replaces
 `dist/riscbox.cfg` last. Remove
 superseded generations when appropriate
 with `../../tools/image_deployment.py clean ./dist` from an image directory.

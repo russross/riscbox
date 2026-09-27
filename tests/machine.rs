@@ -4,7 +4,7 @@ use riscbox::browser_storage::HttpBlockStore;
 use riscbox::entropy::{EntropyError, EntropySource};
 use riscbox::guest_memory::{AccessWidth, GuestAddress};
 use riscbox::machine::{
-    BootAddresses, BootImages, CLINT_BASE, FRAMEBUFFER_BASE, FramebufferConfig, Machine,
+    ACLINT_BASE, BootAddresses, BootImages, FRAMEBUFFER_BASE, FramebufferConfig, Machine,
     MachineConfig, RAM_BASE, RTC_BASE, RedrawSpan, VIRTIO_BASE,
 };
 use riscbox::platform::FinishStatus;
@@ -94,7 +94,7 @@ fn cpu_reads_virtio_config_bytes_through_the_c_device_aperture() {
 }
 
 #[test]
-fn guest_clint_compare_write_exits_for_timer_replanning() {
+fn guest_aclint_compare_write_exits_for_timer_replanning() {
     let mut machine = machine(false);
     let mut firmware = Vec::new();
     for instruction in [0x0200_40b7_u32, 0x0050_0113, 0x0020_a023, 0x1050_0073] {
@@ -491,12 +491,12 @@ fn bus_dispatches_uart_and_finisher_mmio() {
             AccessWidth::DoubleWord,
             0x1234_5678_9abc_def0,
         )
-        .expect("64-bit CLINT time comparison write");
+        .expect("64-bit ACLINT time comparison write");
     assert_eq!(
         machine
             .bus_mut()
             .read(GuestAddress(0x0200_4000), AccessWidth::DoubleWord)
-            .expect("64-bit CLINT time comparison read"),
+            .expect("64-bit ACLINT time comparison read"),
         0x1234_5678_9abc_def0
     );
 }
@@ -600,7 +600,7 @@ fn framebuffer_snapshot_invalidates_cached_cpu_write_translation() {
 fn interrupt_changes_from_guest_mmio_end_the_current_cpu_block() {
     let mut machine = machine(false);
     let firmware: Vec<u8> = [
-        0x0200_00b7_u32, // lui x1,0x2000 (CLINT)
+        0x0200_00b7_u32, // lui x1,0x2000 (ACLINT)
         0x0010_0113,     // addi x2,x0,1
         0x0020_a023,     // sw x2,0(x1)
         0x3440_22f3,     // csrr x5,mip
@@ -653,15 +653,15 @@ fn timer_deadlines_use_guest_ticks_and_drop_due_compares() {
     machine
         .bus_mut()
         .write(
-            GuestAddress(CLINT_BASE + 0x4000),
+            GuestAddress(ACLINT_BASE + 0x4000),
             AccessWidth::Word,
             1_000_015,
         )
-        .expect("CLINT compare low");
+        .expect("ACLINT compare low");
     machine
         .bus_mut()
-        .write(GuestAddress(CLINT_BASE + 0x4004), AccessWidth::Word, 0)
-        .expect("CLINT compare high");
+        .write(GuestAddress(ACLINT_BASE + 0x4004), AccessWidth::Word, 0)
+        .expect("ACLINT compare high");
     assert_eq!(machine.next_timer_remaining_guest_ticks(), Some(15));
 
     machine

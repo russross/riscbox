@@ -362,7 +362,7 @@ uses TinyEMU's bit-exact integer SoftFP lineage. Riscbox is not RVA23 compliant;
 vectors and other deliberately omitted requirements are never advertised.
 
 The platform follows QEMU `virt` addresses for RAM, reset, UART, VirtIO MMIO,
-CLINT, PLIC, and the test finisher, and adds the QEMU-compatible Goldfish RTC.
+ACLINT MSWI and MTIMER, PLIC, and the test finisher, and adds the QEMU-compatible Goldfish RTC.
 The generated device tree describes only configured devices.
 
 TinyEMU relationship and license

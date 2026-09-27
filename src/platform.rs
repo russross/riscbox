@@ -49,12 +49,12 @@ impl Finisher {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct Clint {
+pub struct Aclint {
     msip: bool,
     timecmp: u64,
 }
 
-impl Default for Clint {
+impl Default for Aclint {
     fn default() -> Self {
         Self {
             msip: false,
@@ -63,7 +63,7 @@ impl Default for Clint {
     }
 }
 
-impl Clint {
+impl Aclint {
     #[must_use]
     pub fn read(&self, offset: u32, now: u64) -> u32 {
         match offset {

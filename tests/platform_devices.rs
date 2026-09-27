@@ -1,21 +1,21 @@
 use riscbox::platform::{
-    Clint, FinishStatus, Finisher, GoldfishRtc, MIP_MEIP, MIP_SEIP, Plic, Uart16550,
+    Aclint, FinishStatus, Finisher, GoldfishRtc, MIP_MEIP, MIP_SEIP, Plic, Uart16550,
 };
 
 #[test]
-fn clint_exposes_split_time_compare_and_software_interrupt() {
-    let mut clint = Clint::default();
-    assert_eq!(clint.read(0xbff8, 0x1234_5678_9abc_def0), 0x9abc_def0);
-    assert_eq!(clint.read(0xbffc, 0x1234_5678_9abc_def0), 0x1234_5678);
-    clint.write(0x4000, 0x7654_3210);
-    clint.write(0x4004, 0x0000_0001);
-    assert_eq!(clint.timecmp(), 0x0000_0001_7654_3210);
-    assert!(!clint.timer_interrupt(clint.timecmp() - 1));
-    assert!(clint.timer_interrupt(clint.timecmp()));
-    clint.write(0, 3);
-    assert!(clint.software_interrupt());
-    clint.write(0, 2);
-    assert!(!clint.software_interrupt());
+fn aclint_exposes_split_time_compare_and_software_interrupt() {
+    let mut aclint = Aclint::default();
+    assert_eq!(aclint.read(0xbff8, 0x1234_5678_9abc_def0), 0x9abc_def0);
+    assert_eq!(aclint.read(0xbffc, 0x1234_5678_9abc_def0), 0x1234_5678);
+    aclint.write(0x4000, 0x7654_3210);
+    aclint.write(0x4004, 0x0000_0001);
+    assert_eq!(aclint.timecmp(), 0x0000_0001_7654_3210);
+    assert!(!aclint.timer_interrupt(aclint.timecmp() - 1));
+    assert!(aclint.timer_interrupt(aclint.timecmp()));
+    aclint.write(0, 3);
+    assert!(aclint.software_interrupt());
+    aclint.write(0, 2);
+    assert!(!aclint.software_interrupt());
 }
 
 #[test]

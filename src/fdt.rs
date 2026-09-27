@@ -251,10 +251,18 @@ fn add_cpu_nodes(fdt: &mut Builder) {
 }
 
 fn add_interrupt_devices(fdt: &mut Builder) {
-    fdt.node("clint@2000000");
-    fdt.property_strings("compatible", &["sifive,clint0", "riscv,clint0"]);
-    fdt.property_cells("interrupts-extended", &[2, 3, 2, 7]);
-    fdt.property_u64_pair("reg", 0x200_0000, 0x1_0000);
+    // ACLINT retains the CLINT register addresses while describing the
+    // machine software interrupt and timer as independent devices.
+    fdt.node("mswi@2000000");
+    fdt.property_string("compatible", "riscv,aclint-mswi");
+    fdt.property_cells("interrupts-extended", &[2, 3]);
+    fdt.property_u64_pair("reg", 0x200_0000, 0x4000);
+    fdt.end_node();
+    fdt.node("mtimer@2004000");
+    fdt.property_string("compatible", "riscv,aclint-mtimer");
+    fdt.property_cells("interrupts-extended", &[2, 7]);
+    fdt.property_cells("reg", &[0, 0x200_4000, 0, 0x8000, 0, 0x200_bff8, 0, 8]);
+    fdt.property_strings("reg-names", &["mtimecmp", "mtime"]);
     fdt.end_node();
     fdt.node("interrupt-controller@c000000");
     fdt.property_u32("#interrupt-cells", 1);

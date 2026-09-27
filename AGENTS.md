@@ -15,7 +15,7 @@ The supported machine is deliberately narrow:
 *   One little-endian RV64 hart with M/S/U modes and Sv39.
 *   A small QEMU `virt`-compatible platform for current xv6 and prepared Alpine
     Linux systems.
-*   A 16550A UART, optional VirtIO console, Goldfish RTC, PLIC, legacy CLINT,
+*   A 16550A UART, optional VirtIO console, Goldfish RTC, PLIC, ACLINT MSWI and MTIMER,
     SiFive test finisher, simple framebuffer, and VirtIO MMIO block, 9p,
     network, entropy, keyboard, and tablet devices.
 *   Browser delivery through raw WebAssembly, a handwritten JavaScript adapter,
@@ -126,7 +126,7 @@ runnable quanta. Its ten-second half-life is shared with the cycle-rate estimate
 The skew slows the within-quantum cycle-to-tick mapping without reducing its
 cycle budget. The next quantum starts from host epoch time, subject to the
 guest-clock floor.
-Timer writes exit the C loop so Rust can size the next CPU run to the earliest CLINT,
+Timer writes exit the C loop so Rust can size the next CPU run to the earliest ACLINT,
 supervisor, or RTC deadline. C also exits after MMIO requests for 9p or HTTP
 block work; Rust releases the exclusive CPU-run borrow before JavaScript
 dispatches actions. JavaScript resumes the same quantum after resident 9p

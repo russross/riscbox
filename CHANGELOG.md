@@ -4,6 +4,10 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Described the existing local interrupt register map as separate ACLINT
+    MSWI and MTIMER devices in the guest device tree. OpenSBI discovers the
+    current addresses through the modern bindings; the one-hart interrupt and
+    timer behavior remains unchanged.
 *   Suppressed OpenSBI and U-Boot startup messages, removed the U-Boot boot
     countdown, and identified the Riscbox platform by its device tree model.
 *   Made the Risclet demo disk self-booting: pinned upstream S-mode U-Boot,

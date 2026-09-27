@@ -14,7 +14,7 @@ use crate::guest_memory::{
     RegionId,
 };
 use crate::platform::{
-    Clint, FinishStatus, Finisher, GoldfishRtc, MIP_MSIP, MIP_MTIP, Plic, Uart16550,
+    Aclint, FinishStatus, Finisher, GoldfishRtc, MIP_MSIP, MIP_MTIP, Plic, Uart16550,
 };
 use crate::tinyemu_core::{BusError, Core, CpuRunExitReason, CpuRunResult, PlatformCallbacks};
 use crate::virtio::{MMIO_SIZE, VirtioTransport};
@@ -28,7 +28,7 @@ pub const RAM_BASE: u64 = 0x8000_0000;
 pub const RESET_RAM_SIZE: u64 = 0x1_0000;
 pub const FINISHER_BASE: u64 = 0x10_0000;
 pub const RTC_BASE: u64 = 0x10_1000;
-pub const CLINT_BASE: u64 = 0x200_0000;
+pub const ACLINT_BASE: u64 = 0x200_0000;
 pub const FRAMEBUFFER_BASE: u64 = 0x410_0000;
 pub const PLIC_BASE: u64 = 0xc00_0000;
 pub const UART_BASE: u64 = 0x1000_0000;
@@ -241,7 +241,7 @@ impl VirtioSlot {
 
 pub struct PlatformBus {
     memory: GuestMemory,
-    clint: Clint,
+    aclint: Aclint,
     plic: Plic,
     uart: Uart16550,
     rtc: GoldfishRtc,
@@ -296,7 +296,7 @@ impl PlatformBus {
             .transpose()?;
         memory.register_device(GuestAddress(FINISHER_BASE), 0x1000, DeviceWidths::U32)?;
         memory.register_device(GuestAddress(RTC_BASE), 0x1000, DeviceWidths::U32)?;
-        memory.register_device(GuestAddress(CLINT_BASE), 0x1_0000, DeviceWidths::U32)?;
+        memory.register_device(GuestAddress(ACLINT_BASE), 0xc000, DeviceWidths::U32)?;
         memory.register_device(GuestAddress(PLIC_BASE), 0x400_0000, DeviceWidths::U32)?;
         memory.register_device(GuestAddress(UART_BASE), 0x100, DeviceWidths::U8)?;
         memory.register_device(
@@ -308,7 +308,7 @@ impl PlatformBus {
         )?;
         Ok(Self {
             memory,
-            clint: Clint::default(),
+            aclint: Aclint::default(),
             plic: Plic::default(),
             uart: Uart16550::default(),
             rtc: GoldfishRtc::default(),
@@ -337,13 +337,13 @@ impl PlatformBus {
             0
         } else if (RTC_BASE..RTC_BASE + 0x1000).contains(&address) && width == AccessWidth::Word {
             u64::from(self.rtc.read(offset(address, RTC_BASE)?, self.guest_rtc_ns))
-        } else if (CLINT_BASE..CLINT_BASE + 0x1_0000).contains(&address)
+        } else if (ACLINT_BASE..ACLINT_BASE + 0xc000).contains(&address)
             && matches!(width, AccessWidth::Word | AccessWidth::DoubleWord)
         {
-            let device_offset = offset(address, CLINT_BASE)?;
-            let low = u64::from(self.clint.read(device_offset, self.guest_timer_ticks));
+            let device_offset = offset(address, ACLINT_BASE)?;
+            let low = u64::from(self.aclint.read(device_offset, self.guest_timer_ticks));
             if width == AccessWidth::DoubleWord {
-                low | (u64::from(self.clint.read(device_offset + 4, self.guest_timer_ticks)) << 32)
+                low | (u64::from(self.aclint.read(device_offset + 4, self.guest_timer_ticks)) << 32)
             } else {
                 low
             }
@@ -376,13 +376,13 @@ impl PlatformBus {
                 self.host_service_requested = true;
                 self.timer_reprogrammed = true;
             }
-        } else if (CLINT_BASE..CLINT_BASE + 0x1_0000).contains(&address)
+        } else if (ACLINT_BASE..ACLINT_BASE + 0xc000).contains(&address)
             && matches!(width, AccessWidth::Word | AccessWidth::DoubleWord)
         {
-            let device_offset = offset(address, CLINT_BASE)?;
-            self.clint.write(device_offset, value32);
+            let device_offset = offset(address, ACLINT_BASE)?;
+            self.aclint.write(device_offset, value32);
             if width == AccessWidth::DoubleWord {
-                self.clint.write(device_offset + 4, (value >> 32) as u32);
+                self.aclint.write(device_offset + 4, (value >> 32) as u32);
             }
             if matches!(device_offset, 0x4000 | 0x4004) {
                 self.host_service_requested = true;
@@ -440,10 +440,10 @@ impl PlatformBus {
     fn interrupt_mask(&self) -> u32 {
         let external = self.plic.cpu_interrupts();
         let mut direct = 0;
-        if self.clint.software_interrupt() {
+        if self.aclint.software_interrupt() {
             direct |= MIP_MSIP;
         }
-        if self.clint.timer_interrupt(self.guest_timer_ticks) {
+        if self.aclint.timer_interrupt(self.guest_timer_ticks) {
             direct |= MIP_MTIP;
         }
         direct | external
@@ -876,8 +876,8 @@ impl Machine {
         // Due compares are already reflected in interrupt state by present_guest_clocks.
         let now = self.bus.guest_timer_ticks;
         let mut delay = u64::MAX;
-        if self.bus.clint.timecmp() != u64::MAX && !self.bus.clint.timer_interrupt(now) {
-            delay = delay.min(self.bus.clint.timecmp() - now);
+        if self.bus.aclint.timecmp() != u64::MAX && !self.bus.aclint.timer_interrupt(now) {
+            delay = delay.min(self.bus.aclint.timecmp() - now);
         }
         let supervisor = self.cpu.stimecmp();
         if supervisor != u64::MAX && supervisor > now {

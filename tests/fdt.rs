@@ -33,7 +33,10 @@ fn platform_tree_has_standard_layout_and_required_nodes() {
     for text in [
         "cpu@0",
         "memory@80000000",
-        "clint@2000000",
+        "mswi@2000000",
+        "mtimer@2004000",
+        "riscv,aclint-mswi",
+        "riscv,aclint-mtimer",
         "interrupt-controller@c000000",
         "rtc@101000",
         "serial@10000000",

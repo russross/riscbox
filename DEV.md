@@ -67,6 +67,16 @@ module before choosing an optimization target. Keep the guest workload fixed.
 Candidate work
 --------------
 
+### Interrupt-controller modernization
+
+The platform now describes its machine-local interrupt registers as ACLINT
+MSWI and MTIMER. The PLIC remains the QEMU `virt` default and is used by the
+current Linux and xv6 guests. Replacing it with APLIC or APLIC plus IMSIC would
+add controller state, CPU interrupt-architecture support, and firmware and
+guest compatibility work without a demonstrated one-hart benefit. Revisit only
+if a target guest requires AIA. ACLINT SSWI similarly adds no useful IPI target
+for the current single-hart machine.
+
 ### Framebuffer demonstration
 
 Add guest framebuffer and input demonstration programs, configure those devices

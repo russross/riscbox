@@ -4,9 +4,13 @@ use std::cell::RefCell;
 
 use crate::browser_input::{BrowserInputQueue, NetworkInputResult};
 use crate::browser_runtime::{
-    BrowserRuntime, EntropyCallback, HostAction, QuantumOutcome, QuantumStart, RuntimeStart,
+    BrowserRuntime, EntropyCallback, HostAction, HostBlockAction, QuantumOutcome, QuantumStart,
+    RuntimeStart,
 };
 use crate::config::VmConfig;
+use crate::host_block::{
+    HostBlockGeneration, HostBlockKind, HostBlockOutcome, HostBlockProviderId, HostBlockRequestId,
+};
 use crate::virtio_devices::{
     NinePEndpointId, NinePGeneration, NinePOutcome, NinePRequestId, NinePTransportAction,
 };
@@ -350,6 +354,9 @@ pub extern "C" fn riscbox_next_action() -> u32 {
             Some(HostAction::NineP(NinePTransportAction::Close { .. })) => 9,
             Some(HostAction::Halted(_)) => 10,
             Some(HostAction::Reset(_)) => 11,
+            Some(HostAction::HostBlock(HostBlockAction::Request(_))) => 12,
+            Some(HostAction::HostBlock(HostBlockAction::Reset { .. })) => 13,
+            Some(HostAction::HostBlock(HostBlockAction::Close { .. })) => 14,
             None => 0,
         }
     })
@@ -360,6 +367,9 @@ pub extern "C" fn riscbox_action_value() -> u32 {
     STATE.with_borrow(|state| match state.action.as_ref() {
         Some(HostAction::Request(request)) => request.id,
         Some(HostAction::Halted(cause) | HostAction::Reset(cause)) => *cause as u32,
+        Some(HostAction::HostBlock(HostBlockAction::Request(request))) => {
+            u32::from(request.kind == HostBlockKind::Write)
+        }
         _ => 0,
     })
 }
@@ -371,6 +381,12 @@ pub extern "C" fn riscbox_action_endpoint() -> u32 {
             NinePTransportAction::Open { endpoint, .. }
             | NinePTransportAction::Request { endpoint, .. }
             | NinePTransportAction::Close { endpoint, .. } => endpoint.0,
+        },
+        Some(HostAction::HostBlock(action)) => match action {
+            HostBlockAction::Request(request) => request.provider.0,
+            HostBlockAction::Reset { provider, .. } | HostBlockAction::Close { provider } => {
+                provider.0
+            }
         },
         _ => 0,
     })
@@ -384,6 +400,8 @@ pub extern "C" fn riscbox_action_generation() -> u32 {
             | NinePTransportAction::Request { generation, .. }
             | NinePTransportAction::Close { generation, .. } => generation.0,
         },
+        Some(HostAction::HostBlock(HostBlockAction::Request(request))) => request.generation.0,
+        Some(HostAction::HostBlock(HostBlockAction::Reset { generation, .. })) => generation.0,
         _ => 0,
     })
 }
@@ -392,6 +410,7 @@ pub extern "C" fn riscbox_action_generation() -> u32 {
 pub extern "C" fn riscbox_action_request_id() -> u32 {
     STATE.with_borrow(|state| match state.action.as_ref() {
         Some(HostAction::NineP(NinePTransportAction::Request { request_id, .. })) => request_id.0,
+        Some(HostAction::HostBlock(HostBlockAction::Request(request))) => request.id.0,
         _ => 0,
     })
 }
@@ -402,6 +421,7 @@ pub extern "C" fn riscbox_action_reply_capacity() -> u32 {
         Some(HostAction::NineP(NinePTransportAction::Request { reply_capacity, .. })) => {
             *reply_capacity
         }
+        Some(HostAction::HostBlock(HostBlockAction::Request(request))) => request.length,
         _ => 0,
     })
 }
@@ -447,6 +467,56 @@ pub extern "C" fn riscbox_action_height() -> u32 {
 #[must_use]
 pub extern "C" fn riscbox_action_stride() -> u32 {
     framebuffer_action(|update| update.stride)
+}
+
+#[must_use]
+pub extern "C" fn riscbox_action_sector_low() -> u32 {
+    STATE.with_borrow(|state| match state.action.as_ref() {
+        Some(HostAction::HostBlock(HostBlockAction::Request(request))) => {
+            u32::try_from(request.sector & u64::from(u32::MAX)).unwrap_or(0)
+        }
+        _ => 0,
+    })
+}
+
+#[must_use]
+pub extern "C" fn riscbox_action_sector_high() -> u32 {
+    STATE.with_borrow(|state| match state.action.as_ref() {
+        Some(HostAction::HostBlock(HostBlockAction::Request(request))) => {
+            u32::try_from(request.sector >> 32).unwrap_or(0)
+        }
+        _ => 0,
+    })
+}
+
+#[must_use]
+pub extern "C" fn riscbox_block_complete(
+    provider: u32,
+    generation: u32,
+    id: u32,
+    status: u32,
+    address: u32,
+    length: u32,
+) -> i32 {
+    STATE.with_borrow_mut(|state| {
+        let result = match status {
+            0 => match completion_bytes(state, address, length) {
+                Some(bytes) => HostBlockOutcome::Success(bytes),
+                None => return -1,
+            },
+            1 if length == 0 => HostBlockOutcome::IoError,
+            _ => return -1,
+        };
+        state
+            .runtime
+            .complete_host_block(
+                HostBlockProviderId(provider),
+                HostBlockGeneration(generation),
+                HostBlockRequestId(id),
+                result,
+            )
+            .map_or(-1, |()| 0)
+    })
 }
 
 #[must_use]
@@ -532,6 +602,7 @@ fn action_bytes(state: &AbiState) -> Option<&[u8]> {
         HostAction::Console(bytes)
         | HostAction::Network(bytes)
         | HostAction::NineP(NinePTransportAction::Request { bytes, .. }) => Some(bytes),
+        HostAction::HostBlock(HostBlockAction::Request(request)) => Some(&request.data),
         HostAction::Framebuffer(update) => state.runtime.framebuffer_bytes(*update),
         HostAction::NineP(NinePTransportAction::Open { server_key, .. }) => {
             Some(server_key.as_bytes())
@@ -540,6 +611,9 @@ fn action_bytes(state: &AbiState) -> Option<&[u8]> {
         | HostAction::Started
         | HostAction::Halted(_)
         | HostAction::Reset(_) => None,
+        HostAction::HostBlock(HostBlockAction::Reset { .. } | HostBlockAction::Close { .. }) => {
+            None
+        }
     }
 }
 

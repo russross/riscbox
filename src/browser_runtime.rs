@@ -7,8 +7,12 @@ use std::rc::Rc;
 
 use crate::browser_input::{BrowserEvent, BrowserInputQueue};
 use crate::browser_storage::HttpBlockStore;
-use crate::config::{Console, VmConfig, resolve_asset_path};
+use crate::config::{Console, DriveConfig, VmConfig, resolve_asset_path};
 use crate::entropy::{EntropyError, EntropySource, SharedEntropy};
+use crate::host_block::{
+    HostBlockGeneration, HostBlockOutcome, HostBlockProviderId, HostBlockRequest,
+    HostBlockRequestId, HostBlockStore,
+};
 use crate::machine::{
     BootAddresses, BootImages, FramebufferConfig, FramebufferUpdate, Machine, MachineConfig,
     MachineError,
@@ -115,8 +119,21 @@ pub enum HostAction {
     Network(Vec<u8>),
     Framebuffer(FramebufferUpdate),
     NineP(NinePTransportAction),
+    HostBlock(HostBlockAction),
     Halted(LifecycleCause),
     Reset(LifecycleCause),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum HostBlockAction {
+    Request(HostBlockRequest),
+    Reset {
+        provider: HostBlockProviderId,
+        generation: HostBlockGeneration,
+    },
+    Close {
+        provider: HostBlockProviderId,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -366,6 +383,7 @@ struct Running {
     pointer_dimensions: Option<(u32, u32)>,
     network_output: Rc<RefCell<VecDeque<Vec<u8>>>>,
     block_slots: Vec<usize>,
+    host_blocks: BTreeMap<HostBlockProviderId, (usize, HostBlockGeneration)>,
     ninep_slots: Vec<usize>,
     ninep_endpoints: BTreeMap<NinePEndpointId, usize>,
     pending_http: BTreeMap<u32, PendingHttp>,
@@ -799,7 +817,9 @@ impl BrowserRuntime {
             }
         }
         for (index, drive) in config.drives.iter().enumerate() {
-            assets.push_back((AssetKind::Drive(index), drive.file.clone()));
+            if let DriveConfig::Http { file, .. } = drive {
+                assets.push_back((AssetKind::Drive(index), file.clone()));
+            }
         }
         let drive_count = config.drives.len();
         self.state = State::Loading(Box::new(Loading {
@@ -842,6 +862,15 @@ impl BrowserRuntime {
                 })?;
                 let mut config = VmConfig::parse(&source)
                     .map_err(|error| RuntimeError::InvalidConfig(error.to_string()))?;
+                if config
+                    .drives
+                    .iter()
+                    .any(|drive| matches!(drive, DriveConfig::Host { .. }))
+                {
+                    return Err(RuntimeError::InvalidConfig(
+                        "host block drives require resolved startup".into(),
+                    ));
+                }
                 if !start.command_line.is_empty() {
                     config.apply_command_line(&start.command_line);
                 }
@@ -852,7 +881,9 @@ impl BrowserRuntime {
                     *value = resolve_asset_path(Some(&start.config_url), value);
                 }
                 for drive in &mut config.drives {
-                    drive.file = resolve_asset_path(Some(&start.config_url), &drive.file);
+                    if let DriveConfig::Http { file, .. } = drive {
+                        *file = resolve_asset_path(Some(&start.config_url), file);
+                    }
                 }
                 self.begin_loading(start, config)
             }
@@ -882,8 +913,10 @@ impl BrowserRuntime {
                             .ok_or_else(|| {
                                 RuntimeError::InvalidConfig("invalid drive index".into())
                             })?
-                            .file
                             .clone();
+                        let DriveConfig::Http { file: url, .. } = url else {
+                            return Err(RuntimeError::InvalidConfig("invalid drive source".into()));
+                        };
                         loading.drive_manifests[index] = Some((url, bytes));
                     }
                 }
@@ -1190,6 +1223,13 @@ impl BrowserRuntime {
         };
         self.retired_http.extend(running.pending_http.keys());
         self.actions.clear();
+        self.actions.extend(
+            running
+                .host_blocks
+                .keys()
+                .copied()
+                .map(|provider| HostAction::HostBlock(HostBlockAction::Close { provider })),
+        );
         Ok(())
     }
 
@@ -1211,6 +1251,7 @@ impl BrowserRuntime {
         running.network_output.borrow_mut().clear();
         self.state = State::Running(running);
         self.actions.push_back(HostAction::Reset(cause));
+        self.pump_host_block_actions()?;
         self.pump_ninep_transport_actions()?;
         self.pump_http_requests()
     }
@@ -1259,16 +1300,36 @@ impl BrowserRuntime {
             .map(|(width, height)| FramebufferConfig { width, height });
         let mut machine = self.create_machine(ram_size, framebuffer)?;
         let mut block_slots = Vec::new();
+        let mut host_blocks = BTreeMap::new();
         for (index, manifest) in loading.drive_manifests.into_iter().enumerate() {
-            let (url, bytes) = manifest.expect("each drive manifest is loaded in order");
-            let source = String::from_utf8(bytes)
-                .map_err(|_| RuntimeError::InvalidConfig("drive manifest is not UTF-8".into()))?;
-            let store = HttpBlockStore::from_manifest(&url, &source, 16 << 20)
-                .map_err(|error| RuntimeError::Machine(error.to_string()))?;
-            let mut id = [0; 20];
-            let name = format!("riscbox-http-{index}");
-            id[..name.len()].copy_from_slice(name.as_bytes());
-            block_slots.push(machine.add_http_block_device(store, id)?);
+            if let DriveConfig::Host {
+                provider,
+                capacity_sectors,
+            } = &config.drives[index]
+            {
+                let provider = HostBlockProviderId(*provider);
+                if host_blocks.contains_key(&provider) {
+                    return Err(RuntimeError::InvalidConfig(
+                        "duplicate block provider".into(),
+                    ));
+                }
+                let store = HostBlockStore::new(provider, *capacity_sectors);
+                let mut id = [0; 20];
+                let name = format!("riscbox-host-{index}");
+                id[..name.len()].copy_from_slice(name.as_bytes());
+                let slot = machine.add_host_block_device(store, id)?;
+                host_blocks.insert(provider, (slot, HostBlockGeneration(1)));
+            } else if let Some((url, bytes)) = manifest {
+                let source = String::from_utf8(bytes).map_err(|_| {
+                    RuntimeError::InvalidConfig("drive manifest is not UTF-8".into())
+                })?;
+                let store = HttpBlockStore::from_manifest(&url, &source, 16 << 20)
+                    .map_err(|error| RuntimeError::Machine(error.to_string()))?;
+                let mut id = [0; 20];
+                let name = format!("riscbox-http-{index}");
+                id[..name.len()].copy_from_slice(name.as_bytes());
+                block_slots.push(machine.add_http_block_device(store, id)?);
+            }
         }
         let (ninep_slots, ninep_endpoints) = Self::add_filesystems(&mut machine, &config)?;
         let console_slot = if config.console == Console::Virtio {
@@ -1323,6 +1384,7 @@ impl BrowserRuntime {
             pointer_dimensions: dimensions,
             network_output,
             block_slots,
+            host_blocks,
             ninep_slots,
             ninep_endpoints,
             pending_http: BTreeMap::new(),
@@ -1370,7 +1432,70 @@ impl BrowserRuntime {
             }
         }
         self.state = State::Running(running);
+        self.pump_host_block_actions()?;
         self.pump_ninep_transport_actions()
+    }
+
+    fn pump_host_block_actions(&mut self) -> Result<(), RuntimeError> {
+        let State::Running(running) = &mut self.state else {
+            return Ok(());
+        };
+        for (provider, (slot, observed)) in &mut running.host_blocks {
+            let generation = running.machine.host_block_generation(*slot)?;
+            if generation != *observed {
+                *observed = generation;
+                self.actions
+                    .push_back(HostAction::HostBlock(HostBlockAction::Reset {
+                        provider: *provider,
+                        generation,
+                    }));
+            }
+            if let Some(request) = running.machine.next_host_block_request(*slot)? {
+                self.actions
+                    .push_back(HostAction::HostBlock(HostBlockAction::Request(request)));
+            }
+        }
+        Ok(())
+    }
+
+    /// Completes a host provider request, ignoring retired generations.
+    ///
+    /// # Errors
+    /// Returns an error for a wrong provider or unknown current request.
+    pub fn complete_host_block(
+        &mut self,
+        provider: HostBlockProviderId,
+        generation: HostBlockGeneration,
+        id: HostBlockRequestId,
+        result: HostBlockOutcome,
+    ) -> Result<(), RuntimeError> {
+        let halted = self.is_halted();
+        let mut running = match core::mem::replace(&mut self.state, State::VmInactive) {
+            State::Running(running) | State::Halted(running) => running,
+            other => {
+                self.state = other;
+                return Err(RuntimeError::Machine(
+                    "block completion without a VM".into(),
+                ));
+            }
+        };
+        let outcome = match running.host_blocks.get(&provider) {
+            Some((slot, _)) => running
+                .machine
+                .complete_host_block_request(*slot, generation, id, result)
+                .map_err(Into::into),
+            None => Err(RuntimeError::InvalidConfig("unknown block provider".into())),
+        };
+        self.state = if halted {
+            State::Halted(running)
+        } else {
+            State::Running(running)
+        };
+        outcome?;
+        if !halted {
+            self.pump_http_requests()?;
+        }
+        Ok(())
     }
 
     fn pump_ninep_transport_actions(&mut self) -> Result<(), RuntimeError> {

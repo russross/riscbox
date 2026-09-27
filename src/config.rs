@@ -1,6 +1,6 @@
 //! Dependency-free parsing of Riscbox configuration files.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
 
@@ -346,9 +346,15 @@ pub enum Console {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DriveConfig {
-    pub file: String,
-    pub device: Option<String>,
+pub enum DriveConfig {
+    Http {
+        file: String,
+        device: Option<String>,
+    },
+    Host {
+        provider: u32,
+        capacity_sectors: u64,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -447,8 +453,22 @@ impl VmConfig {
                 "invalid resolved machine or memory size".into(),
             ));
         }
-        if self.drives.iter().any(|drive| drive.file.is_empty()) {
-            return Err(ConfigError("drive URL may not be empty".into()));
+        if self.drives.iter().any(|drive| match drive {
+            DriveConfig::Http { file, .. } => file.is_empty(),
+            DriveConfig::Host {
+                provider,
+                capacity_sectors,
+            } => *provider == 0 || *capacity_sectors == 0,
+        }) {
+            return Err(ConfigError("invalid resolved drive".into()));
+        }
+        let mut providers = BTreeSet::new();
+        for drive in &self.drives {
+            if let DriveConfig::Host { provider, .. } = drive
+                && !providers.insert(*provider)
+            {
+                return Err(ConfigError("block provider attached twice".into()));
+            }
         }
         if self.display.as_ref().is_some_and(|display| {
             display.device != "simplefb" || display.width <= 0 || display.height <= 0
@@ -496,9 +516,31 @@ impl VmConfig {
                 break;
             };
             let entry = require_object(value, &name)?;
-            drives.push(DriveConfig {
-                file: required_string(entry, "file")?.to_owned(),
-                device: optional_string(entry, "device")?.map(str::to_owned),
+            drives.push(if let Some(provider) = entry.get("provider") {
+                let id = provider
+                    .as_integer()
+                    .ok_or_else(|| ConfigError(format!("{name} provider must be an integer")))?;
+                let provider = u32::try_from(id)
+                    .map_err(|_| ConfigError(format!("{name} provider must be positive")))?;
+                if provider == 0 || entry.contains_key("file") {
+                    return Err(ConfigError(format!("{name} must select one source")));
+                }
+                let capacity_sectors = optional_address(entry, "capacity_sectors")?
+                    .ok_or_else(|| ConfigError(format!("missing {name} capacity_sectors")))?;
+                if capacity_sectors == 0 {
+                    return Err(ConfigError(format!(
+                        "{name} capacity_sectors must be positive"
+                    )));
+                }
+                DriveConfig::Host {
+                    provider,
+                    capacity_sectors,
+                }
+            } else {
+                DriveConfig::Http {
+                    file: required_string(entry, "file")?.to_owned(),
+                    device: optional_string(entry, "device")?.map(str::to_owned),
+                }
             });
         }
         reject_over_limit(object, "drive", MAX_DRIVES)?;

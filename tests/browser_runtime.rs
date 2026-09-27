@@ -1,9 +1,10 @@
 use riscbox::browser_input::BrowserInputQueue;
 use riscbox::browser_runtime::{
-    BrowserNineP, BrowserRuntime, HostAction, LifecycleCause, QuantumOutcome, QuantumStart,
-    RuntimeError, RuntimeStart,
+    BrowserNineP, BrowserRuntime, HostAction, HostBlockAction, LifecycleCause, QuantumOutcome,
+    QuantumStart, RuntimeError, RuntimeStart,
 };
 use riscbox::config::VmConfig;
+use riscbox::host_block::HostBlockProviderId;
 use riscbox::virtio_devices::{
     NinePBackend, NinePEndpointId, NinePGeneration, NinePRequestId, NinePTransportAction,
 };
@@ -31,6 +32,39 @@ fn resolved_start_requests_assets_without_fetching_configuration() {
     let mut runtime = BrowserRuntime::default();
     runtime.start_resolved(start(), config).expect("start");
     assert_eq!(request(&mut runtime).1, "https://host/firmware.bin");
+}
+
+#[test]
+fn resolved_mixed_drives_load_in_guest_order() {
+    let config = VmConfig::from_resolved(
+        r#"{"version":1,"machine":"riscv64","memory_size":32,
+        "console":"uart","uart_output":false,"rtc_local_time":false,"cmdline":"",
+        "bios":"https://host/firmware.bin",
+        "drive0":{"provider":7,"capacity_sectors":"8"},
+        "drive1":{"file":"https://host/disk/blk.txt"}}"#,
+    )
+    .expect("mixed drives");
+    let mut runtime = BrowserRuntime::default();
+    runtime.start_resolved(start(), config).expect("start");
+    let (firmware_id, firmware_url) = request(&mut runtime);
+    assert_eq!(firmware_url, "https://host/firmware.bin");
+    runtime
+        .complete_http(firmware_id, 200, vec![0x13, 0, 0, 0])
+        .expect("firmware");
+    let (manifest_id, manifest_url) = request(&mut runtime);
+    assert_eq!(manifest_url, "https://host/disk/blk.txt");
+    runtime
+        .complete_http(manifest_id, 200, b"{block_size:1,n_block:1}".to_vec())
+        .expect("manifest");
+    assert_eq!(runtime.next_action(), Some(HostAction::Started));
+    runtime.halt().expect("halt");
+    runtime.destroy().expect("destroy");
+    assert!(matches!(
+        runtime.next_action(),
+        Some(HostAction::HostBlock(HostBlockAction::Close {
+            provider: HostBlockProviderId(7)
+        }))
+    ));
 }
 
 #[test]

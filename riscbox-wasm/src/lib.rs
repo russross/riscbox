@@ -253,6 +253,28 @@ pub extern "C" fn riscbox_action_stride() -> u32 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn riscbox_action_sector_low() -> u32 {
+    browser_abi::riscbox_action_sector_low()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn riscbox_action_sector_high() -> u32 {
+    browser_abi::riscbox_action_sector_high()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn riscbox_block_complete(
+    provider: u32,
+    generation: u32,
+    id: u32,
+    status: u32,
+    address: u32,
+    length: u32,
+) -> i32 {
+    browser_abi::riscbox_block_complete(provider, generation, id, status, address, length)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn riscbox_http_complete(id: u32, status: u32, address: u32, length: u32) -> i32 {
     browser_abi::riscbox_http_complete(id, status, address, length)
 }

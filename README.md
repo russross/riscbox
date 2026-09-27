@@ -27,8 +27,8 @@ Release archive
 ---------------
 
 Each GitHub release has one `riscbox-VERSION.tar.gz` archive. Extract it into
-an application directory. Its `riscbox.js`, `riscbox.wasm`, `p9/`, and
-`network/` files are ready to serve as static browser assets. `linux` is the
+an application directory. Its `riscbox.js`, `riscbox.wasm`, `block/`, `p9/`,
+and `network/` files are ready to serve as static browser assets. `linux` is the
 configured RV64 Linux Image, `fw_dynamic.bin` is the Riscbox OpenSBI firmware,
 and `u-boot.bin` is the S-mode bootloader. The archive also contains this API
 README, module documentation, the changelog, and the license. It contains no
@@ -203,6 +203,19 @@ Both methods load boot assets asynchronously, and the `onVmStarted` callback
 reports when the machine is ready. The older synchronous `start()` method
 remains for integrations using the legacy Rust config fetch path.
 
+Pass `blockProviders: new Map([[1, provider]])` to `Riscbox.instantiate()`
+before starting a config with `drive0: { provider: 1, capacity_sectors: "..." }`.
+The provider implements `read(sector, length)`, `write(sector, bytes)`,
+`reset()`, and `close()` as defined in `js/block/index.ts`. `sector` is a
+`bigint`; reads return exactly `length` bytes in a `Uint8Array`, and writes
+resolve after the provider accepts the bytes. `reset()` clears pending
+interface work but retains stored data; `close()` runs on VM destroy. Errors
+and malformed read lengths complete the guest request with an I/O error.
+Copy data you need to retain before an asynchronous operation returns; the
+adapter copies guest write bytes and provider read replies across WASM memory.
+Observe an orderly guest shutdown before treating a writable host image as
+synchronized, since the guest kernel may buffer writes.
+
 ```js
 {
     version: 1,
@@ -230,7 +243,11 @@ The main options are:
 *   `console` is `virtio` by default or `uart`. `uart_output: true` mirrors
     firmware and early-kernel UART output while input stays on VirtIO.
 *   Consecutive `drive0` through `drive3` add VirtIO block devices. Browser
-    block writes remain in memory and disappear with the VM.
+    HTTP block writes remain in memory and disappear with the VM. A drive may
+    instead specify `{ provider: 1, capacity_sectors: "131072" }` to attach a
+    host block provider. Drive numbers determine guest device order, including
+    mixed HTTP and host drives. Capacity counts 512-byte sectors; quote large
+    values to preserve their full width.
 *   Consecutive `fs0` through `fs3` use `{ server, tag }` to add host-provided
     VirtIO 9p channels. `server` selects the host registry entry; `tag` is the
     guest-visible mount tag.

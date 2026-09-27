@@ -12,7 +12,7 @@ output=$(realpath -m "$output")
 stage=$(mktemp -d)
 trap 'rm -rf "$stage" "$output.part"' EXIT
 package="$stage/riscbox-$version"
-mkdir -p "$package/p9" "$package/network"
+mkdir -p "$package/p9" "$package/network" "$package/block"
 
 # Only deployable runtime files and their documentation enter the archive.
 install -m 644 target/wasm32-unknown-unknown/release/riscbox_wasm.wasm "$package/riscbox.wasm"
@@ -25,7 +25,7 @@ install -m 644 js/p9/README.md "$package/p9/README.md"
 install -m 644 js/network/README.md "$package/network/README.md"
 
 # TypeScript output is pure ESM and includes its declarations for host authors.
-for module in p9 network; do
+for module in block p9 network; do
     for source in build/js/"$module"/*.js build/js/"$module"/*.d.ts; do
         test -f "$source"
         install -m 644 "$source" "$package/$module/$(basename "$source")"

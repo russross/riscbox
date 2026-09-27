@@ -1,6 +1,9 @@
 use riscbox::browser_storage::HttpBlockStore;
 use riscbox::entropy::{EntropyError, EntropySource};
 use riscbox::guest_memory::{AccessWidth, GuestAddress};
+use riscbox::host_block::{
+    HostBlockGeneration, HostBlockKind, HostBlockOutcome, HostBlockProviderId, HostBlockStore,
+};
 use riscbox::machine::{Machine, MachineConfig, VIRTIO_BASE};
 use riscbox::virtio_devices::{
     BlockBackend, DeviceError, InputKind, MAX_NETWORK_FRAME_SIZE, MAX_PENDING_NETWORK_FRAMES,
@@ -301,6 +304,94 @@ fn http_block_read_waits_for_completion_before_updating_the_used_ring() {
     );
     assert_eq!(machine.read_ram(DATA + 0x100, 512).unwrap(), &[0x6d; 512]);
     assert_eq!(machine.read_ram(DATA + 0x300, 1).unwrap(), &[0]);
+}
+
+#[test]
+fn host_block_completes_reads_and_retires_late_replies() {
+    let mut machine = test_machine();
+    let slot = machine
+        .add_host_block_device(HostBlockStore::new(HostBlockProviderId(7), 8), [0; 20])
+        .expect("host block");
+    machine_configure(&mut machine, slot, 0);
+    machine_bytes(&mut machine, DATA, &[0; 16]);
+    machine_descriptor(&mut machine, 0, DATA, 16, 1, 1);
+    machine_descriptor(&mut machine, 1, DATA + 0x100, 513, 2, 0);
+    machine_available(&mut machine, 0);
+    machine_kick(&mut machine, slot, 0);
+    let request = machine
+        .next_host_block_request(slot)
+        .unwrap()
+        .expect("host request");
+    assert_eq!(
+        (
+            request.provider,
+            request.kind,
+            request.sector,
+            request.length
+        ),
+        (HostBlockProviderId(7), HostBlockKind::Read, 0, 512)
+    );
+    assert_eq!(
+        machine_read(&mut machine, USED + 2, AccessWidth::HalfWord),
+        0
+    );
+    machine
+        .complete_host_block_request(
+            slot,
+            request.generation,
+            request.id,
+            HostBlockOutcome::Success(vec![0x71; 512]),
+        )
+        .expect("read reply");
+    assert_eq!(
+        machine_read(&mut machine, USED + 2, AccessWidth::HalfWord),
+        1
+    );
+    assert_eq!(machine.read_ram(DATA + 0x100, 512).unwrap(), &[0x71; 512]);
+    machine_write(&mut machine, VIRTIO_BASE + 0x70, AccessWidth::Word, 0);
+    assert_eq!(
+        machine.host_block_generation(slot).unwrap(),
+        HostBlockGeneration(2)
+    );
+    machine
+        .complete_host_block_request(
+            slot,
+            request.generation,
+            request.id,
+            HostBlockOutcome::Success(vec![1; 512]),
+        )
+        .expect("late reply ignored");
+}
+
+#[test]
+fn malformed_host_read_completes_with_guest_io_error() {
+    let mut machine = test_machine();
+    let slot = machine
+        .add_host_block_device(HostBlockStore::new(HostBlockProviderId(2), 8), [0; 20])
+        .expect("host block");
+    machine_configure(&mut machine, slot, 0);
+    machine_bytes(&mut machine, DATA, &[0; 16]);
+    machine_descriptor(&mut machine, 0, DATA, 16, 1, 1);
+    machine_descriptor(&mut machine, 1, DATA + 0x100, 513, 2, 0);
+    machine_available(&mut machine, 0);
+    machine_kick(&mut machine, slot, 0);
+    let request = machine
+        .next_host_block_request(slot)
+        .unwrap()
+        .expect("request");
+    machine
+        .complete_host_block_request(
+            slot,
+            request.generation,
+            request.id,
+            HostBlockOutcome::Success(vec![0; 511]),
+        )
+        .expect("malformed reply becomes I/O error");
+    assert_eq!(
+        machine_read(&mut machine, USED + 2, AccessWidth::HalfWord),
+        1
+    );
+    assert_eq!(machine.read_ram(DATA + 0x300, 1).unwrap(), &[1]);
 }
 
 #[test]

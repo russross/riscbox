@@ -8,6 +8,7 @@ pub mod config;
 pub mod entropy;
 pub mod fdt;
 pub mod guest_memory;
+pub mod host_block;
 pub mod machine;
 pub mod platform;
 pub mod tinyemu_core;

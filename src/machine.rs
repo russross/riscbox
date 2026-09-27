@@ -13,6 +13,9 @@ use crate::guest_memory::{
     AccessWidth, ArenaOffset, DeviceWidths, GuestAddress, MemoryAccess, MemoryError, RamFlags,
     RegionId,
 };
+use crate::host_block::{
+    HostBlockGeneration, HostBlockOutcome, HostBlockRequest, HostBlockRequestId, HostBlockStore,
+};
 use crate::platform::{
     Aclint, FinishStatus, Finisher, GoldfishRtc, MIP_MSIP, MIP_MTIP, Plic, Uart16550,
 };
@@ -173,12 +176,14 @@ struct Framebuffer {
 
 type DynBlock = VirtioMmioDevice<BlockDevice<Box<dyn BlockBackend>>>;
 type HttpBlock = VirtioMmioDevice<BlockDevice<HttpBlockStore>>;
+type HostBlock = VirtioMmioDevice<BlockDevice<HostBlockStore>>;
 type DynNetwork = VirtioMmioDevice<NetworkDevice<Box<dyn NetworkBackend>>>;
 type DynNineP = VirtioMmioDevice<NinePDevice<Box<dyn NinePBackend>>>;
 
 enum VirtioSlot {
     Block(DynBlock),
     HttpBlock(HttpBlock),
+    HostBlock(HostBlock),
     Console(VirtioMmioDevice<ConsoleDevice>),
     Network(DynNetwork),
     NineP(DynNineP),
@@ -191,6 +196,7 @@ impl VirtioSlot {
         match self {
             Self::Block(device) => device.reset(),
             Self::HttpBlock(device) => device.reset(),
+            Self::HostBlock(device) => device.reset(),
             Self::Console(device) => device.reset(),
             Self::Network(device) => device.reset(),
             Self::NineP(device) => device.reset(),
@@ -203,6 +209,7 @@ impl VirtioSlot {
         // Queue notifications handled entirely in Rust leave these queues empty.
         match self {
             Self::HttpBlock(device) => device.device.backend().has_outgoing(),
+            Self::HostBlock(device) => device.device.backend().has_outgoing(),
             Self::NineP(device) => device.device.backend().has_transport_action(),
             _ => false,
         }
@@ -212,6 +219,7 @@ impl VirtioSlot {
         match self {
             Self::Block(device) => device.read(offset, width),
             Self::HttpBlock(device) => device.read(offset, width),
+            Self::HostBlock(device) => device.read(offset, width),
             Self::Console(device) => device.read(offset, width),
             Self::Network(device) => device.read(offset, width),
             Self::NineP(device) => device.read(offset, width),
@@ -230,6 +238,7 @@ impl VirtioSlot {
         match self {
             Self::Block(device) => device.write(memory, offset, value, width),
             Self::HttpBlock(device) => device.write(memory, offset, value, width),
+            Self::HostBlock(device) => device.write(memory, offset, value, width),
             Self::Console(device) => device.write(memory, offset, value, width),
             Self::Network(device) => device.write(memory, offset, value, width),
             Self::NineP(device) => device.write(memory, offset, value, width),
@@ -242,6 +251,7 @@ impl VirtioSlot {
         match self {
             Self::Block(device) => device.transport.irq(),
             Self::HttpBlock(device) => device.transport.irq(),
+            Self::HostBlock(device) => device.transport.irq(),
             Self::Console(device) => device.transport.irq(),
             Self::Network(device) => device.transport.irq(),
             Self::NineP(device) => device.transport.irq(),
@@ -577,6 +587,21 @@ impl Machine {
         id: [u8; 20],
     ) -> Result<usize, MachineError> {
         self.add_virtio(VirtioSlot::HttpBlock(VirtioMmioDevice::new(
+            VirtioTransport::new(2, 0, &[16]),
+            BlockDevice::new(backend, id),
+        )))
+    }
+
+    /// Adds an asynchronous host-backed `VirtIO` block device.
+    ///
+    /// # Errors
+    /// Returns an error after the available MMIO slots are exhausted.
+    pub fn add_host_block_device(
+        &mut self,
+        backend: HostBlockStore,
+        id: [u8; 20],
+    ) -> Result<usize, MachineError> {
+        self.add_virtio(VirtioSlot::HostBlock(VirtioMmioDevice::new(
             VirtioTransport::new(2, 0, &[16]),
             BlockDevice::new(backend, id),
         )))
@@ -1063,6 +1088,70 @@ impl Machine {
         }
         device.device.resume(&mut device.transport, memory)?;
         self.bus.update_device_irqs();
+        Ok(())
+    }
+
+    /// Returns the next request for a host-owned block provider.
+    ///
+    /// # Errors
+    /// Returns an error for a wrong MMIO slot.
+    pub fn next_host_block_request(
+        &mut self,
+        slot: usize,
+    ) -> Result<Option<HostBlockRequest>, MachineError> {
+        let VirtioSlot::HostBlock(device) = self
+            .bus
+            .virtio
+            .get_mut(slot)
+            .ok_or(MachineError::WrongVirtioDevice)?
+        else {
+            return Err(MachineError::WrongVirtioDevice);
+        };
+        Ok(device.device.backend_mut().next_request())
+    }
+
+    /// Returns the current provider generation for reset notifications.
+    ///
+    /// # Errors
+    /// Returns an error for a wrong MMIO slot.
+    pub fn host_block_generation(&self, slot: usize) -> Result<HostBlockGeneration, MachineError> {
+        let VirtioSlot::HostBlock(device) = self
+            .bus
+            .virtio
+            .get(slot)
+            .ok_or(MachineError::WrongVirtioDevice)?
+        else {
+            return Err(MachineError::WrongVirtioDevice);
+        };
+        Ok(device.device.backend().generation())
+    }
+
+    /// Completes a provider request and advances the `VirtIO` queue.
+    ///
+    /// # Errors
+    /// Returns an error for a wrong slot or unknown current request.
+    pub fn complete_host_block_request(
+        &mut self,
+        slot: usize,
+        generation: HostBlockGeneration,
+        id: HostBlockRequestId,
+        result: HostBlockOutcome,
+    ) -> Result<(), MachineError> {
+        let PlatformBus { memory, virtio, .. } = &mut self.bus;
+        let VirtioSlot::HostBlock(device) = virtio
+            .get_mut(slot)
+            .ok_or(MachineError::WrongVirtioDevice)?
+        else {
+            return Err(MachineError::WrongVirtioDevice);
+        };
+        if device
+            .device
+            .backend_mut()
+            .complete(generation, id, result)?
+        {
+            device.device.resume(&mut device.transport, memory)?;
+            self.bus.update_device_irqs();
+        }
         Ok(())
     }
 

@@ -4,6 +4,13 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Added parallel host-backed VirtIO block transport. Resolved drive entries
+    select registered browser providers in guest order beside existing HTTP
+    drives. Sector requests cross the raw WASM ABI with device, generation,
+    and request IDs; malformed replies and provider errors become guest I/O
+    errors. Reset retires late work and destroy closes providers. A prepared
+    Alpine guest booted from a host byte array, wrote to it, shut down, and
+    booted again with the same provider.
 *   Removed guest-clock catch-up waits and adaptive skew from execution.
     Quanta keep their cycle budgets and start from the later of host time and
     the previous guest time. Timing diagnostics retain variance

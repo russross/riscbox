@@ -46,6 +46,99 @@ function fakeModule() {
     return { exports, calls };
 }
 
+test("host block requests copy replies and retire promises on reset", async () => {
+    const fake = fakeModule();
+    const completed = [];
+    let resolveRead;
+    const calls = [];
+    const provider = {
+        read(sector, length) {
+            calls.push(["read", sector, length]);
+            return new Promise((resolve) => { resolveRead = resolve; });
+        },
+        write(sector, bytes) { calls.push(["write", sector, bytes]); },
+        reset() { calls.push(["reset"]); },
+        close() { calls.push(["close"]); },
+    };
+    const runtime = new Riscbox(fake.exports, { blockProviders: new Map([[7, provider]]) });
+    assert.throws(() => runtime.startResolved({ version: 1, machine: "riscv64", memory_size: 32,
+        drive0: { provider: 7, capacity_sectors: Number.MAX_SAFE_INTEGER + 1 } }),
+    /safe integer/);
+    runtime.startResolved({ version: 1, machine: "riscv64", memory_size: 32,
+        drive0: { provider: 7, capacity_sectors: 16 } });
+    let action = 12;
+    fake.exports.riscbox_next_action = () => { const current = action; action = 0; return current; };
+    fake.exports.riscbox_action_value = () => 0;
+    fake.exports.riscbox_action_endpoint = () => 7;
+    fake.exports.riscbox_action_generation = () => action === 0 ? 1 : 2;
+    fake.exports.riscbox_action_request_id = () => 4;
+    fake.exports.riscbox_action_reply_capacity = () => 512;
+    fake.exports.riscbox_action_sector_low = () => 5;
+    fake.exports.riscbox_action_sector_high = () => 1;
+    fake.exports.riscbox_block_complete = (...args) => {
+        completed.push([args.slice(0, 4), runtime.bytes(args[4], args[5])]);
+        return 0;
+    };
+    runtime.drainActions();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(calls[0], ["read", 0x1_0000_0005n, 512]);
+    action = 13;
+    fake.exports.riscbox_action_generation = () => 2;
+    runtime.drainActions();
+    resolveRead(new Uint8Array(512));
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(completed.length, 0);
+    action = 12;
+    runtime.drainActions();
+    await new Promise((resolve) => setImmediate(resolve));
+    resolveRead(new Uint8Array(512).fill(0x5a));
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(completed.length, 1);
+    assert.deepEqual(completed[0][0], [7, 2, 4, 0]);
+    assert.deepEqual(completed[0][1], new Uint8Array(512).fill(0x5a));
+    action = 14;
+    runtime.drainActions();
+    assert.deepEqual(calls.filter((call) => call[0] === "reset" || call[0] === "close"), [["reset"], ["close"]]);
+});
+
+test("host write errors complete with guest I/O status", async () => {
+    const fake = fakeModule();
+    const completions = [];
+    const errors = [];
+    const payload = new Uint8Array(fake.exports.memory.buffer, 32, 512);
+    payload.fill(0x6c);
+    const runtime = new Riscbox(fake.exports, {
+        blockProviders: new Map([[1, {
+            read() { return new Uint8Array(512); },
+            write(sector, bytes) {
+                assert.equal(sector, 9n);
+                assert.deepEqual(bytes, new Uint8Array(512).fill(0x6c));
+                throw new Error("storage failed");
+            },
+            reset() {}, close() {},
+        }]]),
+        onError: (error) => errors.push(error.message),
+    });
+    runtime.startResolved({ version: 1, machine: "riscv64", memory_size: 32,
+        drive0: { provider: 1, capacity_sectors: 16 } });
+    let action = 12;
+    fake.exports.riscbox_next_action = () => { const current = action; action = 0; return current; };
+    fake.exports.riscbox_action_value = () => 1;
+    fake.exports.riscbox_action_endpoint = () => 1;
+    fake.exports.riscbox_action_generation = () => 1;
+    fake.exports.riscbox_action_request_id = () => 2;
+    fake.exports.riscbox_action_reply_capacity = () => 512;
+    fake.exports.riscbox_action_sector_low = () => 9;
+    fake.exports.riscbox_action_sector_high = () => 0;
+    fake.exports.riscbox_action_data_address = () => 32;
+    fake.exports.riscbox_action_data_length = () => 512;
+    fake.exports.riscbox_block_complete = (...args) => { completions.push(args); return 0; };
+    runtime.drainActions();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(completions, [[1, 1, 2, 1, 0, 0]]);
+    assert.deepEqual(errors, ["storage failed"]);
+});
+
 test("configuration URL resolves defaults and assets before the WASM call", async () => {
     const fake = fakeModule();
     const fetched = [];

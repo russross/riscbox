@@ -54,6 +54,9 @@ Repository map and terminology
     archive excludes guest images and image build scripts.
 *   `js/riscbox.js` is the dependency-free browser adapter for the raw ABI.
 *   `js/network/` is the typed WebSocket Ethernet frontend and protocol.
+*   `js/block/` defines the host block provider interface. The browser adapter
+    dispatches its requests through the raw WASM ABI; Rust retains VirtIO
+    descriptor validation and device ordering.
 *   `js/p9/` is the authoritative TypeScript 9P2000.L server, shared in-memory
     filesystem, and optional seed plugins. Generated JavaScript and declarations
     go under `build/js/p9/`.
@@ -117,6 +120,13 @@ host object. Rust validates the resolved configuration and still constructs
 the machine. The legacy `start` path and native Rust parser remain available.
 HTTP block stores start with a 16 MiB in-memory cache limit that grows to
 cover a single request when needed.
+Resolved `driveN` entries may attach a host block provider by numeric ID and
+512-byte sector capacity. HTTP and host drives occupy guest slots in the
+configured order. The host provider owns its bytes and handles asynchronous
+read/write requests; Rust validates ranges and reply lengths and returns
+provider failures as guest I/O errors. Generations retire late replies after
+device or VM reset. Provider `reset` retains data, while VM destroy calls
+`close`. The Rust HTTP cache and CoW path remain available in parallel.
 
 The host can deliver soft shutdown and reboot input events, force an immediate
 halt or reset, boot a halted machine, and destroy a halted machine. The prepared

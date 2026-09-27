@@ -23,6 +23,33 @@ does not support RV32, SMP, vectors, hypervisor mode, PCIe, UEFI, or general
 device emulation. Native Rust builds support testing; the browser is the
 deployment target.
 
+Release archive
+---------------
+
+Each GitHub release has one `riscbox-VERSION.tar.gz` archive. Extract it into
+an application directory. Its `riscbox.js`, `riscbox.wasm`, `p9/`, and
+`network/` files are ready to serve as static browser assets. `linux` is the
+configured RV64 Linux Image, `fw_dynamic.bin` is the Riscbox OpenSBI firmware,
+and `u-boot.bin` is the S-mode bootloader. The archive also contains this API
+README, module documentation, the changelog, and the license. It contains no
+guest root filesystem, disk blocks, sample VM, or image build scripts.
+
+To boot Linux directly, prepare a compatible RISC-V root filesystem image,
+split it into HTTP blocks using the repository's
+[`tools/splitimg.py`](https://github.com/russross/riscbox/blob/main/tools/splitimg.py),
+and place its block directory beside the runtime. Create `riscbox.cfg` there
+using the example in “VM configuration” below; replace `drive/blk.txt` with
+the path reported by the splitter. Serve the directory over HTTP or HTTPS and
+load `riscbox.js` and `riscbox.wasm` as shown in “Browser library”. The
+configuration URL is the base for its boot and disk paths. For an EROFS root,
+use `rootfstype=erofs` and `ro` in `cmdline`; for a prepared ext4 root, use
+`rootfstype=ext4` and `rw`. Serve `.wasm` as `application/wasm`.
+
+The archive's OpenSBI and U-Boot binaries are compiled from the pinned source
+versions in this repository. To use U-Boot, set `kernel: "u-boot.bin"` and put
+`/boot/Image` and `/boot/extlinux/extlinux.conf` in the guest disk; U-Boot
+loads Linux from the disk. The included `linux` file can supply that Image.
+
 Quick start
 -----------
 
@@ -70,7 +97,8 @@ Build targets
 Browser library
 ---------------
 
-`js/riscbox.js` installs a global `Riscbox` class. Instantiate it with the WASM
+`js/riscbox.js` in the source tree (`riscbox.js` in the release archive)
+installs a global `Riscbox` class. Instantiate it with the WASM
 bytes and callbacks, then start it with a configuration URL and RAM size:
 
 ```html
@@ -267,8 +295,9 @@ and the configuration with `no-store`. Static hosting needs ordinary `GET`
 requests, the `application/wasm` MIME type,
 and CORS when assets cross origins; range requests and a server application are
 unnecessary.
-See [images/README.md](images/README.md) for image layout and
-[images/DEPLOYMENT.md](images/DEPLOYMENT.md) for deployment details.
+See the repository's [image build guide](https://github.com/russross/riscbox/blob/main/images/README.md)
+and [deployment guide](https://github.com/russross/riscbox/blob/main/images/DEPLOYMENT.md)
+for image layout and publishing details.
 
 9p file sharing
 ---------------
@@ -376,7 +405,8 @@ or pass the plugin to `Memory9PServer`. `createHttpsSeedPlugin()` and
 `createTarSeedPlugin()` demonstrate remote manifests and pre-downloaded tar
 archives. One filesystem instance pins its namespace and loader interpretation;
 create a new instance to publish a new generation. See
-[js/p9/README.md](js/p9/README.md) for the supported operation profile.
+[9p documentation](https://github.com/russross/riscbox/blob/main/js/p9/README.md)
+for the supported operation profile.
 
 Platform summary
 ----------------

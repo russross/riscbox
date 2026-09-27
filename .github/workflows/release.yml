@@ -1,0 +1,120 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - Cargo.toml
+      - Cargo.lock
+      - .github/workflows/release.yml
+      - .github/scripts/**
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: clippy
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Check version transition
+        id: version
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          current=$(cargo metadata --locked --no-deps --format-version 1 | jq -er '.packages[] | select(.name == "riscbox") | .version')
+          wasm=$(cargo metadata --locked --no-deps --format-version 1 | jq -er '.packages[] | select(.name == "riscbox-wasm") | .version')
+          test "$current" = "$wasm" || { echo 'Rust package versions differ' >&2; exit 1; }
+          tag="v$current"
+          if [ "$EVENT_NAME" = push ]; then
+            test "$BEFORE_SHA" != 0000000000000000000000000000000000000000 || { echo 'Previous push revision is unavailable' >&2; exit 1; }
+            previous=$(git show "$BEFORE_SHA:Cargo.toml" | python3 -c 'import sys, tomllib; data=tomllib.loads(sys.stdin.read()); print(data.get("workspace", {}).get("package", {}).get("version", data["package"].get("version", "")))')
+            if [ "$current" = "$previous" ]; then
+              echo 'No package version change'
+              echo 'build=false' >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            .github/scripts/release_version.py "$previous" "$current"
+          fi
+          if git rev-parse --verify "refs/tags/$tag^{commit}" >/dev/null 2>&1; then
+            tagged=$(git rev-parse "refs/tags/$tag^{commit}")
+            test "$tagged" = "$GITHUB_SHA" || { echo "Tag $tag points to another commit" >&2; exit 1; }
+            echo 'tag_exists=true' >> "$GITHUB_OUTPUT"
+            if gh release view "$tag" >/dev/null 2>&1; then
+              echo "Release $tag already exists"
+              echo 'build=false' >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          else
+            echo 'tag_exists=false' >> "$GITHUB_OUTPUT"
+          fi
+          echo 'build=true' >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$current" >> "$GITHUB_OUTPUT"
+
+      - name: Install build tools
+        if: steps.version.outputs.build == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang llvm lld gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu bc bison flex libssl-dev libelf-dev dwarves
+
+      - name: Install browser module compiler
+        if: steps.version.outputs.build == 'true'
+        run: npm --prefix images/risclet/ui ci
+
+      - name: Build and validate
+        if: steps.version.outputs.build == 'true'
+        run: |
+          make check
+          uvx --quiet ty check .github/scripts/release_version.py
+          make -B wasm
+          make kernel opensbi uboot
+
+      - name: Package release
+        if: steps.version.outputs.build == 'true'
+        id: package
+        run: |
+          archive=$(.github/scripts/package-release.sh)
+          tar -tzf "$archive" > /tmp/riscbox-archive-files
+          test "$(wc -l < /tmp/riscbox-archive-files)" -gt 15
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+
+      - name: Publish release
+        if: steps.version.outputs.build == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+          ARCHIVE: ${{ steps.package.outputs.archive }}
+          TAG_EXISTS: ${{ steps.version.outputs.tag_exists }}
+        run: |
+          set -eu
+          if [ "$TAG_EXISTS" != true ]; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git tag -a "$TAG" -m "Release $TAG" "$GITHUB_SHA"
+            git push origin "$TAG"
+          fi
+          case "${VERSION%%+*}" in
+            *-*) gh release create "$TAG" "$ARCHIVE" --title "Riscbox $VERSION" --generate-notes --verify-tag --prerelease ;;
+            *) gh release create "$TAG" "$ARCHIVE" --title "Riscbox $VERSION" --generate-notes --verify-tag ;;
+          esac

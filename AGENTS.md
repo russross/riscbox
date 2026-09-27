@@ -47,6 +47,11 @@ Repository map and terminology
 *   `riscbox-wasm/` supplies the small stable raw WASM export surface. Keep
     unsafe ABI code isolated there. Main-crate unsafe code is confined to the
     TinyEMU FFI module.
+*   The workspace version in root `Cargo.toml` is inherited by both Rust
+    crates. A push to `main` that increases it builds and publishes one GitHub
+    release archive with the WASM runtime, browser modules, canonical Linux
+    Image, OpenSBI firmware, U-Boot binary, and API documentation. The release
+    archive excludes guest images and image build scripts.
 *   `js/riscbox.js` is the dependency-free browser adapter for the raw ABI.
 *   `js/network/` is the typed WebSocket Ethernet frontend and protocol.
 *   `js/p9/` is the authoritative TypeScript 9P2000.L server, shared in-memory

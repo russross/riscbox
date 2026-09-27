@@ -4,6 +4,10 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Added automatic GitHub releases when the workspace version increases.
+    Both Rust crates inherit one version. A single gzip level 9 archive holds
+    deployable WASM, browser modules, the pinned Linux, OpenSBI, and U-Boot
+    builds, and the API documentation without sample images or build scripts.
 *   Added `startFromUrl` and `startResolved` browser startup APIs. JavaScript
     parses deployed configuration syntax, supplies defaults, and resolves
     asset URLs before passing a validated resolved configuration to Rust. The

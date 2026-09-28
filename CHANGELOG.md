@@ -4,6 +4,8 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Stopped timing debug reports when a VM powers off.
+
 *   Made `make` update the complete release archive incrementally. Kernel,
     OpenSBI, and U-Boot default builds now produce hash-named gzip assets,
     which the archive includes. Image Makefiles track their deployments and

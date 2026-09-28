@@ -557,7 +557,8 @@
                     }
                     timing.activeMs += performance.now() - startedAt;
                     if (wfiSleep) timing.wfiQuanta++;
-                    this.reportTiming(performance.now());
+                    if (!vmInactive && this.started)
+                        this.reportTiming(performance.now());
                 }
             } finally {
                 if (!completed)

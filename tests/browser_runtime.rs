@@ -222,6 +222,70 @@ fn complete_quantum_resumes_after_host_action_and_updates_rate() {
 }
 
 #[test]
+fn carried_guest_time_extends_the_next_cycle_budget() {
+    let mut runtime = start_uart_writer(
+        br#"{version:1,machine:"riscv64",memory_size:32,bios:"fw.bin",console:"uart"}"#,
+    );
+    runtime
+        .configure_quantum(20.0, true)
+        .expect("timing configuration");
+    let mut input_queue = BrowserInputQueue::default();
+
+    // A 20 ms guest interval finishing after 15 ms of host time carries
+    // five milliseconds into the next quantum.
+    assert_eq!(runtime.begin_quantum(1_000_000), QuantumStart::Ready);
+    assert_eq!(
+        runtime
+            .run_quantum(&mut input_queue)
+            .expect("console output"),
+        QuantumOutcome::HostServiceRequired
+    );
+    assert!(matches!(
+        runtime.next_action(),
+        Some(HostAction::Console(_))
+    ));
+    assert_eq!(
+        runtime.run_quantum(&mut input_queue).expect("first budget"),
+        QuantumOutcome::BudgetReached
+    );
+    runtime
+        .finish_quantum(15.0, 1_000_015)
+        .expect("first finish");
+    let rate = runtime.timing_stat(0);
+
+    // The carried interval extends the cycle budget from 20 to 25 ms at
+    // the rate locked when the second quantum begins.
+    assert_eq!(runtime.begin_quantum(1_000_015), QuantumStart::Ready);
+    assert_eq!(
+        runtime
+            .run_quantum(&mut input_queue)
+            .expect("extended budget"),
+        QuantumOutcome::BudgetReached
+    );
+    runtime
+        .finish_quantum(25.0, 1_000_040)
+        .expect("second finish");
+    assert!((runtime.timing_stat(6) - 50_000.0).abs() < 100.0);
+    let extended_cycles = runtime.timing_stat(4);
+    assert!((extended_cycles - rate * 0.025).abs() < rate * 0.001);
+
+    // Once host time passes the presented guest clock, the nominal budget
+    // applies again without borrowing any of the earlier lead.
+    assert_eq!(runtime.begin_quantum(1_000_050), QuantumStart::Ready);
+    assert_eq!(
+        runtime
+            .run_quantum(&mut input_queue)
+            .expect("nominal budget"),
+        QuantumOutcome::BudgetReached
+    );
+    runtime
+        .finish_quantum(20.0, 1_000_070)
+        .expect("third finish");
+    assert!(runtime.timing_stat(6).abs() < 1.0);
+    assert!(runtime.timing_stat(4) < extended_cycles);
+}
+
+#[test]
 fn configuration_and_boot_assets_load_in_dependency_order() {
     let mut runtime = BrowserRuntime::default();
     runtime.start(start()).expect("start");

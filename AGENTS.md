@@ -158,10 +158,9 @@ login.
 Rust sizes each execution quantum from a measured emulated cycle rate and a
 target duration, twenty milliseconds by default. Each quantum locks its rate
 and maps consumed cycles to 10 MHz guest timer ticks using integer arithmetic.
-Each quantum retains its cycle budget and targets a guest finish time of the
-later of host time plus the configured duration and the previous guest time
-plus that duration. It starts at the later current clock and advances at the
-usual cycle-to-tick rate. Cycle-rate estimates have a
+Each quantum extends both its target duration and cycle budget by the
+previous guest-clock lead. It starts at the later of host time and the
+previous guest time and advances at the usual cycle-to-tick rate. Cycle-rate estimates have a
 ten-second half-life; timing diagnostics retain rate-variance samples.
 Timer writes exit the C loop so Rust can size the next CPU run to the earliest ACLINT,
 supervisor, or RTC deadline. C also exits after MMIO requests for 9p or HTTP
@@ -195,7 +194,8 @@ Timing and execution lexicon
     (individual C interpreter calls). A **host-service boundary** returns an
     active quantum to JavaScript for queued device actions or hinted replies.
 *   The **quantum target duration** is the configured nominal host-time interval
-    used to calculate a **quantum cycle budget**. A **CPU-run cycle limit** is
+    plus any carried guest-clock lead; it determines the **quantum cycle budget**.
+    A **CPU-run cycle limit** is
     the smaller request for one C call. **Cycles consumed** are what C actually
     reports, including permitted overshoot. All cycles here are emulated guest
     cycles, never host CPU cycles.

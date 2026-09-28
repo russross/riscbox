@@ -523,16 +523,18 @@ impl BrowserRuntime {
                 .emulated_cycles_per_host_second
                 .max(1.0),
         );
+        // The previous guest-clock lead extends this quantum's target and
+        // cycle budget together. Keep the guest clock monotonic at its start.
+        let host_ticks = host_epoch_ms.saturating_mul(GUEST_TICKS_PER_MILLISECOND);
+        let added_guest_ticks = self.guest_clock_floor_ticks.saturating_sub(host_ticks);
+        let target_ms = self.target_quantum_ms
+            + integer_as_f64(added_guest_ticks) / integer_as_f64(GUEST_TICKS_PER_MILLISECOND);
         let quantum_budget_cycles = rounded_positive_integer(
-            (integer_as_f64(locked_rate_cycles_per_host_second) * self.target_quantum_ms / 1_000.0)
+            (integer_as_f64(locked_rate_cycles_per_host_second) * target_ms / 1_000.0)
                 .round()
                 .clamp(1.0, f64::from(i32::MAX)),
         );
         let quantum_budget_cycles = u32::try_from(quantum_budget_cycles).unwrap_or(i32::MAX as u32);
-        // The next guest interval starts at the later clock without waiting
-        // for host time to catch up with a previous quantum.
-        let host_ticks = host_epoch_ms.saturating_mul(GUEST_TICKS_PER_MILLISECOND);
-        let added_guest_ticks = self.guest_clock_floor_ticks.saturating_sub(host_ticks);
         let guest_ticks_per_host_second = GUEST_TICKS_PER_MILLISECOND * 1_000;
         self.active_quantum = Some(ActiveQuantum {
             start_guest_ticks: host_ticks.max(self.guest_clock_floor_ticks),

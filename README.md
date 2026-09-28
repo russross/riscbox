@@ -127,10 +127,11 @@ wake at the nearest guest timer deadline or after at most 100 milliseconds.
 A completed asynchronous device request can wake a WFI sleeping guest. Rust calibrates the quantum cycle
 budget from complete quanta timed by JavaScript. Set `targetQuantumMs` in the
 instantiate options to choose a nominal duration greater than zero and at most
-100 milliseconds (default 20); this bounds latency for host input and
-completed I/O. The cycle-rate estimate uses a ten-second half-life. The cycle
-budget stays based on the target duration; each quantum's guest-time window
-extends by any guest-clock lead from the previous quantum. Guest time remains
+100 milliseconds (default 20); carried guest-clock lead can extend an
+individual quantum beyond that nominal duration. The cycle-rate estimate
+uses a ten-second half-life. The cycle
+budget and target duration both extend by any guest-clock lead from the
+previous quantum. Guest time remains
 monotonic without delaying runnable quanta. Set `debugTiming: true`
 to log estimated and active emulated
 Mcycles/s, CPU runs per quantum, timer intervals, WFI sleep time, and the latest

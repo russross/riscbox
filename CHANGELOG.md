@@ -4,6 +4,10 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Extended runnable quantum targets and cycle budgets by carried guest-clock
+    lead, so a quantum that advances guest time ahead of the host gives the
+    next quantum a correspondingly larger execution budget.
+
 *   Stopped timing debug reports when a VM powers off.
 
 *   Made `make` update the complete release archive incrementally. Kernel,

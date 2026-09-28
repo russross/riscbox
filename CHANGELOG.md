@@ -4,6 +4,12 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Made `make` update the complete release archive incrementally. Kernel,
+    OpenSBI, and U-Boot default builds now produce hash-named gzip assets,
+    which the archive includes. Image Makefiles track their deployments and
+    provide clean targets; xv6 profiling is an explicit target that saves
+    streamed logs and CPU profiles under `images/xv6-profile/profiles/`.
+
 *   Changed Risclet to load the explicit custom Linux kernel through OpenSBI
     without U-Boot. Its EROFS root no longer stores a kernel or extlinux
     configuration; tmpfs supplies writable `/tmp`, `/var`, and `/home` layers.

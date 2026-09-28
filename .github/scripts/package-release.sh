@@ -17,9 +17,10 @@ mkdir -p "$package/p9" "$package/network" "$package/block"
 # Only deployable runtime files and their documentation enter the archive.
 install -m 644 target/wasm32-unknown-unknown/release/riscbox_wasm.wasm "$package/riscbox.wasm"
 install -m 644 js/riscbox.js "$package/riscbox.js"
-install -m 644 kernel/linux "$package/linux"
-install -m 644 opensbi/fw_dynamic.bin "$package/fw_dynamic.bin"
-install -m 644 uboot/u-boot.bin "$package/u-boot.bin"
+for component in kernel opensbi uboot; do
+    asset=$(cat "$component/.asset-name")
+    install -m 644 "$component/$asset" "$package/$asset"
+done
 install -m 644 README.md CHANGELOG.md LICENSE "$package/"
 install -m 644 js/p9/README.md "$package/p9/README.md"
 install -m 644 js/network/README.md "$package/network/README.md"

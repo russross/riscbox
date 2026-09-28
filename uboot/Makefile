@@ -13,7 +13,12 @@ BUILT := $(BUILD_DIR)/.image-built
 CROSS_COMPILE ?= riscv64-linux-gnu-
 JOBS ?= $(shell getconf _NPROCESSORS_ONLN)
 
-all: u-boot.bin
+all: .asset-name
+
+.asset-name: u-boot.bin Makefile
+	name=u-boot.bin-$$(sha256sum u-boot.bin | cut -c 1-8).gz; \
+	gzip -9 -n -c u-boot.bin > "$$name.part" && mv "$$name.part" "$$name"; \
+	printf '%s\n' "$$name" > $@.part && mv $@.part $@
 
 u-boot.bin: $(BUILT)
 	install -m 644 $(IMAGE) $@
@@ -61,6 +66,6 @@ $(ARCHIVE): version
 
 clean:
 	rm -rf build downloads sources
-	rm -f u-boot.bin
+	rm -f u-boot.bin u-boot.bin-*.gz .asset-name
 
 .PHONY: all clean

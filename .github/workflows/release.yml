@@ -88,14 +88,14 @@ jobs:
           cargo clippy --all-targets --workspace -- -D warnings
           uvx --quiet ty check tools/splitimg.py tools/image_deployment.py
           uvx --quiet ty check .github/scripts/release_version.py
-          make -B wasm
-          make kernel opensbi uboot
+          make wasm
+          make
 
       - name: Package release
         if: steps.version.outputs.build == 'true'
         id: package
         run: |
-          archive=$(.github/scripts/package-release.sh)
+          archive=build/releases/riscbox-${{ steps.version.outputs.version }}.tar.gz
           tar -tzf "$archive" > /tmp/riscbox-archive-files
           test "$(wc -l < /tmp/riscbox-archive-files)" -gt 15
           echo "archive=$archive" >> "$GITHUB_OUTPUT"

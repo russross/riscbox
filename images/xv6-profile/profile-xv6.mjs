@@ -99,7 +99,7 @@ class LocalXMLHttpRequest {
 }
 
 async function runRiscbox() {
-    const adapter = fileURLToPath(new URL("../js/riscbox.js", import.meta.url));
+    const adapter = fileURLToPath(new URL("../../js/riscbox.js", import.meta.url));
     const { Riscbox } = require(adapter);
     const wasm = await readFile(runtimeArgument);
     const runtime = await Riscbox.instantiate(wasm, {

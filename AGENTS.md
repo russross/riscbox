@@ -61,7 +61,7 @@ Repository map and terminology
 *   `js/p9/` is the authoritative TypeScript 9P2000.L server, shared in-memory
     filesystem, and optional seed plugins. Generated JavaScript and declarations
     go under `build/js/p9/`.
-*   `images/` contains reproducible image definitions and deployment tooling.
+*   `images/` contains reproducible Makefile-driven image definitions and deployment tooling.
     Generated downloads, images, boot assets, and distributions are not source.
 *   `kernel/` owns the canonical custom Linux kernel consumed by image builds.
 *   `opensbi/` and `uboot/` own pinned firmware and bootloader builds. Each
@@ -279,7 +279,9 @@ Validation
     full-guest tests.
 *   `make wasm` builds the deployed Rust WebAssembly artifact.
 *   `make kernel`, `make opensbi`, and `make uboot` build the pinned guest
-    components; `make dist` builds them with the core WASM and JavaScript.
+    components and their hash-named gzip assets. The default `make` builds
+    those with the core WASM and JavaScript and packages the release archive.
+    Image Makefiles build deployments by default and run profiles explicitly.
 
 For CPU or platform milestones, run `make check` and rebuild WASM from a clean
 tree. Current xv6 is the primary UART and supervisor-mode integration guest.

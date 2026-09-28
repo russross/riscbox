@@ -43,7 +43,7 @@ page snapshots and clearing, instruction execution, and MMIO callbacks.
 TinyEMU-owned RAM; it does not allocate a separate guest memory model. The
 VirtIO device tests continue to use an unbooted `Machine` and fake host
 backends.
-The saved xv6 compile profiles in `images/xv6-profile/build/profiles/` show
+The saved xv6 compile profiles in `images/xv6-profile/profiles/` show
 105.332 seconds for `riscbox-scheduler` versus 97.400 seconds for `tinyemu`, an
 8.1% longer sampled profile in the current Riscbox WASM build. Both logs reach
 `XV6_PROFILE_BUILD_COMPLETE`; their guest timestamps at the following ext4

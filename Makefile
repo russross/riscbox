@@ -1,6 +1,10 @@
 RUSTBOX_WASM=target/wasm32-unknown-unknown/release/riscbox_wasm.wasm
+VERSION := $(shell python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')
+ARCHIVE := build/releases/riscbox-$(VERSION).tar.gz
+JS_SOURCES := $(shell find js/block js/network js/p9 -name '*.ts' -type f)
+RUST_SOURCES := $(shell find src riscbox-wasm tinyemu-core -type f)
 
-all: release
+all: dist
 
 release:
 	cargo build --release --workspace
@@ -21,13 +25,17 @@ check: test
 
 wasm: $(RUSTBOX_WASM)
 
-js:
+js: build/js/.built
+
+build/js/.built: js/tsconfig.json $(JS_SOURCES)
 	images/risclet/ui/node_modules/.bin/tsc -p js/tsconfig.json
+	@mkdir -p build/js
+	@touch $@
 
 js-check:
 	images/risclet/ui/node_modules/.bin/tsc -p js/tsconfig.json --noEmit
 
-$(RUSTBOX_WASM): Cargo.toml Cargo.lock riscbox-wasm/Cargo.toml $(shell find src riscbox-wasm -type f)
+$(RUSTBOX_WASM): Cargo.toml Cargo.lock build.rs riscbox-wasm/Cargo.toml $(RUST_SOURCES)
 	cargo build --release -p riscbox-wasm --target wasm32-unknown-unknown
 
 kernel:
@@ -39,14 +47,20 @@ opensbi:
 uboot:
 	$(MAKE) -C uboot
 
-dist: wasm js kernel opensbi uboot
+dist:
+	$(MAKE) wasm js kernel opensbi uboot
+	$(MAKE) $(ARCHIVE)
+
+$(ARCHIVE): Makefile $(RUSTBOX_WASM) build/js/.built js/riscbox.js kernel/.asset-name opensbi/.asset-name uboot/.asset-name .github/scripts/package-release.sh README.md CHANGELOG.md LICENSE js/p9/README.md js/network/README.md
+	.github/scripts/package-release.sh $@
 
 clean:
 	cargo clean
-
-clean-all: clean
 	$(MAKE) -C kernel clean
 	$(MAKE) -C opensbi clean
 	$(MAKE) -C uboot clean
+	rm -rf build/releases build/js
+
+clean-all: clean
 
 .PHONY: all release test-unit test check wasm js js-check kernel opensbi uboot dist clean clean-all

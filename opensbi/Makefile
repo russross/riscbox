@@ -16,7 +16,12 @@ include config
 CROSS_COMPILE ?= riscv64-linux-gnu-
 JOBS ?= $(shell getconf _NPROCESSORS_ONLN)
 
-all: fw_dynamic.bin
+all: .asset-name
+
+.asset-name: fw_dynamic.bin Makefile
+	name=fw_dynamic.bin-$$(sha256sum fw_dynamic.bin | cut -c 1-8).gz; \
+	gzip -9 -n -c fw_dynamic.bin > "$$name.part" && mv "$$name.part" "$$name"; \
+	printf '%s\n' "$$name" > $@.part && mv $@.part $@
 
 fw_dynamic.bin: $(BUILT)
 	install -m 644 $(FIRMWARE) $@
@@ -67,6 +72,6 @@ $(ARCHIVE): version
 
 clean:
 	rm -rf build downloads sources
-	rm -f fw_dynamic.bin
+	rm -f fw_dynamic.bin fw_dynamic.bin-*.gz .asset-name
 
 .PHONY: all clean

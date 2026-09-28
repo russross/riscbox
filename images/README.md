@@ -1,9 +1,9 @@
 Image builds
 ============
 
-Each subdirectory is a complete image definition. Its tracked `build.sh`,
+Each subdirectory is a complete image definition. Its tracked `Makefile`,
 `setup.sh`, `riscbox.cfg`, and optional `web/` directory are inputs. Running
-`build.sh` creates ignored outputs:
+`make` creates ignored outputs:
 
 *   `build/rootfs.ext4` is the writable setup image used under QEMU.
     Risclet and xv6 profile also create `build/rootfs.erofs` for distribution.
@@ -12,11 +12,9 @@ Each subdirectory is a complete image definition. Its tracked `build.sh`,
 
 Build either current image from its directory:
 
-    cd images/risclet
-    ./build.sh
+    make -C images/risclet
 
-    cd images/alpine
-    ./build.sh
+    make -C images/alpine
 
 The `xv6-profile` definition is an offline boot workload for performance
 measurement. It builds the current xv6 kernel, excluding `fs.img`, as the
@@ -24,12 +22,12 @@ unprivileged `test` user and powers off. Build it once, then collect matching
 Node/V8 profiles for the Rust and
 historical C WebAssembly runtimes:
 
-    images/xv6-profile/build.sh
-    tools/profile-xv6
+    make -C images/xv6-profile
+    make -C images/xv6-profile profile
 
 The profiler writes `.cpuprofile` files and guest console logs under
-`images/xv6-profile/build/profiles/` by default. Pass another directory as
-the profiler's sole argument when profiles should be retained elsewhere.
+`images/xv6-profile/profiles/`. Use `make -C images/xv6-profile profile-tinyemu`
+for the historical C runtime.
 Set `RISCBOX_PROFILE_TIMING=1` to include periodic emulator timing diagnostics
 in the Riscbox profile log.
 
@@ -91,7 +89,7 @@ New image definition
 
 Create a directory with these inputs:
 
-*   `build.sh` calls the shared helpers in order.
+*   `Makefile` tracks the shared helpers and inputs in build order.
 *   `setup.sh` runs as root inside QEMU with networking enabled. Files passed
     after it to `run-image-setup` appear in `/mnt/setup` by basename.
 *   `riscbox.cfg` uses paths relative to the eventual deployment directory.

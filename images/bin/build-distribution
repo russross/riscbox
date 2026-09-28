@@ -35,7 +35,10 @@ done
 
 if [ "${3:-}" = --erofs ]; then
     distribution_image="$image_dir/build/rootfs.erofs"
-    "$SCRIPT_DIR/create-erofs-from-ext4" "$rootfs_image" "$distribution_image"
+    if [ ! -f "$distribution_image" ] || [ "$rootfs_image" -nt "$distribution_image" ] || \
+        [ "$SCRIPT_DIR/create-erofs-from-ext4" -nt "$distribution_image" ]; then
+        "$SCRIPT_DIR/create-erofs-from-ext4" "$rootfs_image" "$distribution_image"
+    fi
 else
     distribution_image=$rootfs_image
 fi

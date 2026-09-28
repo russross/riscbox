@@ -28,9 +28,10 @@ Release archive
 
 Each GitHub release has one `riscbox-VERSION.tar.gz` archive. Extract it into
 an application directory. Its `riscbox.js`, `riscbox.wasm`, `block/`, `p9/`,
-and `network/` files are ready to serve as static browser assets. `linux` is the
-configured RV64 Linux Image, `fw_dynamic.bin` is the Riscbox OpenSBI firmware,
-and `u-boot.bin` is the S-mode bootloader. The archive also contains this API
+and `network/` files are ready to serve as static browser assets. The configured
+Linux Image, OpenSBI firmware, and U-Boot binary are gzip-compressed under
+content-hash names (`linux-HASH.gz`, `fw_dynamic.bin-HASH.gz`, and
+`u-boot.bin-HASH.gz`). The archive also contains this API
 README, module documentation, the changelog, and the license. It contains no
 guest root filesystem, disk blocks, sample VM, or image build scripts.
 
@@ -46,9 +47,11 @@ use `rootfstype=erofs` and `ro` in `cmdline`; for a prepared ext4 root, use
 `rootfstype=ext4` and `rw`. Serve `.wasm` as `application/wasm`.
 
 The archive's OpenSBI and U-Boot binaries are compiled from the pinned source
-versions in this repository. To use U-Boot, set `kernel: "u-boot.bin"` and put
+versions in this repository. To use U-Boot, set `kernel` to the archive's
+`u-boot.bin-HASH.gz` name and put
 `/boot/Image` and `/boot/extlinux/extlinux.conf` in the guest disk; U-Boot
-loads Linux from the disk. The included `linux` file can supply that Image.
+loads Linux from the disk. Decompress the included `linux-HASH.gz` asset to
+supply that Image.
 
 Quick start
 -----------
@@ -71,7 +74,7 @@ Clone, build, and test the emulator:
 The supplied Alpine definition is a complete example project:
 
     cd images/alpine
-    ./build.sh
+    make
     cd dist
     python3 -m http.server 8000
 
@@ -90,10 +93,11 @@ Build targets
 | `make test`      | Unit tests and the Chrome/WASM network integration test       |
 | `make check`     | Full tests, strict Clippy, TypeScript, and Python type checks  |
 | `make wasm`      | `target/wasm32-unknown-unknown/release/riscbox_wasm.wasm`      |
-| `make kernel`    | Canonical custom kernel at `kernel/linux`                     |
-| `make opensbi`   | Riscbox-configured firmware at `opensbi/fw_dynamic.bin`       |
-| `make uboot`     | Pinned EROFS-capable S-mode bootloader at `uboot/u-boot.bin`   |
-| `make dist`      | WASM, generated JavaScript, kernel, OpenSBI, and U-Boot        |
+| `make` / `make all` | Build the complete release archive in `build/releases/`    |
+| `make kernel`    | Canonical kernel and its `kernel/linux-HASH.gz` asset          |
+| `make opensbi`   | OpenSBI and its `opensbi/fw_dynamic.bin-HASH.gz` asset        |
+| `make uboot`     | U-Boot and its `uboot/u-boot.bin-HASH.gz` asset                |
+| `make dist`      | Update the release archive from all build components         |
 
 Browser library
 ---------------
@@ -251,13 +255,16 @@ but leaves the caller's array intact for export. Use a clone when the source
 must remain pristine, and inspect or export a filesystem image after orderly
 guest shutdown.
 
+Replace `HASH` in the following example with each asset's eight-character
+suffix, and replace the drive path with the directory reported by `splitimg.py`.
+
 ```js
 {
     version: 1,
     machine: "riscv64",
     memory_size: 256,
-    bios: "fw_dynamic.bin",
-    kernel: "linux",
+    bios: "fw_dynamic.bin-HASH.gz",
+    kernel: "linux-HASH.gz",
     cmdline: "root=/dev/vda rw rootfstype=ext4 console=hvc0",
     drive0: { file: "drive/blk.txt" },
     console: "virtio",
@@ -311,7 +318,7 @@ browser-backed workspace:
 
 ```text
 images/my-image/
-├── build.sh       # invokes the shared image helpers
+├── Makefile       # tracks the shared image helpers and build inputs
 ├── setup.sh       # runs as root inside the image under QEMU
 ├── riscbox.cfg    # paths are relative to the deployed config
 └── web/           # optional replacement/additions for the browser page
@@ -326,7 +333,7 @@ read-only at `/dev/vda`. The xv6 profile also uses the builder's `--erofs`
 mode. Both use session-local writable `/tmp`, `/var`,
 and `/home` mounts. The xv6 profile browser page attaches its split disk through
 the TypeScript HTTP provider for local performance testing. Other image
-definitions can continue distributing ext4. The existing build scripts show
+definitions can continue distributing ext4. The image Makefiles show
 the exact call order. Keep downloads and generated files
 under `build/`; the final ignored output belongs in `dist/`.
 

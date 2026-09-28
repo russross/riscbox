@@ -541,7 +541,9 @@
                     timing.cpuRuns += this.exports.riscbox_timing_stat(1);
                     timing.timerReprogrammingExits += this.exports.riscbox_timing_stat(2);
                     timing.cycles += this.exports.riscbox_timing_stat(4);
-                    timing.carriedGuestMs += this.exports.riscbox_timing_stat(6)
+                    // The lead is a clock position, so the latest sample represents
+                    // the current carry; summing samples counts the same lead again.
+                    timing.carriedGuestMs = this.exports.riscbox_timing_stat(6)
                         / GUEST_TICKS_PER_MILLISECOND;
                     const interval = this.exports.riscbox_timing_stat(3);
                     if (interval > 0 && timing.timerIntervals.length < 10_000)

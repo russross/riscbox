@@ -133,8 +133,8 @@ budget stays based on the target duration; each quantum's guest-time window
 extends by any guest-clock lead from the previous quantum. Guest time remains
 monotonic without delaying runnable quanta. Set `debugTiming: true`
 to log estimated and active emulated
-Mcycles/s, CPU runs per quantum, timer intervals, WFI sleep time, and carried
-guest time. The variance fields retain the latest interval maximum and the
+Mcycles/s, CPU runs per quantum, timer intervals, WFI sleep time, and the latest
+guest-clock lead sampled at the start of a quantum. The variance fields retain the latest interval maximum and the
 50th, 90th, and 99th percentiles across runnable quanta since boot. Timing
 reports stop when the VM powers off.
 Integrations can also provide

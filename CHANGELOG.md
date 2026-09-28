@@ -57,6 +57,8 @@ Unreleased
     errors. Reset retires late work and destroy closes providers. A prepared
     Alpine guest booted from a host byte array, wrote to it, shut down, and
     booted again with the same provider.
+*   Corrected the timing report's carried guest milliseconds to show the latest
+    lead sample instead of summing overlapping lead samples across a report interval.
 *   Removed guest-clock catch-up waits and adaptive skew from execution.
     Quanta keep their cycle budgets and start from the later of host time and
     the previous guest time. Timing diagnostics retain variance

@@ -542,6 +542,7 @@ test("timing diagnostics report carried guest time and rate variance", async () 
     const runtime = new Riscbox(fake.exports, { debugTiming: true });
     runtime.scheduleWakeup = () => {};
     await runtime.runQuantum();
+    await runtime.runQuantum();
     assert.deepEqual(runtime.timing.sessionCatchUpSkews, [0.25]);
     runtime.timing.sessionCatchUpSkews.push(0.05, 0.10, 0.20, 0.30);
     runtime.timing.nextReport = 0;

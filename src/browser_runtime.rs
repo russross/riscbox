@@ -458,6 +458,7 @@ pub struct BrowserRuntime {
     target_quantum_ms: f64,
     diagnostics: bool,
     cycle_rate_estimate: RateEstimate,
+    previous_fast_quantum_rate: Option<f64>,
     guest_clock_floor_ticks: u64,
     active_quantum: Option<ActiveQuantum>,
     last_quantum: QuantumStatistics,
@@ -474,6 +475,7 @@ impl Default for BrowserRuntime {
             target_quantum_ms: 20.0,
             diagnostics: false,
             cycle_rate_estimate: RateEstimate::default(),
+            previous_fast_quantum_rate: None,
             guest_clock_floor_ticks: 0,
             active_quantum: None,
             last_quantum: QuantumStatistics::default(),
@@ -510,6 +512,15 @@ impl BrowserRuntime {
         requested_wakeup_delay_ms
     }
 
+    fn budget_rate(&self, added_guest_ticks: u64) -> f64 {
+        if added_guest_ticks == 0 {
+            return self.cycle_rate_estimate.emulated_cycles_per_host_second;
+        }
+        self.previous_fast_quantum_rate
+            .unwrap_or(self.cycle_rate_estimate.emulated_cycles_per_host_second)
+            .max(self.cycle_rate_estimate.emulated_cycles_per_host_second)
+    }
+
     #[must_use]
     pub fn begin_quantum(&mut self, host_epoch_ms: u64) -> QuantumStart {
         if self.active_quantum.is_some() {
@@ -529,8 +540,10 @@ impl BrowserRuntime {
         let added_guest_ticks = self.guest_clock_floor_ticks.saturating_sub(host_ticks);
         let target_ms = self.target_quantum_ms
             + integer_as_f64(added_guest_ticks) / integer_as_f64(GUEST_TICKS_PER_MILLISECOND);
+        // A quantum that ran ahead of the host gives the next enlarged budget
+        // its measured throughput, while guest time keeps the smoothed rate.
         let quantum_budget_cycles = rounded_positive_integer(
-            (integer_as_f64(locked_rate_cycles_per_host_second) * target_ms / 1_000.0)
+            (self.budget_rate(added_guest_ticks) * target_ms / 1_000.0)
                 .round()
                 .clamp(1.0, f64::from(i32::MAX)),
         );
@@ -688,6 +701,18 @@ impl BrowserRuntime {
             return Err(RuntimeError::Machine("unfinished browser quantum".into()));
         }
         self.guest_clock_floor_ticks = quantum.guest_ticks();
+        // Only a completed runnable quantum that outran wall time can raise
+        // the next carried budget. Other outcomes retire the short-term rate.
+        let host_ticks = host_epoch_ms.saturating_mul(GUEST_TICKS_PER_MILLISECOND);
+        self.previous_fast_quantum_rate = if quantum.terminal == Some(QuantumOutcome::BudgetReached)
+            && self.guest_clock_floor_ticks > host_ticks
+            && host_elapsed_ms > 0.0
+            && quantum.consumed_cycles > 0
+        {
+            Some(integer_as_f64(quantum.consumed_cycles) * 1_000.0 / host_elapsed_ms)
+        } else {
+            None
+        };
         self.cycle_rate_estimate
             .observe(quantum.consumed_cycles, host_elapsed_ms);
         let required_guest_clock_skew = quantum.required_guest_clock_skew(host_epoch_ms);
@@ -726,6 +751,7 @@ impl BrowserRuntime {
         if let Some(quantum) = self.active_quantum.take() {
             self.guest_clock_floor_ticks = self.guest_clock_floor_ticks.max(quantum.guest_ticks());
         }
+        self.previous_fast_quantum_rate = None;
     }
 
     #[must_use]
@@ -783,6 +809,7 @@ impl BrowserRuntime {
         }
         self.guest_clock_floor_ticks = 0;
         self.cycle_rate_estimate = RateEstimate::default();
+        self.previous_fast_quantum_rate = None;
         self.last_quantum = QuantumStatistics::default();
         let request_id = self.allocate_request(&start.config_url);
         self.state = State::Config { start, request_id };
@@ -803,6 +830,7 @@ impl BrowserRuntime {
         }
         self.guest_clock_floor_ticks = 0;
         self.cycle_rate_estimate = RateEstimate::default();
+        self.previous_fast_quantum_rate = None;
         self.last_quantum = QuantumStatistics::default();
         self.begin_loading(start, config)
     }
@@ -1547,6 +1575,20 @@ mod tests {
         assert!((runtime.target_quantum_ms - 25.0).abs() < f64::EPSILON);
 
         assert!((CALIBRATION_HALFLIFE_HOST_MS - 10_000.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn carried_budget_uses_faster_previous_quantum_only_when_lead_remains() {
+        let mut runtime = BrowserRuntime::default();
+        runtime.cycle_rate_estimate.emulated_cycles_per_host_second = 70_000_000.0;
+        runtime.previous_fast_quantum_rate = Some(90_000_000.0);
+        assert!((runtime.budget_rate(10_000) - 90_000_000.0).abs() < f64::EPSILON);
+        assert!((runtime.budget_rate(0) - 70_000_000.0).abs() < f64::EPSILON);
+
+        runtime.previous_fast_quantum_rate = Some(60_000_000.0);
+        assert!((runtime.budget_rate(10_000) - 70_000_000.0).abs() < f64::EPSILON);
+        runtime.previous_fast_quantum_rate = None;
+        assert!((runtime.budget_rate(10_000) - 70_000_000.0).abs() < f64::EPSILON);
     }
 
     #[test]

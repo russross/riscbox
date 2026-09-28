@@ -162,6 +162,9 @@ Each quantum extends both its target duration and cycle budget by the
 previous guest-clock lead. It starts at the later of host time and the
 previous guest time and advances at the usual cycle-to-tick rate. Cycle-rate estimates have a
 ten-second half-life; timing diagnostics retain rate-variance samples.
+When lead extends a quantum, its cycle budget uses the greater of that
+long-term estimate and the previous runnable quantum's observed rate if that
+quantum ended ahead of host time. Guest-time mapping retains the long-term rate.
 Timer writes exit the C loop so Rust can size the next CPU run to the earliest ACLINT,
 supervisor, or RTC deadline. C also exits after MMIO requests for 9p or HTTP
 block work; Rust releases the exclusive CPU-run borrow before JavaScript

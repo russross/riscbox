@@ -84,13 +84,6 @@ in an image, and connect dirty-region callbacks to a canvas in the Risclet page.
 Validate the complete guest-to-page path together. The current Risclet demo is
 intentionally terminal-only.
 
-### Boot and image loading
-
-Evaluate a standard bootloader path and other image
-features only against a concrete Alpine deployment problem. Linux already
-handles compressed initrds after Riscbox loads them opaquely. Any new loader
-must justify its code size and failure surface relative to image preparation.
-
 ### Non-CPU performance
 
 Measure HTTP block request latency, 9p request/reply copy volume, concurrent

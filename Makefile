@@ -37,6 +37,7 @@ js-check:
 
 $(RUSTBOX_WASM): Cargo.toml Cargo.lock build.rs riscbox-wasm/Cargo.toml $(RUST_SOURCES)
 	cargo build --release -p riscbox-wasm --target wasm32-unknown-unknown
+	wasm-opt -O3 -o $@ $@
 
 kernel:
 	$(MAKE) -C kernel

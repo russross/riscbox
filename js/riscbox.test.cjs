@@ -535,16 +535,20 @@ test("configured quantum duration and diagnostics are passed to WASM", () => {
     assert.throws(() => new Riscbox(fake.exports, { timesliceMs: 5 }), /renamed to targetQuantumMs/);
 });
 
-test("timing diagnostics report carried guest time and rate variance", async () => {
+test("timing diagnostics report adaptive skew and rate variance", async () => {
     const fake = fakeModule();
     fake.exports.riscbox_quantum_run = () => 0;
-    fake.exports.riscbox_timing_stat = (kind) => kind === 5 ? 0.25 : kind === 6 ? 200 : 0;
+    fake.exports.riscbox_timing_stat = (kind) => kind === 5 ? 0.25 : kind === 6 ? 0.20
+        : kind === 7 ? 200 : 0;
     const runtime = new Riscbox(fake.exports, { debugTiming: true });
     runtime.scheduleWakeup = () => {};
     await runtime.runQuantum();
     await runtime.runQuantum();
     assert.deepEqual(runtime.timing.sessionCatchUpSkews, [0.25]);
     runtime.timing.sessionCatchUpSkews.push(0.05, 0.10, 0.20, 0.30);
+    runtime.timing.rateSamples = 2;
+    runtime.timing.rateMean = 15;
+    runtime.timing.rateM2 = 50;
     runtime.timing.nextReport = 0;
     const originalLog = console.log;
     let report;
@@ -554,7 +558,10 @@ test("timing diagnostics report carried guest time and rate variance", async () 
     } finally {
         console.log = originalLog;
     }
+    assert.equal(report.adaptiveGuestClockSkewPercent, 20);
     assert.equal(report.carriedGuestMs, 0.02);
+    assert.equal(report.intervalEmulatedMCyclesPerSecondMean, 15);
+    assert.equal(report.intervalEmulatedMCyclesPerSecondStdDev, 5);
     assert.equal(report.intervalNoCatchUpSkewPercent, 25);
     assert.equal(report.sessionPotentialCatchUpSkewP50Percent, 20);
     assert.equal(report.sessionPotentialCatchUpSkewP90Percent, 30);

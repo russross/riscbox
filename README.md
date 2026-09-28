@@ -131,11 +131,14 @@ instantiate options to choose a nominal duration greater than zero and at most
 individual quantum beyond that nominal duration. The cycle-rate estimate
 uses a ten-second half-life. The cycle
 budget and target duration both extend by any guest-clock lead from the
-previous quantum. Guest time remains
-monotonic without delaying runnable quanta. Set `debugTiming: true`
-to log estimated and active emulated
-Mcycles/s, CPU runs per quantum, timer intervals, WFI sleep time, and the latest
-guest-clock lead sampled at the start of a quantum. The variance fields retain the latest interval maximum and the
+previous quantum. A decayed P99 estimate of recent clock variation slows
+guest time proactively. When lead remains, the next quantum uses the more
+conservative of that skewed rate and the rate implied by the previous quantum's
+measured cycle throughput. Guest time remains monotonic without delaying
+runnable quanta. Set `debugTiming: true` to log the smoothed estimated rate,
+interval mean and standard deviation of runnable quantum rates, active
+emulated Mcycles/s, CPU runs per quantum, timer intervals, WFI sleep time, and
+the latest guest-clock lead sampled at the start of a quantum. The variance fields retain the latest interval maximum and the
 50th, 90th, and 99th percentiles across runnable quanta since boot. Timing
 reports stop when the VM powers off.
 Integrations can also provide

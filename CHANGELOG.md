@@ -4,6 +4,12 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Restored decayed P99 guest-clock skew while retaining lead carryover and
+    extended quantum budgets. Carried quanta use the slower of the P99-skewed
+    guest clock and the mapping implied by the previous runnable quantum's
+    observed cycle rate. Timing logs now include interval mean and standard
+    deviation of runnable quantum emulated Mcycles/s.
+
 *   Used the faster of the long-term cycle-rate estimate and the previous
     runnable quantum's observed rate when guest-clock lead extends a quantum's
     cycle budget. Guest-time mapping and ordinary budgets remain on the

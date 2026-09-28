@@ -162,6 +162,7 @@ const NANOSECONDS_PER_GUEST_TICK: u64 = 100;
 const MAX_WFI_WAKE_DELAY_GUEST_TICKS: u64 = 1_000_000;
 const CALIBRATION_HALFLIFE_HOST_MS: f64 = 10_000.0;
 const INITIAL_EMULATED_CYCLES_PER_HOST_SECOND: f64 = 300_000_000.0;
+const SKEW_BUCKETS: usize = 101;
 
 fn integer_as_f64(value: u64) -> f64 {
     // Convert exact halves without an implicit precision-losing integer cast.
@@ -238,11 +239,70 @@ impl RateEstimate {
 }
 
 #[derive(Debug)]
+struct AdaptiveSkew {
+    weights: [f64; SKEW_BUCKETS],
+    last_host_epoch_ms: Option<u64>,
+    fraction: f64,
+}
+
+impl Default for AdaptiveSkew {
+    fn default() -> Self {
+        Self {
+            weights: [0.0; SKEW_BUCKETS],
+            last_host_epoch_ms: None,
+            fraction: 0.20,
+        }
+    }
+}
+
+impl AdaptiveSkew {
+    fn observe(&mut self, required: f64, host_epoch_ms: u64) {
+        // Recent runnable quanta have more weight in the bounded histogram.
+        if let Some(previous) = self.last_host_epoch_ms {
+            let elapsed = host_epoch_ms.saturating_sub(previous);
+            let decay = 2.0_f64.powf(-integer_as_f64(elapsed) / CALIBRATION_HALFLIFE_HOST_MS);
+            for weight in &mut self.weights {
+                *weight *= decay;
+            }
+        }
+        self.last_host_epoch_ms = Some(host_epoch_ms);
+        let bucket = rounded_positive_integer((required * 100.0).ceil()).min(100) as usize;
+        self.weights[bucket] += 1.0;
+
+        // The upper 99th percentile limits clock lead after fast quanta.
+        let target = self.weights.iter().sum::<f64>() * 0.99;
+        let mut accumulated = 0.0;
+        for (index, weight) in self.weights.iter().enumerate() {
+            accumulated += weight;
+            if accumulated >= target {
+                let percent = u32::try_from(index.min(99)).unwrap_or(99);
+                self.fraction = f64::from(percent) / 100.0;
+                break;
+            }
+        }
+    }
+}
+
+fn guest_tick_rate(skew: f64, estimated_rate: f64, previous_rate: f64, carried: bool) -> u64 {
+    // The previous measured cycle rate can only slow guest time in a quantum
+    // that starts with clock lead. Otherwise the P99 skew sets the rate.
+    let nominal = integer_as_f64(GUEST_TICKS_PER_MILLISECOND) * 1_000.0;
+    let skewed = nominal * (1.0 - skew);
+    let selected = if carried {
+        skewed.min(nominal * estimated_rate / previous_rate)
+    } else {
+        skewed
+    };
+    rounded_positive_integer(selected.round().max(1.0))
+}
+
+#[derive(Debug)]
 struct ActiveQuantum {
     start_guest_ticks: u64,
     cycles_per_host_second: u64,
     guest_ticks_per_host_second: u64,
-    added_guest_ticks: u64,
+    applied_guest_clock_skew: f64,
+    carried_guest_ticks: u64,
     budget_cycles: u32,
     consumed_cycles: u64,
     stalled_cpu_runs: u32,
@@ -307,7 +367,8 @@ struct QuantumStatistics {
     median_timer_interval_guest_ticks: u64,
     consumed_cycles: u64,
     required_guest_clock_skew: f64,
-    added_guest_ticks: u64,
+    applied_guest_clock_skew: f64,
+    carried_guest_ticks: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -456,6 +517,7 @@ pub struct BrowserRuntime {
     retired_http: BTreeSet<u32>,
     entropy: Option<EntropyCallback>,
     target_quantum_ms: f64,
+    adaptive_skew: AdaptiveSkew,
     diagnostics: bool,
     cycle_rate_estimate: RateEstimate,
     previous_fast_quantum_rate: Option<f64>,
@@ -473,6 +535,7 @@ impl Default for BrowserRuntime {
             retired_http: BTreeSet::new(),
             entropy: None,
             target_quantum_ms: 20.0,
+            adaptive_skew: AdaptiveSkew::default(),
             diagnostics: false,
             cycle_rate_estimate: RateEstimate::default(),
             previous_fast_quantum_rate: None,
@@ -512,15 +575,6 @@ impl BrowserRuntime {
         requested_wakeup_delay_ms
     }
 
-    fn budget_rate(&self, added_guest_ticks: u64) -> f64 {
-        if added_guest_ticks == 0 {
-            return self.cycle_rate_estimate.emulated_cycles_per_host_second;
-        }
-        self.previous_fast_quantum_rate
-            .unwrap_or(self.cycle_rate_estimate.emulated_cycles_per_host_second)
-            .max(self.cycle_rate_estimate.emulated_cycles_per_host_second)
-    }
-
     #[must_use]
     pub fn begin_quantum(&mut self, host_epoch_ms: u64) -> QuantumStart {
         if self.active_quantum.is_some() {
@@ -534,26 +588,41 @@ impl BrowserRuntime {
                 .emulated_cycles_per_host_second
                 .max(1.0),
         );
-        // The previous guest-clock lead extends this quantum's target and
-        // cycle budget together. Keep the guest clock monotonic at its start.
+        // Carry clock lead into the duration and budget of this quantum.
         let host_ticks = host_epoch_ms.saturating_mul(GUEST_TICKS_PER_MILLISECOND);
-        let added_guest_ticks = self.guest_clock_floor_ticks.saturating_sub(host_ticks);
+        let carried_ticks = self.guest_clock_floor_ticks.saturating_sub(host_ticks);
         let target_ms = self.target_quantum_ms
-            + integer_as_f64(added_guest_ticks) / integer_as_f64(GUEST_TICKS_PER_MILLISECOND);
-        // A quantum that ran ahead of the host gives the next enlarged budget
-        // its measured throughput, while guest time keeps the smoothed rate.
+            + integer_as_f64(carried_ticks) / integer_as_f64(GUEST_TICKS_PER_MILLISECOND);
+        let estimated_rate = self.cycle_rate_estimate.emulated_cycles_per_host_second;
+        let previous_rate = self.previous_fast_quantum_rate.unwrap_or(estimated_rate);
+        let budget_rate = if carried_ticks == 0 {
+            estimated_rate
+        } else {
+            estimated_rate.max(previous_rate)
+        };
         let quantum_budget_cycles = rounded_positive_integer(
-            (self.budget_rate(added_guest_ticks) * target_ms / 1_000.0)
+            (budget_rate * target_ms / 1_000.0)
                 .round()
                 .clamp(1.0, f64::from(i32::MAX)),
         );
         let quantum_budget_cycles = u32::try_from(quantum_budget_cycles).unwrap_or(i32::MAX as u32);
-        let guest_ticks_per_host_second = GUEST_TICKS_PER_MILLISECOND * 1_000;
+        // Use the slower clock mapping when the prior runnable quantum was
+        // faster than the long-term rate and left guest time ahead.
+        let guest_ticks_per_host_second = guest_tick_rate(
+            self.adaptive_skew.fraction,
+            estimated_rate,
+            previous_rate,
+            carried_ticks != 0,
+        );
+        let applied_guest_clock_skew = 1.0
+            - integer_as_f64(guest_ticks_per_host_second)
+                / (integer_as_f64(GUEST_TICKS_PER_MILLISECOND) * 1_000.0);
         self.active_quantum = Some(ActiveQuantum {
             start_guest_ticks: host_ticks.max(self.guest_clock_floor_ticks),
             cycles_per_host_second: locked_rate_cycles_per_host_second,
             guest_ticks_per_host_second,
-            added_guest_ticks,
+            applied_guest_clock_skew,
+            carried_guest_ticks: carried_ticks,
             budget_cycles: quantum_budget_cycles,
             consumed_cycles: 0,
             stalled_cpu_runs: 0,
@@ -701,8 +770,6 @@ impl BrowserRuntime {
             return Err(RuntimeError::Machine("unfinished browser quantum".into()));
         }
         self.guest_clock_floor_ticks = quantum.guest_ticks();
-        // Only a completed runnable quantum that outran wall time can raise
-        // the next carried budget. Other outcomes retire the short-term rate.
         let host_ticks = host_epoch_ms.saturating_mul(GUEST_TICKS_PER_MILLISECOND);
         self.previous_fast_quantum_rate = if quantum.terminal == Some(QuantumOutcome::BudgetReached)
             && self.guest_clock_floor_ticks > host_ticks
@@ -716,6 +783,10 @@ impl BrowserRuntime {
         self.cycle_rate_estimate
             .observe(quantum.consumed_cycles, host_elapsed_ms);
         let required_guest_clock_skew = quantum.required_guest_clock_skew(host_epoch_ms);
+        if quantum.terminal == Some(QuantumOutcome::BudgetReached) {
+            self.adaptive_skew
+                .observe(required_guest_clock_skew, host_epoch_ms);
+        }
         if self.diagnostics {
             let mut intervals = quantum.timer_intervals_guest_ticks;
             intervals.sort_unstable();
@@ -728,7 +799,8 @@ impl BrowserRuntime {
                     .unwrap_or(0),
                 consumed_cycles: quantum.consumed_cycles,
                 required_guest_clock_skew,
-                added_guest_ticks: quantum.added_guest_ticks,
+                applied_guest_clock_skew: quantum.applied_guest_clock_skew,
+                carried_guest_ticks: quantum.carried_guest_ticks,
             };
         }
         let requested = if quantum.terminal == Some(QuantumOutcome::WfiSleep) {
@@ -763,7 +835,8 @@ impl BrowserRuntime {
             3 => integer_as_f64(self.last_quantum.median_timer_interval_guest_ticks),
             4 => integer_as_f64(self.last_quantum.consumed_cycles),
             5 => self.last_quantum.required_guest_clock_skew,
-            6 => integer_as_f64(self.last_quantum.added_guest_ticks),
+            6 => self.last_quantum.applied_guest_clock_skew,
+            7 => integer_as_f64(self.last_quantum.carried_guest_ticks),
             _ => 0.0,
         }
     }
@@ -810,6 +883,7 @@ impl BrowserRuntime {
         self.guest_clock_floor_ticks = 0;
         self.cycle_rate_estimate = RateEstimate::default();
         self.previous_fast_quantum_rate = None;
+        self.adaptive_skew = AdaptiveSkew::default();
         self.last_quantum = QuantumStatistics::default();
         let request_id = self.allocate_request(&start.config_url);
         self.state = State::Config { start, request_id };
@@ -831,6 +905,7 @@ impl BrowserRuntime {
         self.guest_clock_floor_ticks = 0;
         self.cycle_rate_estimate = RateEstimate::default();
         self.previous_fast_quantum_rate = None;
+        self.adaptive_skew = AdaptiveSkew::default();
         self.last_quantum = QuantumStatistics::default();
         self.begin_loading(start, config)
     }
@@ -1561,8 +1636,8 @@ impl NetworkBackend for OutputNetwork {
 #[cfg(test)]
 mod tests {
     use super::{
-        ActiveQuantum, BrowserRuntime, CALIBRATION_HALFLIFE_HOST_MS, QuantumOutcome, RateEstimate,
-        scale_pointer_coordinate,
+        ActiveQuantum, AdaptiveSkew, BrowserRuntime, CALIBRATION_HALFLIFE_HOST_MS, QuantumOutcome,
+        RateEstimate, guest_tick_rate, scale_pointer_coordinate,
     };
 
     #[test]
@@ -1578,17 +1653,26 @@ mod tests {
     }
 
     #[test]
-    fn carried_budget_uses_faster_previous_quantum_only_when_lead_remains() {
-        let mut runtime = BrowserRuntime::default();
-        runtime.cycle_rate_estimate.emulated_cycles_per_host_second = 70_000_000.0;
-        runtime.previous_fast_quantum_rate = Some(90_000_000.0);
-        assert!((runtime.budget_rate(10_000) - 90_000_000.0).abs() < f64::EPSILON);
-        assert!((runtime.budget_rate(0) - 70_000_000.0).abs() < f64::EPSILON);
+    fn adaptive_skew_uses_decayed_runnable_quantum_percentiles() {
+        let mut skew = AdaptiveSkew::default();
+        assert!((skew.fraction - 0.20).abs() < f64::EPSILON);
+        skew.observe(0.25, 1_000);
+        assert!((skew.fraction - 0.25).abs() < f64::EPSILON);
+        skew.observe(0.0, 11_000);
+        assert!((skew.weights[25] - 0.5).abs() < 0.000_001);
+        for index in 1..=200 {
+            skew.observe(0.0, 11_000 + index * 50);
+        }
+        assert!(skew.fraction < 0.25);
+    }
 
-        runtime.previous_fast_quantum_rate = Some(60_000_000.0);
-        assert!((runtime.budget_rate(10_000) - 70_000_000.0).abs() < f64::EPSILON);
-        runtime.previous_fast_quantum_rate = None;
-        assert!((runtime.budget_rate(10_000) - 70_000_000.0).abs() < f64::EPSILON);
+    #[test]
+    fn carried_clock_uses_the_more_conservative_rate() {
+        assert_eq!(guest_tick_rate(0.20, 80.0, 80.0, false), 8_000_000);
+        assert_eq!(guest_tick_rate(0.20, 80.0, 80.0, true), 8_000_000);
+        assert_eq!(guest_tick_rate(0.20, 80.0, 100.0, true), 8_000_000);
+        assert_eq!(guest_tick_rate(0.20, 80.0, 160.0, true), 5_000_000);
+        assert_eq!(guest_tick_rate(0.20, 80.0, 160.0, false), 8_000_000);
     }
 
     #[test]
@@ -1608,7 +1692,8 @@ mod tests {
                         start_guest_ticks: 17_300_000_000_000_000,
                         cycles_per_host_second: rate,
                         guest_ticks_per_host_second: guest_tick_rate,
-                        added_guest_ticks: 0,
+                        applied_guest_clock_skew: 0.0,
+                        carried_guest_ticks: 0,
                         budget_cycles: i32::MAX as u32,
                         consumed_cycles: 123,
                         stalled_cpu_runs: 0,
@@ -1639,12 +1724,13 @@ mod tests {
     }
 
     #[test]
-    fn guest_clock_lead_sets_the_next_quantum_start() {
+    fn skew_slows_guest_time_without_reducing_the_cycle_budget() {
         let mut quantum = ActiveQuantum {
-            start_guest_ticks: 10_000_050_000,
+            start_guest_ticks: 10_000_000_000,
             cycles_per_host_second: 300_000_000,
-            guest_ticks_per_host_second: 10_000_000,
-            added_guest_ticks: 50_000,
+            guest_ticks_per_host_second: 8_000_000,
+            applied_guest_clock_skew: 0.20,
+            carried_guest_ticks: 0,
             budget_cycles: 3_000_000,
             consumed_cycles: 0,
             stalled_cpu_runs: 0,
@@ -1656,9 +1742,9 @@ mod tests {
             terminal: Some(QuantumOutcome::BudgetReached),
         };
         assert_eq!(quantum.budget_cycles, 3_000_000);
-        assert_eq!(quantum.guest_ticks(), 10_000_050_000);
+        assert_eq!(quantum.guest_ticks(), 10_000_000_000);
         quantum.consumed_cycles = quantum.budget_cycles.into();
-        assert_eq!(quantum.guest_ticks(), 10_000_150_000);
+        assert_eq!(quantum.guest_ticks(), 10_000_080_000);
     }
 
     #[test]

@@ -215,6 +215,7 @@
                 quanta: 0, cpuRuns: 0, cycles: 0, activeMs: 0,
                 timerReprogrammingExits: 0, wfiQuanta: 0, wfiMs: 0,
                 carriedGuestMs: 0,
+                rateSamples: 0, rateMean: 0, rateM2: 0,
                 timerIntervals: [],
                 intervalNoCatchUpSkew: 0,
                 sessionCatchUpSkews: [],
@@ -454,6 +455,8 @@
             const cpuRunsPerQuantum = timing.quanta ? timing.cpuRuns / timing.quanta : 0;
             const activeMCyclesPerSecond = timing.activeMs
                 ? timing.cycles / timing.activeMs / 1_000 : 0;
+            const rateStdDev = timing.rateSamples > 0
+                ? Math.sqrt(timing.rateM2 / timing.rateSamples) : 0;
             const intervals = timing.timerIntervals;
             const medianTicks = intervals.length
                 ? intervals.slice().sort((a, b) => a - b)[Math.floor(intervals.length / 2)] : 0;
@@ -462,11 +465,14 @@
                 ? skews[Math.ceil(fraction * skews.length) - 1] * 100 : 0;
             console.log("Riscbox timing", {
                 estimatedEmulatedMCyclesPerSecond: this.exports.riscbox_timing_stat(0) / 1_000_000,
+                intervalEmulatedMCyclesPerSecondMean: timing.rateMean,
+                intervalEmulatedMCyclesPerSecondStdDev: rateStdDev,
                 activeEmulatedMCyclesPerSecond: activeMCyclesPerSecond,
                 cpuRunsPerQuantum, timerReprogrammingExits: timing.timerReprogrammingExits,
                 medianTimerIntervalMs: medianTicks / GUEST_TICKS_PER_MILLISECOND,
                 wfiQuanta: timing.wfiQuanta, wfiMs: timing.wfiMs,
                 carriedGuestMs: timing.carriedGuestMs,
+                adaptiveGuestClockSkewPercent: this.exports.riscbox_timing_stat(6) * 100,
                 intervalNoCatchUpSkewPercent: timing.intervalNoCatchUpSkew * 100,
                 sessionPotentialCatchUpSkewP50Percent: skewPercentile(0.50),
                 sessionPotentialCatchUpSkewP90Percent: skewPercentile(0.90),
@@ -476,6 +482,7 @@
             timing.quanta = timing.cpuRuns = timing.cycles = timing.activeMs = 0;
             timing.timerReprogrammingExits = timing.wfiQuanta = timing.wfiMs = 0;
             timing.carriedGuestMs = 0;
+            timing.rateSamples = timing.rateMean = timing.rateM2 = 0;
             timing.timerIntervals = [];
             timing.intervalNoCatchUpSkew = 0;
         }
@@ -528,8 +535,9 @@
                     }
                 }
                 const end = Date.now();
+                const elapsedMs = performance.now() - startedAt;
                 nextDelay = this.exports.riscbox_quantum_finish(
-                    performance.now() - startedAt,
+                    elapsedMs,
                     end >>> 0, Math.floor(end / 0x1_0000_0000) >>> 0,
                 );
                 if (nextDelay < 0)
@@ -540,11 +548,17 @@
                     timing.quanta++;
                     timing.cpuRuns += this.exports.riscbox_timing_stat(1);
                     timing.timerReprogrammingExits += this.exports.riscbox_timing_stat(2);
-                    timing.cycles += this.exports.riscbox_timing_stat(4);
-                    // The lead is a clock position, so the latest sample represents
-                    // the current carry; summing samples counts the same lead again.
-                    timing.carriedGuestMs = this.exports.riscbox_timing_stat(6)
+                    const cycles = this.exports.riscbox_timing_stat(4);
+                    timing.cycles += cycles;
+                    timing.carriedGuestMs = this.exports.riscbox_timing_stat(7)
                         / GUEST_TICKS_PER_MILLISECOND;
+                    if (!wfiSleep && !vmInactive && elapsedMs > 0 && cycles > 0) {
+                        const rate = cycles / elapsedMs / 1_000;
+                        timing.rateSamples++;
+                        const delta = rate - timing.rateMean;
+                        timing.rateMean += delta / timing.rateSamples;
+                        timing.rateM2 += delta * (rate - timing.rateMean);
+                    }
                     const interval = this.exports.riscbox_timing_stat(3);
                     if (interval > 0 && timing.timerIntervals.length < 10_000)
                         timing.timerIntervals.push(interval);

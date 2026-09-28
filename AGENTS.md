@@ -160,11 +160,15 @@ target duration, twenty milliseconds by default. Each quantum locks its rate
 and maps consumed cycles to 10 MHz guest timer ticks using integer arithmetic.
 Each quantum extends both its target duration and cycle budget by the
 previous guest-clock lead. It starts at the later of host time and the
-previous guest time and advances at the usual cycle-to-tick rate. Cycle-rate estimates have a
+previous guest time. A decayed P99 estimate of the skew needed by recent
+runnable quanta slows guest time proactively. Cycle-rate estimates have a
 ten-second half-life; timing diagnostics retain rate-variance samples.
 When lead extends a quantum, its cycle budget uses the greater of that
 long-term estimate and the previous runnable quantum's observed rate if that
-quantum ended ahead of host time. Guest-time mapping retains the long-term rate.
+quantum ended ahead of host time. Its guest-time mapping uses the more
+conservative of the P99-skewed rate and the rate implied by that previous
+quantum's observed cycle throughput. Timing diagnostics report interval
+Mcycles/s mean and standard deviation for runnable quanta.
 Timer writes exit the C loop so Rust can size the next CPU run to the earliest ACLINT,
 supervisor, or RTC deadline. C also exits after MMIO requests for 9p or HTTP
 block work; Rust releases the exclusive CPU-run borrow before JavaScript

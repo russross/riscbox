@@ -669,8 +669,13 @@ impl<B: NetworkBackend> VirtioDevice for NetworkDevice<B> {
 }
 
 pub trait NinePBackend {
-    /// Submits one complete 9P message to the host service.
-    fn submit(&mut self, request_id: NinePRequestId, request: Vec<u8>, reply_capacity: u32);
+    /// Submits one complete 9P message and may finish it during the same call.
+    fn submit(
+        &mut self,
+        request_id: NinePRequestId,
+        request: Vec<u8>,
+        reply_capacity: u32,
+    ) -> Option<NinePOutcome>;
 
     fn reset(&mut self, _: NinePGeneration) {}
 
@@ -684,8 +689,13 @@ pub trait NinePBackend {
 }
 
 impl<T: NinePBackend + ?Sized> NinePBackend for Box<T> {
-    fn submit(&mut self, request_id: NinePRequestId, request: Vec<u8>, reply_capacity: u32) {
-        (**self).submit(request_id, request, reply_capacity);
+    fn submit(
+        &mut self,
+        request_id: NinePRequestId,
+        request: Vec<u8>,
+        reply_capacity: u32,
+    ) -> Option<NinePOutcome> {
+        (**self).submit(request_id, request, reply_capacity)
     }
 
     fn reset(&mut self, generation: NinePGeneration) {
@@ -810,7 +820,9 @@ impl<B: NinePBackend> VirtioDevice for NinePDevice<B> {
             let reply_capacity = chain.writable;
             self.pending
                 .insert(request_id, PendingNineP { queue, chain, tag });
-            self.backend.submit(request_id, req, reply_capacity);
+            if let Some(outcome) = self.backend.submit(request_id, req, reply_capacity) {
+                self.complete(transport, memory, self.generation, request_id, outcome)?;
+            }
             if self.pending.len() >= pending_limit {
                 break;
             }

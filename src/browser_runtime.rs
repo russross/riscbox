@@ -62,7 +62,12 @@ impl BrowserNineP {
 }
 
 impl NinePBackend for BrowserNineP {
-    fn submit(&mut self, request_id: NinePRequestId, request: Vec<u8>, reply_capacity: u32) {
+    fn submit(
+        &mut self,
+        request_id: NinePRequestId,
+        request: Vec<u8>,
+        reply_capacity: u32,
+    ) -> Option<NinePOutcome> {
         self.actions.push_back(NinePTransportAction::Request {
             endpoint: self.endpoint,
             generation: self.generation,
@@ -70,6 +75,7 @@ impl NinePBackend for BrowserNineP {
             bytes: request,
             reply_capacity,
         });
+        None
     }
 
     fn reset(&mut self, generation: NinePGeneration) {

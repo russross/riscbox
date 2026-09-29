@@ -614,14 +614,30 @@ impl Default for Pending9p {
 }
 
 impl NinePBackend for Pending9p {
-    fn submit(&mut self, request_id: NinePRequestId, request: Vec<u8>, reply_capacity: u32) {
+    fn submit(
+        &mut self,
+        request_id: NinePRequestId,
+        request: Vec<u8>,
+        reply_capacity: u32,
+    ) -> Option<NinePOutcome> {
         self.requests
             .borrow_mut()
             .push((request_id, request, reply_capacity));
+        None
     }
 
     fn reset(&mut self, generation: NinePGeneration) {
         *self.generation.borrow_mut() = generation;
+    }
+}
+
+struct Immediate9p;
+
+impl NinePBackend for Immediate9p {
+    fn submit(&mut self, _: NinePRequestId, request: Vec<u8>, _: u32) -> Option<NinePOutcome> {
+        Some(NinePOutcome::Reply(
+            p9_message(request[4] + 1, u16::from_le_bytes([request[5], request[6]])).to_vec(),
+        ))
     }
 }
 
@@ -644,6 +660,30 @@ fn pending_p9() -> (Machine, usize, [u8; 7], Pending9p) {
     machine_available(&mut machine, 0);
     machine_kick(&mut machine, slot, 0);
     (machine, slot, request, backend)
+}
+
+#[test]
+fn ninep_resident_reply_completes_descriptor_during_notify() {
+    let mut machine = test_machine();
+    let slot = machine
+        .add_ninep_device(Box::new(Immediate9p), b"root")
+        .unwrap();
+    machine_configure(&mut machine, slot, 0);
+    let request = p9_message(100, 0x1234);
+    machine_bytes(&mut machine, DATA, &request);
+    machine_descriptor(&mut machine, 0, DATA, 7, 1, 1);
+    machine_descriptor(&mut machine, 1, DATA + 0x100, 7, 2, 0);
+    machine_available(&mut machine, 0);
+    machine_kick(&mut machine, slot, 0);
+    assert_eq!(
+        machine.read_ram(DATA + 0x100, 7).unwrap(),
+        p9_message(101, 0x1234)
+    );
+    assert_eq!(
+        machine_read(&mut machine, USED + 2, AccessWidth::HalfWord),
+        1
+    );
+    assert_eq!(machine.next_ninep_transport_action(slot).unwrap(), None);
 }
 
 #[test]

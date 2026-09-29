@@ -64,6 +64,139 @@ buffer callbacks account for less than 0.5% in TinyEMU. Follow up by repeating
 the paired capture and resolving/minifying symbol attribution for the archived
 module before choosing an optimization target. Keep the guest workload fixed.
 
+Active work
+-----------
+
+### Rust 9p server migration (active)
+
+This section is the coordination point for the migration. Update its status,
+decisions, and validation record as each milestone completes. Move the lasting
+contract to `AGENTS.md`, `README.md`, and `CHANGELOG.md` at completion, then
+remove this active plan.
+
+#### Status and scope
+
+The TypeScript server in `js/p9/session.ts` and `js/p9/filesystem.ts` still
+serves production guests. The committed VirtIO seam, `c1f1b45` (`Allow
+immediate 9p backend replies`), permits `NinePBackend::submit` to return an
+immediate `NinePOutcome`; `NinePDevice::notify` completes its descriptor before
+returning in that case. The existing browser backend remains asynchronous.
+Milestone 1 is complete in `src/ninep.rs`: the standalone namespace supports
+whole-file host operations, metadata, links, directory cookies, byte-range
+locks, quotas, change records, atomic seed installation, on-demand load
+tickets, and reset. The worktree's `src/ninep_protocol.rs` is an unfinished
+milestone 2 slice that currently handles only version, attach, and walk; it
+is not part of the milestone 1 commit. Neither module is attached to the VM,
+raw ABI, or browser adapter. Milestone 1 passed `make test-unit`, strict
+Clippy, and `make wasm`. Do not treat the Rust server as supported yet.
+
+The goal is a Rust-owned 9P2000.L filesystem and protocol engine with a small
+browser facade. A filesystem exists before VM boot and remains usable while
+the VM is halted. It may attach to one VM at a time; multiple 9p endpoints in
+that VM may share its tree but have independent fids, tags, locks, and protocol
+generations. The host API always returns promises. Seed plugins declare the
+namespace and supply asynchronous bodies only when a host or guest reads an
+unloaded file. There is no explicit or automatic preload mechanism.
+
+#### Core request and reset contract
+
+`NinePBackend::submit` returns an immediate outcome for resident work or
+retains a request that needs an external load. An immediate reply completes
+the VirtIO descriptor within the same CPU run. A pending load emits a host
+action only after the exclusive CPU-run borrow ends; JavaScript copies its
+source key and starts the plugin promise after returning from WASM. Its
+completion reenters through a raw ABI export carrying a filesystem generation,
+endpoint generation, and load/request ID. Rust checks all identities before
+using the bytes or completing retained descriptors. Guest and host reads of
+one unloaded inode share one load. A write, unlink, reset, flush, or retry
+cannot let an older completion restore stale content or complete a descriptor
+twice. JavaScript never calls back into borrowed Rust state.
+
+VM reset, reboot, halt, and shutdown retain the namespace while retiring
+active protocol state and pending guest requests. Filesystem reset replaces
+the namespace, retires every endpoint session and load, and emits a reset
+notification even if the VM is running. The running guest may need to remount
+because its fids are invalidated. VM destroy releases the attachment but need
+not destroy the independently held filesystem. These operations need separate
+generations and focused tests; the current `Filesystem::reset` alone does not
+implement the complete lifecycle contract.
+
+#### Remaining milestones
+
+Milestone 1 is complete; milestone 2 is in progress; milestones 3–7 have not
+started. Advance these statuses here when a milestone passes its stated tests
+and is committed.
+
+1.  **Rust namespace and host operations — complete.** `src/ninep.rs` owns
+    metadata, inode and fid lifetime, stable directory cookies, hard links,
+    symlinks, rename and replacement, byte-range locks, quotas, change
+    records with all current hard-link paths, atomic seed installation, and
+    explicit retry of failed on-demand loads. Whole-file and directory host
+    operations work without a VM. Tests cover malformed paths, quota rollback,
+    unlinked open files, coalesced load tickets, stale results, and reset.
+
+2.  **Complete the 9P2000.L session.** Port the operation matrix in
+    `js/p9/README.md` to `src/ninep_protocol.rs`: version, flush, attach,
+    walk, open/create, read/write, clunk, statfs, attributes, readdir, fsync,
+    symlink/readlink, mkdir, link, rename/unlink, and locks. Keep documented
+    unsupported operations as `EOPNOTSUPP`. Model an immediate reply,
+    suppression, or pending load explicitly; retain tag and fid state per
+    endpoint. Parse and validate a complete request before state changes;
+    bound replies by the negotiated message size and descriptor capacity.
+    Test malformed input, duplicate tags, partial walks, flush ordering,
+    concurrent endpoints, and session reset/close against the TypeScript
+    behavior where that behavior is part of the current contract.
+
+3.  **Connect Rust sessions to VirtIO and browser runtime state.** Replace
+    `BrowserNineP` in `src/browser_runtime.rs` with a backend that references
+    a registered Rust filesystem. Update `src/machine.rs` and
+    `src/virtio_devices.rs` so resident requests finish before `notify`
+    returns and only lazy reads retain descriptors. Keep C CPU-run borrowing
+    exclusive of filesystem access by host callbacks. Retire pending work by
+    generation on VM and device reset. Test same-call resident completion,
+    out-of-order async completion, flush, and reset in native Rust.
+
+4.  **Expose filesystem handles and on-demand loads through raw WASM.** Add
+    scalar exports in `src/browser_abi.rs` and `riscbox-wasm/src/lib.rs` for
+    creating and configuring a filesystem before VM startup, host operations,
+    attaching configured server keys, load actions/completions, change events,
+    and reset. Use copied buffers with explicit lifetimes. Reject attaching
+    one handle to a second live VM, but allow both Risclet endpoints to share
+    its handle. Test bounds, invalid handles, ownership, late completions, and
+    VM destroy/recreation in native and real WASM builds.
+
+5.  **Replace the browser 9p implementation.** Make `js/p9/` a typed facade
+    for promise-returning host operations, change subscriptions, `SeedBuilder`,
+    and HTTPS and tar on-demand source plugins. The host API has one error
+    model and no `load`, `readFileAsync`, or `not-loaded` result. Update
+    `js/riscbox.js` to start plugin promises after WASM returns, deliver
+    completion bytes once, and dispatch change listeners outside WASM calls.
+    Remove `p9Sessions`, `expectResponse`, hints, and the microtask-yield loop
+    only after same-quantum resident replies and delayed wakeups pass real
+    Chrome tests. Remove generic JavaScript 9p server registration in favor
+    of filesystem handles and source plugins.
+
+6.  **Migrate images and host applications.** Change
+    `images/risclet/ui/index.ts` to create a filesystem for each example from
+    its manifest before VM boot, load file bodies through HTTP on demand, and
+    await editor reads, writes, file lists, instructions, and change handling.
+    Guard late UI results when switching examples. Keep `fs0` and `fs1` in
+    `images/risclet/riscbox.cfg` as separate sessions over one filesystem.
+    Update `images/bin/build-distribution`, image Makefiles, and deployed
+    `p9/` modules; build Risclet, Alpine, and xv6 profile distributions. The
+    QEMU build-time 9p setup mount is a separate path and should remain intact.
+
+7.  **Validate and publish the contract.** Run `make test-unit`, `make check`,
+    `make wasm`, and real WASM/Chrome tests. Exercise Risclet boot, mount,
+    guest and host edits, notifications, lazy HTTP success/failure, host file
+    access before boot, VM reboot/shutdown, filesystem reset while mounted,
+    and destroy/reattach. Measure resident request latency and copy volume
+    against the current server before claiming a performance improvement.
+    Update `AGENTS.md`, `README.md`, `images/README.md`,
+    `images/DEPLOYMENT.md`, `js/p9/README.md`, and `CHANGELOG.md`; remove stale
+    multi-VM, synchronous host API, and `expectResponse` descriptions. Commit
+    each validated bounded change and remove this plan when migration finishes.
+
 Candidate work
 --------------
 

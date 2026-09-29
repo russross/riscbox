@@ -1,7 +1,6 @@
 //! Shared 9p namespace state, independent of the lifetime of a guest VM.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 /// A stable identity for one inode, including one with no remaining links.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -190,20 +189,40 @@ pub struct LoadTicket {
     pub size: usize,
 }
 
+/// Only a started load is dispatched to the external source.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LoadStart {
+    Started(LoadTicket),
+    Joined(LoadTicket),
+}
+
+impl LoadStart {
+    #[must_use]
+    pub const fn ticket(self) -> LoadTicket {
+        match self {
+            Self::Started(ticket) | Self::Joined(ticket) => ticket,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ChangeKind {
     Create,
     Write,
+    Metadata,
     Remove,
     Rename,
     Loaded,
     LoadError,
     Reset,
+    /// Detailed records were dropped; subscribers must refresh their view.
+    Rescan,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ChangeSource {
     Host,
+    HostOrigin(u64),
     Guest,
     Loader,
 }
@@ -221,6 +240,7 @@ pub struct Change {
 /// The tree remains live across VM reset and shutdown.
 pub struct Filesystem {
     inodes: BTreeMap<InodeId, Inode>,
+    links: BTreeMap<InodeId, BTreeSet<(InodeId, String)>>,
     root: InodeId,
     next_inode: u64,
     next_load: u64,
@@ -230,13 +250,16 @@ pub struct Filesystem {
     directory_entries: usize,
     locks: Vec<ByteRangeLock>,
     changes: VecDeque<Change>,
+    now: u64,
+    mutation_source: ChangeSource,
+    record_changes: bool,
 }
 
 impl Filesystem {
+    /// Creates a standalone namespace at the supplied epoch time in seconds.
     #[must_use]
-    pub fn new(limits: Limits) -> Self {
+    pub fn new(limits: Limits, now: u64) -> Self {
         let root = InodeId(1);
-        let now = Self::now_seconds();
         let mut inodes = BTreeMap::new();
         inodes.insert(
             root,
@@ -260,6 +283,7 @@ impl Filesystem {
         );
         Self {
             inodes,
+            links: BTreeMap::new(),
             root,
             next_inode: 2,
             next_load: 1,
@@ -269,17 +293,26 @@ impl Filesystem {
             directory_entries: 0,
             locks: Vec::new(),
             changes: VecDeque::new(),
+            now,
+            mutation_source: ChangeSource::Host,
+            record_changes: true,
         }
     }
 
-    fn now_seconds() -> u64 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map_or(0, |elapsed| elapsed.as_secs())
+    /// Updates the epoch time supplied by the runtime before a batch of work.
+    /// Raw WASM does not have an implicit operating-system clock.
+    pub const fn set_time(&mut self, now: u64) {
+        self.now = now;
     }
 
-    fn touch(inode: &mut Inode) {
-        let now = Self::now_seconds();
+    /// Selects the origin recorded for subsequent mutations in this activation.
+    /// The runtime sets this before guest work or a host operation; no callback
+    /// or asynchronous continuation runs while the namespace is borrowed.
+    pub const fn set_mutation_source(&mut self, source: ChangeSource) {
+        self.mutation_source = source;
+    }
+
+    fn touch(inode: &mut Inode, now: u64) {
         inode.version = inode.version.wrapping_add(1);
         inode.mtime = now;
         inode.ctime = now;
@@ -329,6 +362,7 @@ impl Filesystem {
                 _ => 0,
             };
             self.inodes.remove(&id);
+            self.links.remove(&id);
             self.logical_bytes -= old_size;
             self.locks.retain(|lock| lock.inode != id);
         }
@@ -339,6 +373,19 @@ impl Filesystem {
         self.changes.pop_front()
     }
 
+    /// Disables event work when the host has no subscribers. Enabling it
+    /// invalidates the previous host view because intervening edits were lost.
+    pub fn set_change_tracking(&mut self, enabled: bool) {
+        if self.record_changes == enabled {
+            return;
+        }
+        self.record_changes = enabled;
+        self.changes.clear();
+        if enabled {
+            self.emit(ChangeKind::Rescan, None, "", None, self.mutation_source);
+        }
+    }
+
     /// Finds every current path of an inode, including all hard links.
     #[must_use]
     pub fn paths_of(&self, target: InodeId) -> Vec<String> {
@@ -346,30 +393,22 @@ impl Filesystem {
             return vec![String::new()];
         }
         let mut result = Vec::new();
-        let mut directories = vec![(self.root, String::new())];
-        while let Some((directory, prefix)) = directories.pop() {
-            let Some(Inode {
-                kind: InodeKind::Directory { entries, .. },
-                ..
-            }) = self.inodes.get(&directory)
-            else {
+        // Reverse links visit only the inode's aliases and their ancestors.
+        // A directory has one parent, and rename rejects directory cycles.
+        let mut ancestors = vec![(target, String::new())];
+        while let Some((id, suffix)) = ancestors.pop() {
+            if id == self.root {
+                result.push(suffix);
                 continue;
-            };
-            for (name, entry) in entries {
-                let path = if prefix.is_empty() {
-                    name.clone()
-                } else {
-                    format!("{prefix}/{name}")
-                };
-                if entry.inode == target {
-                    result.push(path.clone());
-                }
-                if self
-                    .inodes
-                    .get(&entry.inode)
-                    .is_some_and(|inode| matches!(inode.kind, InodeKind::Directory { .. }))
-                {
-                    directories.push((entry.inode, path));
+            }
+            if let Some(links) = self.links.get(&id) {
+                for (parent, name) in links {
+                    let path = if suffix.is_empty() {
+                        name.clone()
+                    } else {
+                        format!("{name}/{suffix}")
+                    };
+                    ancestors.push((*parent, path));
                 }
             }
         }
@@ -385,6 +424,32 @@ impl Filesystem {
         old_path: Option<&str>,
         source: ChangeSource,
     ) {
+        if !self.record_changes {
+            return;
+        }
+        // A stalled consumer cannot accumulate an unbounded mutation history.
+        // Rescan is an invalidation notice, not a filesystem or protocol reset.
+        if self
+            .changes
+            .front()
+            .is_some_and(|change| change.kind == ChangeKind::Rescan)
+        {
+            return;
+        }
+        if self.changes.len() >= 1024 {
+            self.changes.clear();
+            self.changes.push_back(Change {
+                kind: ChangeKind::Rescan,
+                inode: None,
+                path: String::new(),
+                old_path: None,
+                paths: Vec::new(),
+                source,
+            });
+            return;
+        }
+        let path = path.trim_start_matches('/');
+        let old_path = old_path.map(|path| path.trim_start_matches('/'));
         let mut paths = inode.map_or_else(Vec::new, |id| self.paths_of(id));
         if !path.is_empty() && !paths.iter().any(|current| current == path) {
             paths.push(path.to_owned());
@@ -401,8 +466,12 @@ impl Filesystem {
     }
 
     fn emit_inode(&mut self, kind: ChangeKind, inode: InodeId, source: ChangeSource) {
-        let path = self.paths_of(inode).into_iter().next().unwrap_or_default();
-        self.emit(kind, Some(inode), &path, None, source);
+        self.emit(kind, Some(inode), "", None, source);
+        if let Some(change) = self.changes.back_mut()
+            && change.inode == Some(inode)
+        {
+            change.path = change.paths.first().cloned().unwrap_or_default();
+        }
     }
 
     fn ranges_overlap(
@@ -433,7 +502,7 @@ impl Filesystem {
         }
     }
 
-    /// Returns the first conflicting lock held by another protocol session.
+    /// Returns the first incompatible lock held by another process/client.
     ///
     /// # Errors
     /// Returns an inode or type error when the target is not a regular file.
@@ -444,13 +513,13 @@ impl Filesystem {
         self.check_file_inode(requested.inode)?;
         Ok(self.locks.iter().find(|held| {
             held.inode == requested.inode
-                && held.session != requested.session
+                && !Self::same_lock_owner(held, requested)
                 && (held.kind == LockKind::Write || requested.kind == LockKind::Write)
                 && Self::ranges_overlap(held.start, held.length, requested.start, requested.length)
         }))
     }
 
-    /// Installs a byte-range lock if it does not conflict with another session.
+    /// Converts the owner's range after checking other owners for conflicts.
     ///
     /// # Errors
     /// Returns an inode or type error; a conflict is reported as `Ok(false)`.
@@ -458,11 +527,58 @@ impl Filesystem {
         if self.conflicting_lock(&requested)?.is_some() {
             return Ok(false);
         }
+        self.subtract_owned_range(&requested);
         self.locks.push(requested);
         Ok(true)
     }
 
-    /// Removes overlapping locks owned by one process and client in a session.
+    fn same_lock_owner(left: &ByteRangeLock, right: &ByteRangeLock) -> bool {
+        left.process == right.process && left.client == right.client
+    }
+
+    fn lock_end(lock: &ByteRangeLock) -> u128 {
+        if lock.length == 0 {
+            u128::from(u64::MAX) + 1
+        } else {
+            (u128::from(lock.start) + u128::from(lock.length)).min(u128::from(u64::MAX) + 1)
+        }
+    }
+
+    // Replacement and unlock keep every byte outside the requested interval.
+    // Zero length extends to the end of the representable file-offset space.
+    fn subtract_owned_range(&mut self, requested: &ByteRangeLock) {
+        let mut retained = Vec::with_capacity(self.locks.len());
+        for held in self.locks.drain(..) {
+            if held.inode != requested.inode
+                || !Self::same_lock_owner(&held, requested)
+                || !Self::ranges_overlap(held.start, held.length, requested.start, requested.length)
+            {
+                retained.push(held);
+                continue;
+            }
+            let held_end = Self::lock_end(&held);
+            let requested_end = Self::lock_end(requested);
+            if held.start < requested.start {
+                let mut left = held.clone();
+                left.length = requested.start - held.start;
+                retained.push(left);
+            }
+            if requested_end < held_end {
+                let mut right = held;
+                right.start =
+                    u64::try_from(requested_end).expect("remaining interval starts in u64");
+                right.length = if held_end == u128::from(u64::MAX) + 1 {
+                    0
+                } else {
+                    u64::try_from(held_end - requested_end).expect("remaining interval fits u64")
+                };
+                retained.push(right);
+            }
+        }
+        self.locks = retained;
+    }
+
+    /// Removes only the requested bytes owned by one process and client.
     ///
     /// # Errors
     /// Returns an inode or type error when the target is not a regular file.
@@ -476,12 +592,14 @@ impl Filesystem {
         length: u64,
     ) -> Result<(), FilesystemError> {
         self.check_file_inode(inode)?;
-        self.locks.retain(|held| {
-            !(held.inode == inode
-                && held.session == session
-                && held.process == process
-                && held.client == client
-                && Self::ranges_overlap(held.start, held.length, start, length))
+        self.subtract_owned_range(&ByteRangeLock {
+            inode,
+            session,
+            process,
+            client: client.to_owned(),
+            kind: LockKind::Read,
+            start,
+            length,
         });
         Ok(())
     }
@@ -491,7 +609,7 @@ impl Filesystem {
     }
 
     fn parts(path: &str) -> Result<Vec<&str>, FilesystemError> {
-        if path.contains(['\\', '\0']) {
+        if path.contains('\0') {
             return Err(FilesystemError::InvalidPath);
         }
         let relative = path.strip_prefix('/').unwrap_or(path);
@@ -608,8 +726,14 @@ impl Filesystem {
         update: SeedMetadata,
     ) -> Result<(), FilesystemError> {
         let inode = self.inodes.get_mut(&id).ok_or(FilesystemError::NotFound)?;
-        Self::touch(inode);
-        self.apply_seed_metadata(id, update)
+        if update == SeedMetadata::default() {
+            return Ok(());
+        }
+        inode.version = inode.version.wrapping_add(1);
+        inode.ctime = self.now;
+        self.apply_seed_metadata(id, update)?;
+        self.emit_inode(ChangeKind::Metadata, id, self.mutation_source);
+        Ok(())
     }
 
     fn parent(&self, path: &str) -> Result<(InodeId, String), FilesystemError> {
@@ -675,8 +799,10 @@ impl Filesystem {
     /// # Errors
     /// Returns a malformed path, duplicate entry, invalid link, or quota error.
     pub fn install_seed(&mut self, entries: &[SeedEntry]) -> Result<(), FilesystemError> {
-        let mut candidate = Self::new(self.limits);
-        candidate.next_inode = self.next_inode;
+        let mut candidate = Self::new(self.limits, self.now);
+        candidate.record_changes = false;
+        candidate.mutation_source = self.mutation_source;
+        candidate.replace_root(self.next_inode)?;
         candidate.next_load = self.next_load;
         candidate.generation = self
             .generation
@@ -749,9 +875,16 @@ impl Filesystem {
             candidate.ensure_seed_parent(&entry.path)?;
             candidate.hard_link(target, &entry.path)?;
         }
-        candidate.changes.clear();
+        // Apply manifest timestamps after all parent and link mutations.
+        for entry in entries {
+            if !matches!(entry.kind, SeedKind::HardLink { .. }) {
+                let id = candidate.lookup(&entry.path)?;
+                candidate.apply_seed_metadata(id, entry.metadata)?;
+            }
+        }
+        candidate.record_changes = self.record_changes;
         *self = candidate;
-        self.emit(ChangeKind::Reset, None, "", None, ChangeSource::Host);
+        self.emit(ChangeKind::Reset, None, "", None, self.mutation_source);
         Ok(())
     }
 
@@ -788,7 +921,7 @@ impl Filesystem {
             .ok_or(FilesystemError::NoSpace)?;
         let following_cookie = next_cookie.checked_add(1).ok_or(FilesystemError::NoSpace)?;
         entries.insert(
-            name,
+            name.clone(),
             DirectoryEntry {
                 inode: id,
                 cookie: *next_cookie,
@@ -796,25 +929,27 @@ impl Filesystem {
         );
         *next_cookie = following_cookie;
         self.next_inode = next_inode;
-        Self::touch(directory);
+        Self::touch(directory, self.now);
         self.directory_entries += 1;
+        let inode_parent = matches!(kind, InodeKind::Directory { .. }).then_some(parent);
         self.inodes.insert(
             id,
             Inode {
                 id,
                 kind,
-                parent: Some(parent),
+                parent: inode_parent,
                 mode,
                 uid: 1000,
                 gid: 1000,
                 version: 0,
                 link_count: 1,
                 fid_refs: 0,
-                atime: Self::now_seconds(),
-                mtime: Self::now_seconds(),
-                ctime: Self::now_seconds(),
+                atime: self.now,
+                mtime: self.now,
+                ctime: self.now,
             },
         );
+        self.links.entry(id).or_default().insert((parent, name));
         Ok(id)
     }
 
@@ -833,7 +968,13 @@ impl Filesystem {
             },
             0o755,
         )?;
-        self.emit(ChangeKind::Create, Some(id), path, None, ChangeSource::Host);
+        self.emit(
+            ChangeKind::Create,
+            Some(id),
+            path,
+            None,
+            self.mutation_source,
+        );
         Ok(id)
     }
 
@@ -842,12 +983,18 @@ impl Filesystem {
     /// # Errors
     /// Returns a path, duplicate-entry, or quota error.
     pub fn symlink(&mut self, path: &str, target: &str) -> Result<InodeId, FilesystemError> {
-        if target.len() > usize::from(u16::MAX) {
+        if target.len() > usize::from(u16::MAX) || target.contains('\0') {
             return Err(FilesystemError::InvalidPath);
         }
         let (parent, name) = self.parent(path)?;
         let id = self.insert(parent, name, InodeKind::Symlink(target.to_owned()), 0o777)?;
-        self.emit(ChangeKind::Create, Some(id), path, None, ChangeSource::Host);
+        self.emit(
+            ChangeKind::Create,
+            Some(id),
+            path,
+            None,
+            self.mutation_source,
+        );
         Ok(id)
     }
 
@@ -900,7 +1047,7 @@ impl Filesystem {
         let (id, kind) = if let Some(id) = existing {
             let inode = self.inodes.get_mut(&id).ok_or(FilesystemError::NotFound)?;
             inode.kind = InodeKind::File(FileBody::Resident(bytes.to_vec()));
-            Self::touch(inode);
+            Self::touch(inode, self.now);
             (id, ChangeKind::Write)
         } else {
             (
@@ -914,7 +1061,7 @@ impl Filesystem {
             )
         };
         self.logical_bytes = new_total;
-        self.emit(kind, Some(id), path, None, ChangeSource::Host);
+        self.emit(kind, Some(id), path, None, self.mutation_source);
         Ok(id)
     }
 
@@ -953,16 +1100,33 @@ impl Filesystem {
             return Err(FilesystemError::NotDirectory);
         };
         entries.remove(&name);
-        Self::touch(directory);
+        if let Some(links) = self.links.get_mut(&id) {
+            links.remove(&(parent, name));
+            if links.is_empty() {
+                self.links.remove(&id);
+            }
+        }
+        Self::touch(directory, self.now);
         self.directory_entries -= 1;
         let inode = self.inodes.get_mut(&id).ok_or(FilesystemError::NotFound)?;
         inode.link_count -= 1;
+        inode.ctime = self.now;
+        inode.version = inode.version.wrapping_add(1);
+        if inode.link_count == 0 {
+            inode.parent = None;
+        }
         if inode.link_count == 0 && inode.fid_refs == 0 {
             self.inodes.remove(&id);
             self.logical_bytes -= old_size;
             self.locks.retain(|lock| lock.inode != id);
         }
-        self.emit(ChangeKind::Remove, Some(id), path, None, ChangeSource::Host);
+        self.emit(
+            ChangeKind::Remove,
+            Some(id),
+            path,
+            None,
+            self.mutation_source,
+        );
         Ok(())
     }
 
@@ -1001,23 +1165,26 @@ impl Filesystem {
         }
         let following_cookie = next_cookie.checked_add(1).ok_or(FilesystemError::NoSpace)?;
         entries.insert(
-            name,
+            name.clone(),
             DirectoryEntry {
                 inode: id,
                 cookie: *next_cookie,
             },
         );
         *next_cookie = following_cookie;
-        Self::touch(directory);
+        Self::touch(directory, self.now);
         self.directory_entries += 1;
         let inode = self.inodes.get_mut(&id).ok_or(FilesystemError::NotFound)?;
         inode.link_count = next_links;
+        inode.ctime = self.now;
+        inode.version = inode.version.wrapping_add(1);
+        self.links.entry(id).or_default().insert((parent, name));
         self.emit(
             ChangeKind::Create,
             Some(id),
             new_path,
             None,
-            ChangeSource::Host,
+            self.mutation_source,
         );
         Ok(())
     }
@@ -1114,7 +1281,11 @@ impl Filesystem {
             return Err(FilesystemError::NotDirectory);
         };
         entries.remove(&old_name);
-        Self::touch(directory);
+        if let Some(links) = self.links.get_mut(&old_entry.inode) {
+            links.remove(&(old_parent, old_name));
+            links.insert((new_parent, new_name.clone()));
+        }
+        Self::touch(directory, self.now);
         let directory = self
             .inodes
             .get_mut(&new_parent)
@@ -1136,7 +1307,7 @@ impl Filesystem {
         if old_parent != new_parent {
             *next_cookie += 1;
         }
-        Self::touch(directory);
+        Self::touch(directory, self.now);
         let inode = self
             .inodes
             .get_mut(&old_entry.inode)
@@ -1144,13 +1315,14 @@ impl Filesystem {
         if matches!(inode.kind, InodeKind::Directory { .. }) {
             inode.parent = Some(new_parent);
         }
-        Self::touch(inode);
+        inode.ctime = self.now;
+        inode.version = inode.version.wrapping_add(1);
         self.emit(
             ChangeKind::Rename,
             Some(old_entry.inode),
             new_path,
             Some(old_path),
-            ChangeSource::Host,
+            self.mutation_source,
         );
         Ok(())
     }
@@ -1205,7 +1377,13 @@ impl Filesystem {
             0o644,
         )?;
         self.logical_bytes += size;
-        self.emit(ChangeKind::Create, Some(id), path, None, ChangeSource::Host);
+        self.emit(
+            ChangeKind::Create,
+            Some(id),
+            path,
+            None,
+            self.mutation_source,
+        );
         Ok(id)
     }
 
@@ -1213,18 +1391,18 @@ impl Filesystem {
     ///
     /// # Errors
     /// Returns an inode state, retained load, or ticket exhaustion error.
-    pub fn begin_load(&mut self, id: InodeId) -> Result<LoadTicket, FilesystemError> {
+    pub fn begin_load(&mut self, id: InodeId) -> Result<LoadStart, FilesystemError> {
         let inode = self.inodes.get_mut(&id).ok_or(FilesystemError::NotFound)?;
         let (size, source) = match &inode.kind {
             InodeKind::File(FileBody::Unloaded { size, source }) => (*size, *source),
             InodeKind::File(FileBody::Loading { size, source, load }) => {
-                return Ok(LoadTicket {
+                return Ok(LoadStart::Joined(LoadTicket {
                     inode: id,
                     generation: self.generation,
                     id: *load,
                     source: *source,
                     size: *size,
-                });
+                }));
             }
             InodeKind::File(FileBody::Failed { .. }) => return Err(FilesystemError::LoadFailed),
             _ => return Err(FilesystemError::StaleLoad),
@@ -1235,13 +1413,13 @@ impl Filesystem {
             .checked_add(1)
             .ok_or(FilesystemError::NoSpace)?;
         inode.kind = InodeKind::File(FileBody::Loading { size, source, load });
-        Ok(LoadTicket {
+        Ok(LoadStart::Started(LoadTicket {
             inode: id,
             generation: self.generation,
             id: load,
             source,
             size,
-        })
+        }))
     }
 
     /// Installs bytes only if the same load is still current.
@@ -1275,7 +1453,6 @@ impl Filesystem {
             return Err(FilesystemError::LoadFailed);
         }
         inode.kind = InodeKind::File(FileBody::Resident(bytes));
-        Self::touch(inode);
         self.emit_inode(ChangeKind::Loaded, ticket.inode, ChangeSource::Loader);
         Ok(())
     }
@@ -1336,11 +1513,32 @@ impl Filesystem {
             .generation
             .checked_add(1)
             .ok_or(FilesystemError::NoSpace)?;
-        *self = Self::new(limits);
-        self.next_inode = next_inode;
+        let source = self.mutation_source;
+        let record_changes = self.record_changes;
+        let following_inode = next_inode.checked_add(1).ok_or(FilesystemError::NoSpace)?;
+        *self = Self::new(limits, self.now);
+        self.replace_root(next_inode)?;
+        self.next_inode = following_inode;
         self.next_load = next_load;
         self.generation = generation;
-        self.emit(ChangeKind::Reset, None, "", None, ChangeSource::Host);
+        self.mutation_source = source;
+        self.record_changes = record_changes;
+        self.emit(ChangeKind::Reset, None, "", None, self.mutation_source);
+        Ok(())
+    }
+
+    // Every namespace replacement gets a fresh root QID as well as fresh leaves.
+    // Validation precedes the swap so identity exhaustion is atomic.
+    fn replace_root(&mut self, id: u64) -> Result<(), FilesystemError> {
+        let next = id.checked_add(1).ok_or(FilesystemError::NoSpace)?;
+        let mut root = self
+            .inodes
+            .remove(&self.root)
+            .expect("namespace has a root");
+        root.id = InodeId(id);
+        self.root = root.id;
+        self.inodes.insert(root.id, root);
+        self.next_inode = next;
         Ok(())
     }
 }
@@ -1349,12 +1547,232 @@ impl Filesystem {
 mod tests {
     use super::{
         ByteRangeLock, ChangeKind, ChangeSource, FileRead, Filesystem, FilesystemError, Limits,
-        LockKind, SeedEntry, SeedKind, SeedMetadata, SourceId,
+        LoadStart, LockKind, SeedEntry, SeedKind, SeedMetadata, SourceId,
     };
+
+    // 9P2000.L Tlock/Tgetlock use fcntl process/client ownership and range
+    // conversion. Sessions track cleanup, not the identity of a lock owner.
+    #[test]
+    fn locks_distinguish_owners_split_unlocks_and_convert_ranges() {
+        let mut fs = Filesystem::new(Limits::default(), 100);
+        let inode = fs.write_file("file", b"x").unwrap();
+        let lock = ByteRangeLock {
+            inode,
+            session: 1,
+            kind: LockKind::Write,
+            start: 0,
+            length: 100,
+            process: 10,
+            client: "host".into(),
+        };
+        let mut other = ByteRangeLock {
+            process: 20,
+            ..lock.clone()
+        };
+        assert!(fs.try_lock(lock.clone()).unwrap());
+        assert!(!fs.try_lock(other.clone()).unwrap());
+        fs.unlock(inode, 1, 10, "host", 40, 20).unwrap();
+        other.start = 40;
+        other.length = 20;
+        assert!(fs.conflicting_lock(&other).unwrap().is_none());
+        for start in [0, 39, 60, 99] {
+            other.start = start;
+            other.length = 1;
+            assert!(fs.conflicting_lock(&other).unwrap().is_some());
+        }
+
+        // Downgrading only the middle leaves both exclusive outer intervals.
+        let read = ByteRangeLock {
+            kind: LockKind::Read,
+            start: 20,
+            length: 60,
+            ..lock.clone()
+        };
+        assert!(fs.try_lock(read).unwrap());
+        other.kind = LockKind::Read;
+        other.start = 20;
+        other.length = 60;
+        assert!(fs.conflicting_lock(&other).unwrap().is_none());
+        other.kind = LockKind::Write;
+        assert!(fs.conflicting_lock(&other).unwrap().is_some());
+        other.kind = LockKind::Read;
+        other.start = 80;
+        other.length = 1;
+        assert!(fs.conflicting_lock(&other).unwrap().is_some());
+
+        // The same process/client remains one owner across endpoint sessions.
+        assert!(fs.try_lock(ByteRangeLock { session: 2, ..lock }).unwrap());
+        fs.release_session_locks(1);
+        assert!(fs.conflicting_lock(&other).unwrap().is_some());
+        fs.release_session_locks(2);
+        assert!(fs.conflicting_lock(&other).unwrap().is_none());
+    }
+
+    #[test]
+    fn zero_length_lock_keeps_tail_after_unlock_near_offset_limit() {
+        let mut fs = Filesystem::new(Limits::default(), 100);
+        let inode = fs.write_file("file", b"").unwrap();
+        let lock = ByteRangeLock {
+            inode,
+            session: 1,
+            kind: LockKind::Write,
+            start: 10,
+            length: 0,
+            process: 10,
+            client: "host".into(),
+        };
+        fs.try_lock(lock.clone()).unwrap();
+        fs.unlock(inode, 1, 10, "host", 20, 10).unwrap();
+        let other = ByteRangeLock {
+            process: 20,
+            start: u64::MAX,
+            length: 1,
+            ..lock
+        };
+        assert!(fs.conflicting_lock(&other).unwrap().is_some());
+        fs.unlock(inode, 1, 10, "host", 30, 0).unwrap();
+        assert!(fs.conflicting_lock(&other).unwrap().is_none());
+    }
+
+    #[test]
+    fn on_demand_load_preserves_metadata_and_chmod_preserves_mtime() {
+        let mut fs = Filesystem::new(Limits::default(), 100);
+        let id = fs.add_lazy_file("file", 1, SourceId(1)).unwrap();
+        fs.set_metadata(
+            id,
+            SeedMetadata {
+                atime: Some(11),
+                mtime: Some(12),
+                ctime: Some(13),
+                ..SeedMetadata::default()
+            },
+        )
+        .unwrap();
+        let before = fs.inode(id).unwrap().clone();
+        let load = fs.begin_load(id).unwrap();
+        assert!(matches!(load, LoadStart::Started(_)));
+        assert_eq!(fs.begin_load(id).unwrap(), LoadStart::Joined(load.ticket()));
+        fs.set_time(200);
+        fs.complete_load(load.ticket(), vec![1]).unwrap();
+        let loaded = fs.inode(id).unwrap();
+        assert_eq!(
+            (loaded.atime, loaded.mtime, loaded.ctime, loaded.version),
+            (before.atime, before.mtime, before.ctime, before.version)
+        );
+        fs.set_metadata(
+            id,
+            SeedMetadata {
+                mode: Some(0o600),
+                ..SeedMetadata::default()
+            },
+        )
+        .unwrap();
+        let changed = fs.inode(id).unwrap();
+        assert_eq!(
+            (changed.mode, changed.mtime, changed.ctime),
+            (0o600, 12, 200)
+        );
+        fs.set_time(300);
+        fs.write_file("file", b"new").unwrap();
+        let written = fs.inode(id).unwrap();
+        assert_eq!((written.mtime, written.ctime), (300, 300));
+    }
+
+    #[test]
+    fn seed_preserves_directory_times_and_replacements_get_fresh_root_qids() {
+        let mut fs = Filesystem::new(Limits::default(), 100);
+        let old_root = fs.root();
+        fs.install_seed(&[
+            SeedEntry {
+                path: "dir".into(),
+                kind: SeedKind::Directory,
+                metadata: SeedMetadata {
+                    mtime: Some(12),
+                    ctime: Some(13),
+                    ..SeedMetadata::default()
+                },
+            },
+            SeedEntry {
+                path: "dir/file".into(),
+                kind: SeedKind::File {
+                    size: 1,
+                    source: SourceId(1),
+                },
+                metadata: SeedMetadata::default(),
+            },
+        ])
+        .unwrap();
+        let directory = fs.inode(fs.lookup("dir").unwrap()).unwrap();
+        assert_eq!((directory.mtime, directory.ctime), (12, 13));
+        assert_ne!(fs.root(), old_root);
+        let seeded_root = fs.root();
+        fs.reset().unwrap();
+        assert_ne!(fs.root(), seeded_root);
+        assert!(fs.inode(old_root).is_none());
+        assert!(fs.inode(seeded_root).is_none());
+    }
+
+    #[test]
+    fn notifications_follow_aliases_through_directory_moves_and_preserve_origin() {
+        let mut fs = Filesystem::new(Limits::default(), 100);
+        fs.mkdir("dir").unwrap();
+        let id = fs.write_file("dir/file", b"old").unwrap();
+        fs.hard_link("dir/file", "alias").unwrap();
+        fs.rename("dir", "moved").unwrap();
+        assert_eq!(fs.paths_of(id), vec!["alias", "moved/file"]);
+        while fs.next_change().is_some() {}
+        fs.set_mutation_source(ChangeSource::HostOrigin(42));
+        fs.write_file("/moved/file", b"new").unwrap();
+        let changed = fs.next_change().unwrap();
+        assert_eq!(changed.path, "moved/file");
+        assert_eq!(changed.paths, vec!["alias", "moved/file"]);
+        assert_eq!(changed.source, ChangeSource::HostOrigin(42));
+        fs.set_mutation_source(ChangeSource::Guest);
+        fs.remove("alias").unwrap();
+        assert_eq!(fs.next_change().unwrap().source, ChangeSource::Guest);
+        assert_eq!(fs.paths_of(id), vec!["moved/file"]);
+        fs.remove("moved/file").unwrap();
+        assert!(fs.paths_of(id).is_empty());
+    }
+
+    #[test]
+    fn literal_posix_names_and_invalid_paths_agree_between_host_and_child_lookup() {
+        let mut fs = Filesystem::new(Limits::default(), 100);
+        let name = "file\\name";
+        let id = fs.write_file(name, b"x").unwrap();
+        assert_eq!(fs.child(fs.root(), name), Ok(id));
+        assert_eq!(fs.lookup(name), Ok(id));
+        for path in ["a//b", "a/../b", "a/./b", "a\0b"] {
+            assert_eq!(fs.write_file(path, b"x"), Err(FilesystemError::InvalidPath));
+        }
+        assert_eq!(
+            fs.symlink("link", "target\0suffix"),
+            Err(FilesystemError::InvalidPath)
+        );
+        assert_eq!(fs.lookup("link"), Err(FilesystemError::NotFound));
+    }
+
+    #[test]
+    fn notification_overflow_invalidates_view_and_tracking_can_be_disabled() {
+        let mut fs = Filesystem::new(Limits::default(), 100);
+        for _ in 0..2000 {
+            fs.write_file("file", b"x").unwrap();
+        }
+        assert_eq!(fs.next_change().unwrap().kind, ChangeKind::Rescan);
+        assert!(fs.next_change().is_none());
+        fs.write_file("file", b"y").unwrap();
+        assert_eq!(fs.next_change().unwrap().kind, ChangeKind::Write);
+        fs.set_change_tracking(false);
+        fs.write_file("file", b"z").unwrap();
+        fs.reset().unwrap();
+        assert!(fs.next_change().is_none());
+        fs.set_change_tracking(true);
+        assert_eq!(fs.next_change().unwrap().kind, ChangeKind::Rescan);
+    }
 
     #[test]
     fn lazy_file_is_loaded_only_on_read_and_host_write_wins() {
-        let mut fs = Filesystem::new(Limits::default());
+        let mut fs = Filesystem::new(Limits::default(), 100);
         fs.mkdir("src").unwrap();
         let id = fs.add_lazy_file("src/main.c", 4, SourceId(7)).unwrap();
         assert_eq!(
@@ -1365,7 +1783,7 @@ mod tests {
                 size: 4,
             })
         );
-        let ticket = fs.begin_load(id).unwrap();
+        let ticket = fs.begin_load(id).unwrap().ticket();
         fs.write_file("src/main.c", b"host").unwrap();
         assert_eq!(
             fs.complete_load(ticket, b"seed".to_vec()),
@@ -1379,9 +1797,9 @@ mod tests {
 
     #[test]
     fn reset_retires_load_and_keeps_inode_ids_distinct() {
-        let mut fs = Filesystem::new(Limits::default());
+        let mut fs = Filesystem::new(Limits::default(), 100);
         let id = fs.add_lazy_file("file", 3, SourceId(1)).unwrap();
-        let ticket = fs.begin_load(id).unwrap();
+        let ticket = fs.begin_load(id).unwrap().ticket();
         fs.reset().unwrap();
         let replacement = fs.write_file("file", b"new").unwrap();
         assert_ne!(id, replacement);
@@ -1397,11 +1815,14 @@ mod tests {
 
     #[test]
     fn quotas_fail_without_modifying_existing_file() {
-        let mut fs = Filesystem::new(Limits {
-            max_file_bytes: 4,
-            max_tree_bytes: 4,
-            ..Limits::default()
-        });
+        let mut fs = Filesystem::new(
+            Limits {
+                max_file_bytes: 4,
+                max_tree_bytes: 4,
+                ..Limits::default()
+            },
+            100,
+        );
         fs.write_file("file", b"1234").unwrap();
         assert_eq!(
             fs.write_file("file", b"12345"),
@@ -1415,14 +1836,14 @@ mod tests {
 
     #[test]
     fn load_failure_needs_explicit_retry_and_rejects_old_ticket() {
-        let mut fs = Filesystem::new(Limits::default());
+        let mut fs = Filesystem::new(Limits::default(), 100);
         let id = fs.add_lazy_file("file", 2, SourceId(3)).unwrap();
-        let old = fs.begin_load(id).unwrap();
-        assert_eq!(fs.begin_load(id), Ok(old));
+        let old = fs.begin_load(id).unwrap().ticket();
+        assert_eq!(fs.begin_load(id), Ok(LoadStart::Joined(old)));
         fs.fail_load(old).unwrap();
         assert_eq!(fs.read_file("file"), Err(FilesystemError::LoadFailed));
         fs.retry_load("file").unwrap();
-        let new = fs.begin_load(id).unwrap();
+        let new = fs.begin_load(id).unwrap().ticket();
         assert_ne!(old.id, new.id);
         assert_eq!(
             fs.complete_load(old, b"no".to_vec()),
@@ -1434,7 +1855,7 @@ mod tests {
 
     #[test]
     fn directory_cookies_survive_removal_and_empty_directory_rule() {
-        let mut fs = Filesystem::new(Limits::default());
+        let mut fs = Filesystem::new(Limits::default(), 100);
         fs.mkdir("dir").unwrap();
         fs.write_file("dir/a", b"a").unwrap();
         fs.write_file("dir/b", b"b").unwrap();
@@ -1460,10 +1881,13 @@ mod tests {
 
     #[test]
     fn hard_links_share_content_and_keep_inode_alive() {
-        let mut fs = Filesystem::new(Limits {
-            max_tree_bytes: 4,
-            ..Limits::default()
-        });
+        let mut fs = Filesystem::new(
+            Limits {
+                max_tree_bytes: 4,
+                ..Limits::default()
+            },
+            100,
+        );
         let id = fs.write_file("first", b"data").unwrap();
         fs.hard_link("first", "second").unwrap();
         assert_eq!(fs.lookup("second"), Ok(id));
@@ -1484,7 +1908,7 @@ mod tests {
 
     #[test]
     fn rename_moves_inode_and_rejects_directory_cycles() {
-        let mut fs = Filesystem::new(Limits::default());
+        let mut fs = Filesystem::new(Limits::default(), 100);
         fs.mkdir("left").unwrap();
         fs.mkdir("right").unwrap();
         fs.mkdir("left/child").unwrap();
@@ -1507,7 +1931,7 @@ mod tests {
 
     #[test]
     fn rename_replacement_keeps_destination_unmodified_on_type_error() {
-        let mut fs = Filesystem::new(Limits::default());
+        let mut fs = Filesystem::new(Limits::default(), 100);
         fs.mkdir("directory").unwrap();
         fs.write_file("file", b"one").unwrap();
         assert_eq!(
@@ -1528,7 +1952,7 @@ mod tests {
 
     #[test]
     fn symlink_target_is_literal_and_not_followed_by_host_lookup() {
-        let mut fs = Filesystem::new(Limits::default());
+        let mut fs = Filesystem::new(Limits::default(), 100);
         fs.symlink("link", "../outside").unwrap();
         assert_eq!(fs.readlink("link"), Ok("../outside"));
         assert_eq!(fs.read_file("link"), Err(FilesystemError::IsDirectory));
@@ -1536,10 +1960,13 @@ mod tests {
 
     #[test]
     fn unlinked_open_file_retains_quota_until_final_fid_closes() {
-        let mut fs = Filesystem::new(Limits {
-            max_tree_bytes: 4,
-            ..Limits::default()
-        });
+        let mut fs = Filesystem::new(
+            Limits {
+                max_tree_bytes: 4,
+                ..Limits::default()
+            },
+            100,
+        );
         let id = fs.write_file("open", b"data").unwrap();
         fs.retain_fid(id).unwrap();
         fs.remove("open").unwrap();
@@ -1552,7 +1979,7 @@ mod tests {
 
     #[test]
     fn locks_conflict_across_sessions_and_release_on_close() {
-        let mut fs = Filesystem::new(Limits::default());
+        let mut fs = Filesystem::new(Limits::default(), 100);
         let inode = fs.write_file("file", b"data").unwrap();
         let first = ByteRangeLock {
             inode,
@@ -1580,7 +2007,7 @@ mod tests {
 
     #[test]
     fn notifications_name_all_hard_links_and_retired_path() {
-        let mut fs = Filesystem::new(Limits::default());
+        let mut fs = Filesystem::new(Limits::default(), 100);
         fs.write_file("a", b"old").unwrap();
         fs.hard_link("a", "b").unwrap();
         while fs.next_change().is_some() {}
@@ -1597,7 +2024,7 @@ mod tests {
 
     #[test]
     fn seed_installation_is_atomic_and_does_not_load_file_bodies() {
-        let mut fs = Filesystem::new(Limits::default());
+        let mut fs = Filesystem::new(Limits::default(), 100);
         fs.write_file("old", b"kept").unwrap();
         let seed = vec![
             SeedEntry {
@@ -1644,10 +2071,13 @@ mod tests {
 
     #[test]
     fn bad_seed_path_and_quota_preserve_existing_tree_and_generation() {
-        let mut fs = Filesystem::new(Limits {
-            max_tree_bytes: 4,
-            ..Limits::default()
-        });
+        let mut fs = Filesystem::new(
+            Limits {
+                max_tree_bytes: 4,
+                ..Limits::default()
+            },
+            100,
+        );
         fs.write_file("old", b"data").unwrap();
         let generation = fs.generation();
         let invalid_path = SeedEntry {
@@ -1698,7 +2128,7 @@ mod tests {
 
     #[test]
     fn host_file_listing_and_metadata_leave_lazy_body_unloaded() {
-        let mut fs = Filesystem::new(Limits::default());
+        let mut fs = Filesystem::new(Limits::default(), 100);
         fs.mkdir("src").unwrap();
         let id = fs.add_lazy_file("src/main.c", 4, SourceId(2)).unwrap();
         fs.symlink("src/current", "main.c").unwrap();

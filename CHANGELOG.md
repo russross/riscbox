@@ -4,6 +4,16 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Corrected the standalone Rust 9p namespace's process/client lock ownership,
+    partial unlocks, and range conversion. Supplied epoch time explicitly for
+    raw WASM; lazy loading preserves file timestamps and QID versions, and
+    manifest timestamps survive tree assembly. Namespace replacement assigns
+    fresh root QIDs. Reverse links resolve notification paths, bounded event
+    history signals rescan on overflow, and typed host origins support editor
+    filtering. Load initiation distinguishes started and joined readers.
+    Added native regression coverage and executable Node/Chrome WASM probes.
+    The TypeScript server remains the production implementation.
+
 *   Restored decayed P99 guest-clock skew while retaining lead carryover and
     extended quantum budgets. Carried quanta use the slower of the P99-skewed
     guest clock and the mapping implied by the previous runnable quantum's

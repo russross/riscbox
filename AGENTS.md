@@ -249,6 +249,10 @@ Architecture rules
 *   Keep browser I/O explicit through request/completion and event queues.
     Never retain a JavaScript view across an await or reenter borrowed Rust
     runtime state from a host callback.
+*   Supply filesystem epoch time explicitly at the runtime boundary; raw
+    `wasm32-unknown-unknown` has no operating-system clock. Validate new Rust
+    browser subsystems by calling their WASM operations, since an unused
+    implementation can build successfully while retaining unsupported calls.
 *   Deploy boot payloads and split disks under content-derived names. Replace
     the configuration last as the atomic rollout and retain old assets until an
     explicit cleanup.
@@ -279,8 +283,10 @@ intended loadable section explicitly.
 Validation
 ----------
 
-*   `make test-unit` runs Rust, Python tool, and JavaScript adapter/server tests.
-*   `make test` adds the real WASM/Chrome network integration test for development.
+*   `make test-unit` runs Rust, Python tool, JavaScript adapter/server tests,
+    and an executable raw-WASM 9p namespace regression probe in Node.
+*   `make test` adds real WASM/Chrome network integration and namespace tests
+    for development.
 *   `make check` adds strict Clippy and Python type checks. The GitHub release
     workflow runs unit tests, type checks, Clippy, and builds without Chrome or
     full-guest tests.

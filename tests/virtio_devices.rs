@@ -684,6 +684,66 @@ fn ninep_resident_reply_completes_descriptor_during_notify() {
         1
     );
     assert_eq!(machine.next_ninep_transport_action(slot).unwrap(), None);
+    assert_eq!(machine_read(&mut machine, USED + 8, AccessWidth::Word), 7);
+}
+
+#[test]
+fn ninep_reset_blocks_old_queue_writes_even_when_request_id_is_reused() {
+    let (mut machine, slot, old_request, backend) = pending_p9();
+    let old_generation = *backend.generation.borrow();
+    let response_before = machine.read_ram(DATA + 0x100, 7).unwrap().to_vec();
+    let used_before = machine.read_ram(USED, 20).unwrap().to_vec();
+    machine_write(&mut machine, VIRTIO_BASE + 0x70, AccessWidth::Word, 0);
+
+    // A completed reset relinquishes every old queue. A late provider reply
+    // cannot write a response or publish a used element before initialization.
+    let mut old_reply = old_request;
+    old_reply[4] += 1;
+    machine
+        .complete_ninep_transport_request(
+            slot,
+            old_generation,
+            NinePRequestId(1),
+            NinePOutcome::Reply(old_reply.to_vec()),
+        )
+        .unwrap();
+    assert_eq!(machine.read_ram(DATA + 0x100, 7).unwrap(), response_before);
+    assert_eq!(machine.read_ram(USED, 20).unwrap(), used_before);
+
+    // Reinitialization may reuse an ID, but the endpoint generation separates
+    // the new descriptor from work retained by the previous device instance.
+    machine_configure(&mut machine, slot, 0);
+    let request = p9_message(100, 0x2222);
+    machine_bytes(&mut machine, DATA, &request);
+    machine_kick(&mut machine, slot, 0);
+    machine
+        .complete_ninep_transport_request(
+            slot,
+            old_generation,
+            NinePRequestId(1),
+            NinePOutcome::Reply(old_reply.to_vec()),
+        )
+        .unwrap();
+    assert_eq!(machine.read_ram(DATA + 0x100, 7).unwrap(), response_before);
+    assert_eq!(
+        machine_read(&mut machine, USED + 2, AccessWidth::HalfWord),
+        0
+    );
+    let mut reply = request;
+    reply[4] += 1;
+    machine
+        .complete_ninep_transport_request(
+            slot,
+            *backend.generation.borrow(),
+            NinePRequestId(1),
+            NinePOutcome::Reply(reply.to_vec()),
+        )
+        .unwrap();
+    assert_eq!(machine.read_ram(DATA + 0x100, 7).unwrap(), reply);
+    assert_eq!(
+        machine_read(&mut machine, USED + 2, AccessWidth::HalfWord),
+        1
+    );
 }
 
 #[test]

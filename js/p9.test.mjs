@@ -9,6 +9,8 @@ test("seed manifests validate paths, parents and shared inode keys without fetch
     const plugin = createHttpsSeedPlugin({ files: [{ path: "dir/file", size: 3, source: "objects/123" }] }, new URL("https://example.org/tree/"));
     assert.equal(plugin.entries[0].key, "https://example.org/tree/objects/123");
     assert.equal(plugin.entries[0].size, 3);
+    const literal = createHttpsSeedPlugin({ files: [{ path: "dir/a#?%.txt", size: 0 }] }, new URL("https://example.org/tree/"));
+    assert.equal(literal.entries[0].key, "https://example.org/tree/dir/a%23%3F%25.txt");
 });
 
 test("HTTP source forwards cancellation and reports failures on demand", async () => {

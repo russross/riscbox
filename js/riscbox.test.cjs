@@ -309,6 +309,29 @@ test("random host import fills WASM memory from Web Crypto", () => {
     assert.equal(host.imports.random_fill(65535, 2), -1);
 });
 
+test("cancelled startup ignores late HTTP failures", async () => {
+    const fake = fakeModule();
+    fake.exports.riscbox_destroy = () => 0;
+    const url = Buffer.from("https://host/firmware");
+    new Uint8Array(fake.exports.memory.buffer, 64, url.length).set(url);
+    const actions = [1, 0];
+    fake.exports.riscbox_next_action = () => actions.shift() ?? 0;
+    fake.exports.riscbox_action_value = () => 7;
+    fake.exports.riscbox_action_data_address = () => 64;
+    fake.exports.riscbox_action_data_length = () => url.length;
+    let fail;
+    const errors = [];
+    const runtime = new Riscbox(fake.exports, {
+        fetch: () => new Promise((_resolve, reject) => { fail = reject; }),
+        onError: error => errors.push(error),
+    });
+    runtime.drainActions();
+    await runtime.destroy();
+    fail(new Error("obsolete request failed"));
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(errors, []);
+});
+
 test("adapter replaces a WFI wakeup with an immediate quantum", async () => {
     const fake = fakeModule();
     let runs = 0;

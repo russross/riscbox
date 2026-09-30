@@ -10,9 +10,11 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 import tempfile
 import types
+import sys
 import unittest
 
 SCRIPT = Path(__file__).parents[1] / "tools" / "image_deployment.py"
@@ -24,6 +26,7 @@ def load_helper() -> types.ModuleType:
     if spec is None or spec.loader is None:
         raise RuntimeError(f"cannot load {SCRIPT}")
     module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -32,6 +35,25 @@ helper = load_helper()
 
 
 class ImageDeploymentTests(unittest.TestCase):
+    def test_example_manifest_records_binary_sizes_and_rejects_path_escape(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "demo").mkdir()
+            (root / "demo" / "file").write_bytes(b"\x00\xff\r\n")
+            source = root / "examples.json"
+            output = root / "deployed.json"
+            record = {"id": "demo", "title": "Demo", "editable": "file", "files": ["file"]}
+            source.write_text(json.dumps([record]))
+            helper.write_example_manifest(source, output)
+            self.assertEqual(json.loads(output.read_text())[0]["files"], [{"path": "file", "size": 4}])
+            prior = output.read_bytes()
+            for paths in [["file", "file"], ["../outside"], ["missing"]]:
+                record["files"] = paths
+                source.write_text(json.dumps([record]))
+                with self.assertRaises(ValueError):
+                    helper.write_example_manifest(source, output)
+                self.assertEqual(output.read_bytes(), prior)
+
     def test_rewrite_changes_only_boot_and_primary_drive_assets(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

@@ -76,8 +76,8 @@ remove this active plan.
 
 #### Status and scope
 
-Milestones 1–5 are complete. The browser promise facade uses Rust filesystem
-handles; existing image applications await migration in milestone 6. The
+Milestones 1–6 are complete. The browser facade and image applications use Rust
+filesystem handles; full deployed-image acceptance remains in milestone 7. The
 protocol profile, transport ownership, and calling contract are documented in
 [the session guide](src/ninep_protocol/README.md), [the filesystem ABI guide](src/browser_abi/ninep/README.md),
 and [the facade guide](js/p9/README.md).
@@ -160,18 +160,8 @@ browser migration must preserve editor origin filtering with numeric origin IDs.
 
 #### Remaining milestones
 
-Milestones 1–5 are complete; milestones 6–7 have not started. Advance these
-statuses when a milestone passes its stated tests and is committed.
-
-6.  **Migrate images and host applications.** Change
-    `images/risclet/ui/index.ts` to create a filesystem for each example from
-    its manifest before VM boot, load file bodies through HTTP on demand, and
-    await editor reads, writes, file lists, instructions, and change handling.
-    Guard late UI results when switching examples. Keep `fs0` and `fs1` in
-    `images/risclet/riscbox.cfg` as separate sessions over one filesystem.
-    Update `images/bin/build-distribution`, image Makefiles, and deployed
-    `p9/` modules; build Risclet, Alpine, and xv6 profile distributions. The
-    QEMU build-time 9p setup mount is a separate path and should remain intact.
+Milestones 1–6 are complete; milestone 7 is in progress. Complete deployed-image
+acceptance before removing this migration plan.
 
 7.  **Validate and publish the contract.** Run `make test-unit`, `make check`,
     `make wasm`, and real WASM/Chrome tests. Exercise Risclet boot, mount,

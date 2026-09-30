@@ -77,17 +77,36 @@ export async function facadeRegression(Filesystem, SeedBuilder, runtime, firmwar
     runtime.options.fetch = async () => ({ status: 200, arrayBuffer: async () => firmware.buffer.slice(firmware.byteOffset, firmware.byteOffset + firmware.byteLength) });
     const config = { version: 1, machine: "riscv64", memory_size: 32, bios: "https://host/fw.bin", console: "uart",
         fs0: { server: "workspace", tag: "first" }, fs1: { server: "workspace", tag: "second" } };
+    const other = await Filesystem.create(runtime);
+    await other.bind("workspace");
+    await filesystem.bind("workspace");
+    await other.close();
+    // Cancelling startup retires its pending response before a new VM can start.
+    const fetchFirmware = runtime.options.fetch;
+    let lateFirmware;
+    runtime.options.fetch = () => new Promise(resolve => { lateFirmware = resolve; });
+    runtime.startResolved(config);
+    await runtime.destroy();
+    lateFirmware(await fetchFirmware());
+    await new Promise(resolve => setTimeout(resolve, 0));
+    check(!runtime.started, "cancelled startup stays inactive");
+    runtime.options.fetch = fetchFirmware;
     runtime.startResolved(config);
     for (let attempt = 0; attempt < 100 && !output.includes("ABI GUEST PASS"); attempt++) await new Promise(resolve => setTimeout(resolve, 5));
     check(output.includes("ABI GUEST PASS") && !output.includes("ABI GUEST FAIL"), "guest async adapter reply");
     try { await filesystem.close(); throw new Error("attached close accepted"); }
     catch (error) { check(error.errno === 16, "attached close rejected"); }
     await filesystem.writeFile("retained", "yes");
+    await filesystem.installSeed({ entries, loader });
+    const retainedRead = filesystem.readFile("lazy");
+    await Promise.resolve();
     await runtime.reset();
-    check(decoder.decode(await filesystem.readFile("retained")) === "yes", "VM reset retains namespace");
-    await runtime.halt();
+    resolveLoad(new TextEncoder().encode("old"));
+    check(decoder.decode(await retainedRead) === "old", "VM reset retains host source work");
+    check((await filesystem.listFiles()).includes("lazy"), "VM reset retains namespace");
     await filesystem.reset();
     await filesystem.writeFile("after-reset", "yes");
+    await runtime.halt();
     await runtime.destroy();
     check(decoder.decode(await filesystem.readFile("after-reset")) === "yes", "destroy retains host access");
     runtime.startResolved(config);

@@ -11,19 +11,19 @@ import { Compartment, EditorSelection, EditorState } from "@codemirror/state";
 import { EditorView, keymap, ViewUpdate } from "@codemirror/view";
 import { FitAddon, init as initializeGhostty, Terminal } from "ghostty-web";
 import { basicSetup } from "codemirror";
-import { Memory9PServer, type P9Change, type SyncResult } from "../../../js/p9";
+import { Filesystem, createHttpsSeedPlugin, type FilesystemRuntime, type HttpsSeedFile, type P9Change } from "../../../js/p9";
 
 interface ExampleDescription {
     readonly id: string;
     readonly title: string;
     readonly editable: string;
     readonly documentation?: string;
-    readonly files: readonly string[];
+    readonly files: readonly HttpsSeedFile[];
 }
 
 interface ExampleState {
     readonly description: ExampleDescription;
-    readonly filesystem: Memory9PServer;
+    readonly filesystem: Filesystem;
 }
 
 interface FileTreeNode {
@@ -40,8 +40,15 @@ interface FramebufferGeometry {
     readonly stride: number;
 }
 
-interface RiscboxRuntime {
-    startFromUrl(configUrl: string, memoryMiB: number): Promise<number>;
+interface ResolvedVmConfig {
+    readonly version: number;
+    readonly machine: string;
+    readonly memory_size: number;
+}
+
+interface RiscboxRuntime extends FilesystemRuntime {
+    readonly started: boolean;
+    startResolved(config: ResolvedVmConfig, memoryMiB: number): number;
     consoleInput(bytes: Uint8Array): void;
     consoleResize(columns: number, rows: number): void;
     boot(): Promise<void>;
@@ -52,15 +59,6 @@ interface RiscboxRuntime {
 
 interface RiscboxOptions {
     readonly debugTiming?: boolean;
-    readonly p9Servers: ReadonlyMap<string, {
-        connect(): {
-            request(bytes: Uint8Array, replyCapacity: number): Promise<
-                | { readonly kind: "reply"; readonly bytes: Uint8Array }
-                | { readonly kind: "suppressed" }
-            >;
-            close(): void;
-        };
-    }>;
     readonly consoleWrite: (text: string | Uint8Array) => void;
     readonly consoleReset?: () => void;
     readonly onVmStarted: () => void;
@@ -72,6 +70,7 @@ interface RiscboxOptions {
 
 interface RiscboxApi {
     instantiate(bytes: ArrayBuffer, options: RiscboxOptions): Promise<RiscboxRuntime>;
+    loadResolvedConfig(url: string): Promise<ResolvedVmConfig>;
 }
 
 declare global {
@@ -116,10 +115,16 @@ let editor: EditorView;
 let programmaticEditorUpdate = false;
 let vmController: VmController;
 
-function resultValue<Value>(result: SyncResult<Value>): Value {
-    if (result.kind === "ok") return result.value;
-    if (result.kind === "not-loaded") throw new Error(`File is not loaded: ${result.paths.join(", ")}`);
-    throw new Error(result.error.message);
+let viewGeneration = 0;
+let openGeneration = 0;
+let treeGeneration = 0;
+let instructionsGeneration = 0;
+let switchQueue = Promise.resolve();
+const EDITOR_ORIGIN = 1n;
+
+function reportUiError(error: unknown): void {
+    console.error(error);
+    requiredElement("status").textContent = error instanceof Error ? error.message : String(error);
 }
 
 function requiredElement(id: string): HTMLElement {
@@ -142,13 +147,39 @@ function normalizeRelativePath(raw: string): string {
     if (raw.includes("\\")) {
         throw new Error(`Invalid example path: ${JSON.stringify(raw)}`);
     }
-    const trimmed = raw.trim();
-    const parts = trimmed.split("/");
-    if (trimmed === "" || trimmed.startsWith("/")
+    const parts = raw.split("/");
+    if (raw === "" || raw.startsWith("/") || raw.includes("\0")
         || parts.some((part) => part === "" || part === "." || part === "..")) {
         throw new Error(`Invalid example path: ${JSON.stringify(raw)}`);
     }
     return parts.join("/");
+}
+
+function parseExample(value: unknown): ExampleDescription {
+    if (typeof value !== "object" || value === null
+        || !("id" in value) || typeof value.id !== "string"
+        || !("title" in value) || typeof value.title !== "string"
+        || !("editable" in value) || typeof value.editable !== "string"
+        || !("files" in value) || !Array.isArray(value.files)) {
+        throw new Error("Invalid example manifest record");
+    }
+    const id = normalizeRelativePath(value.id);
+    if (id.includes("/")) throw new Error("Example ID must be one path component");
+    const files = value.files.map((file: unknown): HttpsSeedFile => {
+        if (typeof file !== "object" || file === null
+            || !("path" in file) || typeof file.path !== "string"
+            || !("size" in file) || typeof file.size !== "number"
+            || !Number.isInteger(file.size) || file.size < 0 || file.size > 0xffff_ffff) {
+            throw new Error("Invalid example file record");
+        }
+        return { path: normalizeRelativePath(file.path), size: file.size };
+    });
+    const editablePath = normalizeRelativePath(value.editable);
+    if (!files.some(file => file.path === editablePath)) throw new Error("Example editable file is missing");
+    const documentation = "documentation" in value ? value.documentation : undefined;
+    if (documentation !== undefined && typeof documentation !== "string") throw new Error("Invalid documentation path");
+    return { id, title: value.title, editable: editablePath, files,
+        ...(documentation === undefined ? {} : { documentation: normalizeRelativePath(documentation) }) };
 }
 
 function softTab(view: EditorView): boolean {
@@ -227,34 +258,39 @@ function clearEditor(): void {
     resetEditor("", false, "");
 }
 
-function openFile(path: string): void {
+async function openFile(path: string): Promise<void> {
     const example = currentExample;
+    const view = viewGeneration;
+    const request = ++openGeneration;
     if (example === null) {
         return;
     }
     let content: Uint8Array;
     try {
-        content = resultValue(example.filesystem.readFile(path));
-    } catch {
+        content = await example.filesystem.readFile(path);
+    } catch (error: unknown) {
+        if (view !== viewGeneration || request !== openGeneration) return;
         clearEditor();
-        renderFileTree();
+        void renderFileTree().catch(reportUiError);
+        reportUiError(error);
         return;
     }
+    if (view !== viewGeneration || request !== openGeneration || example !== currentExample) return;
     currentPath = path;
     if (isBinaryFile(content)) {
         resetEditor("This file appears to be a binary file and cannot be displayed in the editor.", false, path);
     } else {
         resetEditor(editorTextFromFile(content), true, path);
     }
-    renderFileTree();
+    void renderFileTree().catch(reportUiError);
     editor.focus();
 }
 
-function syncEditor(): void {
+async function syncEditor(): Promise<void> {
     if (currentExample === null || currentPath === null || editor.state.readOnly) {
         return;
     }
-    resultValue(currentExample.filesystem.writeFile(currentPath, fileContentFromEditor(), "editor"));
+    await currentExample.filesystem.writeFile(currentPath, fileContentFromEditor(), EDITOR_ORIGIN);
 }
 
 function buildFileTree(paths: readonly string[]): Record<string, FileTreeNode> {
@@ -297,8 +333,7 @@ function renderTree(node: Record<string, FileTreeNode>, parent: HTMLElement, dep
             listItem.classList.toggle("selected", item.fullPath === currentPath);
             listItem.addEventListener("click", (event: MouseEvent): void => {
                 event.stopPropagation();
-                syncEditor();
-                openFile(item.fullPath);
+                void syncEditor().then(() => openFile(item.fullPath)).catch(reportUiError);
             });
         }
         parent.append(listItem);
@@ -310,9 +345,13 @@ function renderTree(node: Record<string, FileTreeNode>, parent: HTMLElement, dep
     }
 }
 
-function renderFileTree(): void {
+async function renderFileTree(): Promise<void> {
+    const view = viewGeneration;
+    const request = ++treeGeneration;
+    const example = currentExample;
     const pane = requiredElement("file-tree-pane");
-    const paths = currentExample === null ? [] : resultValue(currentExample.filesystem.listFiles());
+    const paths = example === null ? [] : await example.filesystem.listFiles();
+    if (view !== viewGeneration || request !== treeGeneration || example !== currentExample) return;
     if (currentPath !== null && !paths.includes(currentPath)) {
         clearEditor();
     }
@@ -342,12 +381,11 @@ function imageMimeType(path: string): string | null {
     }
 }
 
-function renderInstructions(): string {
-    const filesystem = currentExample?.filesystem;
-    if (filesystem === undefined || !resultValue(filesystem.listFiles()).includes(DOC_PATH)) {
+async function renderInstructions(filesystem: Filesystem): Promise<string> {
+    if (!(await filesystem.listFiles()).includes(DOC_PATH)) {
         return "";
     }
-    const document = markdownParser.parse(decoder.decode(resultValue(filesystem.readFile(DOC_PATH))));
+    const document = markdownParser.parse(decoder.decode(await filesystem.readFile(DOC_PATH)));
     const documentUrl = new URL(DOC_PATH, "https://workspace.invalid/");
     const walker = document.walker();
     let event = walker.next();
@@ -356,7 +394,7 @@ function renderInstructions(): string {
             const url = new URL(event.node.destination, documentUrl);
             if (url.origin === documentUrl.origin) {
                 const path = decodeURIComponent(url.pathname.replace(/^\//, ""));
-                const content = resultValue(filesystem.readFile(path));
+                const content = await filesystem.readFile(path);
                 const mimeType = imageMimeType(path);
                 if (mimeType === null) {
                     throw new Error(`Instruction image has an unsupported type: ${path}`);
@@ -384,10 +422,20 @@ function selectTab(name: "instructions" | "vm"): void {
     }
 }
 
-function updateInstructions(): void {
+async function updateInstructions(): Promise<void> {
+    const view = viewGeneration;
+    const request = ++instructionsGeneration;
+    const example = currentExample;
     const button = requiredButton("instructions-tab-button");
     const content = requiredElement("instructions-tab-content");
-    const rendered = renderInstructions();
+    let rendered: string;
+    try {
+        rendered = example === null ? "" : await renderInstructions(example.filesystem);
+    } catch (error: unknown) {
+        if (view !== viewGeneration || request !== instructionsGeneration) return;
+        throw error;
+    }
+    if (view !== viewGeneration || request !== instructionsGeneration || example !== currentExample) return;
     button.hidden = rendered === "";
     content.innerHTML = rendered;
     if (rendered === "" && content.classList.contains("active")) {
@@ -395,7 +443,7 @@ function updateInstructions(): void {
     }
 }
 
-function handleFilesystemChange(example: ExampleState, change: P9Change): void {
+async function handleFilesystemChange(example: ExampleState, change: P9Change): Promise<void> {
     if (example !== currentExample) {
         return;
     }
@@ -403,19 +451,24 @@ function handleFilesystemChange(example: ExampleState, change: P9Change): void {
         currentPath = change.path;
     }
     if (change.kind !== "write") {
-        renderFileTree();
+        void renderFileTree().catch(reportUiError);
     }
     if (change.path === DOC_PATH
         || (change.kind === "rename" && change.oldPath === DOC_PATH)
-        || change.kind === "reset") {
-        updateInstructions();
+        || change.kind === "reset" || change.kind === "rescan") {
+        void updateInstructions().catch(reportUiError);
     }
-    if (currentPath !== null && change.source !== "editor"
+    if (currentPath !== null && !(change.source === "host" && change.origin === EDITOR_ORIGIN)
         && (change.path === currentPath
+            || change.aliases.includes(currentPath)
+            || change.kind === "reset" || change.kind === "rescan"
             || (change.kind === "rename" && change.oldPath === currentPath))) {
-        const paths = resultValue(example.filesystem.listFiles());
+        const view = viewGeneration;
+        const path = currentPath;
+        const paths = await example.filesystem.listFiles();
+        if (view !== viewGeneration || example !== currentExample || currentPath !== path) return;
         if (paths.includes(currentPath)) {
-            openFile(currentPath);
+            await openFile(currentPath);
         } else {
             clearEditor();
         }
@@ -463,8 +516,8 @@ class VmController {
         this.updateControls();
     }
 
-    setTarget(target: ExampleState): void {
-        this.stop();
+    async setTarget(target: ExampleState): Promise<void> {
+        await this.stop();
         this.target = target;
         this.resetTerminal();
         this.bootButton.hidden = false;
@@ -488,17 +541,15 @@ class VmController {
         }
     }
 
-    private stop(): void {
+    private async stop(): Promise<void> {
         this.generation += 1;
         const runtime = this.runtime;
-        const halted = this.state === "halted";
-        this.runtime = undefined;
         this.state = "ready";
         if (runtime) {
-            void (halted ? Promise.resolve() : runtime.halt())
-                .then(() => runtime.destroy())
-                .catch((error: unknown) => console.error("Could not release VM", error));
+            if (runtime.started) await runtime.halt();
+            await runtime.destroy();
         }
+        this.state = "ready";
     }
 
     private resetTerminal(): void {
@@ -516,7 +567,7 @@ class VmController {
             }
             return;
         }
-        this.stop();
+        await this.stop();
         this.resetTerminal();
         await this.boot();
     }
@@ -543,58 +594,14 @@ class VmController {
         this.updateControls();
         requiredElement("status").textContent = `Loading VM · ${target.description.title}`;
         try {
-            const response = await fetch("riscbox.wasm", { cache: "no-cache" });
-            if (!response.ok) {
-                throw new Error(`WASM request failed with status ${response.status}`);
-            }
-            const runtime = await window.Riscbox.instantiate(await response.arrayBuffer(), {
-                debugTiming: true,
-                p9Servers: new Map([["default", target.filesystem]]),
-                consoleWrite: (text: string | Uint8Array): void => {
-                    if (generation === this.generation) {
-                        this.terminal.write(text);
-                    }
-                },
-                consoleReset: (): void => {
-                    if (generation === this.generation) this.resetTerminal();
-                },
-                onVmStarted: (): void => {
-                    if (generation !== this.generation) {
-                        return;
-                    }
-                    this.state = "running";
-                    this.updateControls();
-                    requiredElement("status").textContent = `Running · ${target.description.title}`;
-                    this.fit();
-                    runtime.consoleResize(this.terminal.cols, this.terminal.rows);
-                    this.terminal.focus();
-                },
-                onVmHalted: (): void => {
-                    if (generation !== this.generation) return;
-                    this.state = "halted";
-                    this.updateControls();
-                    requiredElement("status").textContent = `Halted · ${target.description.title}`;
-                },
-                onVmReset: (): void => {
-                    if (generation !== this.generation) return;
-                    this.state = "running";
-                    this.updateControls();
-                    requiredElement("status").textContent = `Running · ${target.description.title}`;
-                    runtime.consoleResize(this.terminal.cols, this.terminal.rows);
-                    this.terminal.focus();
-                },
-                onError: (error: unknown): void => {
-                    if (generation === this.generation) {
-                        this.fail(error instanceof Error ? error.message : String(error));
-                    }
-                },
-            });
-            if (generation !== this.generation) {
-                return;
-            }
-            this.runtime = runtime;
+            const runtime = this.runtime;
+            if (runtime === undefined) throw new Error("Runtime is unavailable");
+            const config = await window.Riscbox.loadResolvedConfig(new URL("riscbox.cfg", window.location.href).href);
+            if (generation !== this.generation) return;
+            await target.filesystem.bind("default");
+            if (generation !== this.generation) return;
             this.fit();
-            const result = await runtime.startFromUrl(new URL("riscbox.cfg", window.location.href).href, 256);
+            const result = runtime.startResolved(config, 256);
             if (result !== 0) {
                 throw new Error("Riscbox rejected the VM configuration");
             }
@@ -603,6 +610,37 @@ class VmController {
                 this.fail(error instanceof Error ? error.message : String(error));
             }
         }
+    }
+
+    // The runtime and host namespaces exist before any guest starts. VM teardown
+    // releases machine state while each example retains its filesystem handle.
+    async prepareRuntime(): Promise<RiscboxRuntime> {
+        const response = await fetch("riscbox.wasm", { cache: "no-cache" });
+        if (!response.ok) throw new Error(`WASM request failed with status ${response.status}`);
+        const runtime = await window.Riscbox.instantiate(await response.arrayBuffer(), {
+            debugTiming: true,
+            consoleWrite: (text): void => { this.terminal.write(text); },
+            consoleReset: (): void => this.resetTerminal(),
+            onVmStarted: (): void => this.markRunning(),
+            onVmHalted: (): void => {
+                this.state = "halted";
+                this.updateControls();
+                requiredElement("status").textContent = `Halted · ${this.target?.description.title ?? "VM"}`;
+            },
+            onVmReset: (): void => this.markRunning(),
+            onError: (error): void => this.fail(error instanceof Error ? error.message : String(error)),
+        });
+        this.runtime = runtime;
+        return runtime;
+    }
+
+    private markRunning(): void {
+        this.state = "running";
+        this.updateControls();
+        requiredElement("status").textContent = `Running · ${this.target?.description.title ?? "VM"}`;
+        this.fit();
+        this.runtime?.consoleResize(this.terminal.cols, this.terminal.rows);
+        this.terminal.focus();
     }
 
     private fail(message: string): void {
@@ -620,25 +658,23 @@ class VmController {
     }
 }
 
-async function loadExamples(): Promise<ExampleState[]> {
+async function loadExamples(runtime: RiscboxRuntime): Promise<ExampleState[]> {
     const manifestResponse = await fetch("examples/examples.json");
     if (!manifestResponse.ok) {
         throw new Error(`Could not load examples: HTTP ${manifestResponse.status}`);
     }
-    const descriptions: ExampleDescription[] = await manifestResponse.json();
+    const manifest: unknown = await manifestResponse.json();
+    if (!Array.isArray(manifest)) throw new Error("Example manifest must be an array");
+    const descriptions = manifest.map(parseExample);
     return Promise.all(descriptions.map(async (description): Promise<ExampleState> => {
-        const entries = await Promise.all(description.files.map(async (rawPath) => {
-            const path = normalizeRelativePath(rawPath);
-            const response = await fetch(`examples/${encodeURIComponent(description.id)}/${path}`);
-            if (!response.ok) {
-                throw new Error(`Could not load ${path}: HTTP ${response.status}`);
-            }
-            return [path, new Uint8Array(await response.arrayBuffer())] as const;
-        }));
-        const filesystem = new Memory9PServer();
-        filesystem.loadFiles(Object.fromEntries(entries));
+        const files = description.files.map(file => ({ ...file, path: normalizeRelativePath(file.path) }));
+        const base = new URL(`examples/${encodeURIComponent(description.id)}/`, window.location.href);
+        const filesystem = await Filesystem.create(runtime);
+        await filesystem.installSeed(createHttpsSeedPlugin({ files }, base));
         const state = { description, filesystem };
-        filesystem.subscribe((change: P9Change): void => handleFilesystemChange(state, change));
+        await filesystem.subscribe((change: P9Change): void => {
+            void handleFilesystemChange(state, change).catch(reportUiError);
+        });
         return state;
     }));
 }
@@ -655,29 +691,45 @@ function renderMenu(): void {
         button.classList.add("example-button");
         button.textContent = example.description.title;
         button.disabled = example === currentExample;
-        button.addEventListener("click", (): void => switchExample(example));
+        button.addEventListener("click", (): void => { void switchExample(example).catch(reportUiError); });
         menu.append(button);
     }
 }
 
-function switchExample(example: ExampleState): void {
-    syncEditor();
+function switchExample(example: ExampleState): Promise<void> {
+    const generation = ++viewGeneration;
+    // Serialize machine teardown and selection while old body reads can finish
+    // independently. Only the newest view request may update the visible panes.
+    const selection = switchQueue.then(async () => {
+        if (generation !== viewGeneration) return false;
+        await syncEditor();
+        await vmController.setTarget(example);
+        return generation === viewGeneration;
+    });
+    switchQueue = selection.then(() => undefined, reportUiError);
+    return selection.then(async selected => {
+        if (selected) await showExample(example, generation);
+    });
+}
+
+async function showExample(example: ExampleState, generation: number): Promise<void> {
     currentExample = example;
     currentPath = null;
-    vmController.setTarget(example);
     renderMenu();
-    renderFileTree();
-    updateInstructions();
     clearEditor();
-    const paths = resultValue(example.filesystem.listFiles());
+    await Promise.all([renderFileTree(), updateInstructions()]);
+    if (generation !== viewGeneration) return;
+    const paths = await example.filesystem.listFiles();
+    if (generation !== viewGeneration) return;
     const preferred = paths.includes(example.description.editable)
         ? example.description.editable
         : paths[0];
     if (preferred !== undefined) {
-        openFile(preferred);
+        await openFile(preferred);
     }
+    if (generation !== viewGeneration) return;
     requiredElement("status").textContent = `Ready · ${example.description.title}`;
-    if (resultValue(example.filesystem.listFiles()).includes(DOC_PATH)) {
+    if (paths.includes(DOC_PATH)) {
         selectTab("instructions");
     } else {
         selectTab("vm");
@@ -705,10 +757,10 @@ async function initialize(): Promise<void> {
                     EditorView.editable.of(false),
                     EditorState.readOnly.of(true),
                 ]),
-                EditorView.domEventHandlers({ blur: (): void => syncEditor() }),
+                EditorView.domEventHandlers({ blur: (): void => { void syncEditor().catch(reportUiError); } }),
                 EditorView.updateListener.of((update: ViewUpdate): void => {
                     if (update.docChanged && !programmaticEditorUpdate) {
-                        syncEditor();
+                        void syncEditor().catch(reportUiError);
                     }
                 }),
             ],
@@ -718,12 +770,13 @@ async function initialize(): Promise<void> {
     vmController = new VmController(requiredElement("vm-terminal"), requiredButton("vm-boot-button"));
     requiredButton("instructions-tab-button").addEventListener("click", (): void => selectTab("instructions"));
     requiredButton("vm-tab-button").addEventListener("click", (): void => selectTab("vm"));
-    examples = await loadExamples();
+    const runtime = await vmController.prepareRuntime();
+    examples = await loadExamples(runtime);
     if (examples.length === 0) {
         throw new Error("No examples are configured");
     }
     const requested = new URL(window.location.href).searchParams.get("example");
-    switchExample(examples.find((example) => example.description.id === requested) ?? examples[0]);
+    await switchExample(examples.find((example) => example.description.id === requested) ?? examples[0]);
 }
 
 document.addEventListener("DOMContentLoaded", (): void => {

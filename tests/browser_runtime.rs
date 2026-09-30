@@ -133,6 +133,39 @@ fn registered_rust_namespace_exists_before_boot_and_survives_vm_lifetimes() {
 }
 
 #[test]
+fn destroy_cancels_startup_and_retires_late_http_without_losing_filesystems() {
+    let mut runtime = BrowserRuntime::default();
+    runtime
+        .register_filesystem("workspace".into(), Filesystem::new(Limits::default(), 100))
+        .unwrap();
+    runtime
+        .with_filesystem("workspace", |fs| fs.write_file("host", b"retained"))
+        .unwrap();
+    runtime.start(start()).unwrap();
+    let (old_config, _) = request(&mut runtime);
+    runtime.destroy().unwrap();
+    runtime.start(start()).unwrap();
+    let (new_config, _) = request(&mut runtime);
+    assert_ne!(old_config, new_config);
+    runtime.complete_http(old_config, 404, Vec::new()).unwrap();
+    runtime.complete_http(new_config, 200, br#"{version:1,machine:"riscv64",memory_size:32,bios:"fw.bin",console:"uart",fs0:{server:"workspace",tag:"shared"}}"#.to_vec()).unwrap();
+    let (old_firmware, _) = request(&mut runtime);
+    runtime.destroy().unwrap();
+    runtime
+        .complete_http(old_firmware, 200, vec![0; 64])
+        .unwrap();
+    assert!(!runtime.is_running());
+    assert_eq!(runtime.next_action(), None);
+    assert_eq!(
+        runtime
+            .with_filesystem("workspace", |fs| fs.read_file("host"))
+            .unwrap(),
+        FileRead::Resident(b"retained".to_vec())
+    );
+    runtime.destroy().unwrap();
+}
+
+#[test]
 fn resolved_start_requests_assets_without_fetching_configuration() {
     let config = VmConfig::from_resolved(
         r#"{"version":1,"machine":"riscv64","memory_size":32,

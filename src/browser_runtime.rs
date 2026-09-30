@@ -1285,14 +1285,42 @@ impl BrowserRuntime {
         Ok(())
     }
 
-    /// Disposes of a halted VM and releases its attached machine resources.
+    /// Disposes of a halted VM or cancels configuration and asset startup.
     ///
     /// # Errors
-    /// Returns an error unless a VM is halted.
+    /// Returns an error if a VM is running or a quantum is active.
     pub fn destroy(&mut self) -> Result<(), RuntimeError> {
+        if self.active_quantum.is_some() {
+            return Err(RuntimeError::Machine("quantum is active".into()));
+        }
         let running = match core::mem::replace(&mut self.state, State::VmInactive) {
             State::Halted(running) => running,
-            other => {
+            State::VmInactive => return Ok(()),
+            State::Config { request_id, .. } => {
+                self.retired_http.insert(request_id);
+                self.actions.clear();
+                return Ok(());
+            }
+            State::Loading(loading) => {
+                if let Some((request_id, _)) = loading.waiting {
+                    self.retired_http.insert(request_id);
+                }
+                self.actions.clear();
+                if let Some(config) = loading.config {
+                    self.actions
+                        .extend(config.drives.into_iter().filter_map(|drive| {
+                            if let DriveConfig::Host { provider, .. } = drive {
+                                Some(HostAction::HostBlock(HostBlockAction::Close {
+                                    provider: HostBlockProviderId(provider),
+                                }))
+                            } else {
+                                None
+                            }
+                        }));
+                }
+                return Ok(());
+            }
+            other @ State::Running(_) => {
                 self.state = other;
                 return Err(RuntimeError::Machine("VM is not halted".into()));
             }

@@ -157,7 +157,8 @@ must handle those events. The prepared Alpine and Risclet images run BusyBox
 machine, attached devices, 9p servers, and disk contents. `boot()` starts a
 halted VM from its boot images; `reset()` immediately resets a running VM. A
 guest-initiated poweroff halts the VM, and a guest-initiated reboot resets it
-in place. `destroy()` releases a halted VM; a later boot then needs a new VM.
+in place. `destroy()` releases a halted VM or cancels startup; a later boot
+then needs a new VM. Its runtime and filesystem handles remain usable.
 `onVmHalted(cause)` and `onVmReset(cause)` report `guest-poweroff`,
 `guest-reboot`, `host-halt`, `host-reset`, `host-boot`, or `guest-failure` as
 applicable. `onVmDestroyed()` reports teardown. `consoleReset()` and

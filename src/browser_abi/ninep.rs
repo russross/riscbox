@@ -603,6 +603,14 @@ pub extern "C" fn riscbox_fs_bind(handle: u32, address: u32, length: u32) -> i32
                 .ok_or(Error::BadHandle)?
                 .tree
                 .clone();
+            // Rebinding is allowed only before startup, so image selection can
+            // reuse fixed configuration keys without replacing namespace handles.
+            if state.filesystems.bindings.contains_key(&key) {
+                state
+                    .runtime
+                    .unregister_filesystem(&key)
+                    .map_err(|_| Error::Busy)?;
+            }
             state
                 .runtime
                 .register_filesystem_handle(key.clone(), tree)

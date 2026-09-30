@@ -54,12 +54,16 @@ Risclet starts the same daemon after mounting its shared filesystem.
 
 The browser Risclet application loads its workspaces from the tracked
 `risclet/examples/` directory. `examples.json` names each example and lists
-the files copied into its in-memory 9p tree. The distribution builder copies
-the complete directory, including dotfiles and documentation, to
-`dist/examples/`. The application is entirely static and needs only an HTTP
+the source paths in each workspace. The distribution builder publishes exact
+file sizes in `dist/examples/examples.json` and copies the complete directory,
+including dotfiles and documentation, to `dist/examples/`. The browser creates
+Rust namespace handles before VM boot and fetches bodies only when the host or
+guest reads them. There is no preload mechanism. One runtime retains all example
+handles across VM destruction, switching, reboot, and shutdown; asynchronous
+UI results are guarded against example switches. The application needs only an HTTP
 server; it does not use an RPC service. Its TypeScript source and locked npm
 dependencies live under `risclet/ui/`. The distribution build installs them
-when needed, runs the type checker, and bundles the CodeMirror, xterm.js,
+when needed, runs the type checker, and bundles the CodeMirror, Ghostty,
 Split.js, and CommonMark frontend into `dist/bundle.js`.
 
 Browser timing tests

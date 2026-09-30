@@ -19,7 +19,7 @@ Files
     identifies source content and block size, so assets with different layouts have
     distinct URLs. Risclet and xv6 profile distribute single EROFS roots;
     Alpine distributes ext4.
-*   `p9/` contains the generated browser-backed 9p server modules and
+*   `p9/` contains the generated Rust filesystem promise facade modules and
     declarations.
 
 Publishing
@@ -111,45 +111,41 @@ limits, reconnect behavior, and production origin-service requirements.
 9p file sharing
 ---------------
 
-A browser-backed filesystem names a registered server and mount tag with
-`{ server, tag }`. The former `file`, `socket`, and `js9p` forms are not
-accepted. When instantiating the runtime, pass a `p9Servers` map. Each registered server creates an independent session
-with asynchronous `request(request, replyCapacity)` and synchronous `close()`
-methods. The generated `build/js/p9/index.js` module provides
-`Memory9PServer`:
+A filesystem names a bound Rust namespace and mount tag with `{ server, tag }`.
+The former `file`, `socket`, and `js9p` forms and JavaScript protocol-server
+registration are not supported. Create and bind the namespace before startup:
 
 ```js
-import { Memory9PServer } from "./p9/index.js";
-
-const server = new Memory9PServer({
-    "hello.txt": "shared with the guest\n",
-});
-
-const runtime = await Riscbox.instantiate(wasmBytes, {
-    p9Servers: new Map([["workspace", server]]),
-});
+import { Filesystem, createHttpsSeedPlugin } from "./p9/index.js";
+const runtime = await Riscbox.instantiate(wasmBytes, options);
+const workspace = await Filesystem.create(runtime);
+await workspace.writeFile("hello.txt", "shared with the guest\n");
+await workspace.bind("workspace");
+await runtime.startFromUrl(configUrl);
+console.log(new TextDecoder().decode(await workspace.readFile("hello.txt")));
 ```
 
-Application operations return explicit results rather than throwing for normal
-filesystem errors:
+Host operations always return promises and reject with `FilesystemError`
+carrying positive Linux errno. Filesystems remain usable before boot, while
+halted, and after VM destroy. Multiple endpoints in one VM may share a handle;
+multiple live VMs may not. Bind can replace a key only while the runtime is
+inactive. VM reset retains namespace data and retires protocol state.
+Filesystem reset replaces data while keeping device queues coherent; the guest
+may need to remount. Destroy can also cancel startup and ignores late boot
+responses, allowing the runtime to select another namespace.
 
-```js
-const result = server.readFile("hello.txt");
-if (result.kind === "ok") {
-    console.log(new TextDecoder().decode(result.value));
-}
-```
+Large static trees use `SeedBuilder` and an arbitrary typed source loader, or
+`createHttpsSeedPlugin({ files: [{ path, size, source? }] }, baseUrl)`.
+`installSeed(plugin)` installs metadata without requesting bodies. Host and
+guest reads share on-demand loads; no preload mechanism exists. Source failures
+return `EIO`, and `retrySource(path)` allows a later read to retry. Hosts supply
+credentials and protocol handling in custom loader plugins. See the
+[facade guide](https://github.com/russross/riscbox/blob/main/js/p9/README.md)
+for subscriptions and source ownership.
 
-Large static trees may instead use `SeedBuilder` with a single typed loader.
-`readFile()` reports `not-loaded`; `readFileAsync()` and guest reads start and
-share the load. The supplied module includes HTTPS-manifest and pre-downloaded
-tar plugin examples. Deployment manifests, archives, loader interpretation,
-and content-addressed URLs should be immutable for a filesystem instance;
-publish a new plugin and server instance to refresh them.
+Mount using the configured tag:
 
-Mount it in Linux with the same tag used by the configuration:
-
-    mount -t 9p -o trans=virtio,version=9p2000.L shared /mnt/shared
+    mount -t 9p -o trans=virtio,version=9p2000.L,cache=none shared /mnt/shared
 
 Browser integration
 -------------------

@@ -16,7 +16,7 @@ build/rootfs.ext4: setup.sh $(BIN)/create-alpine-ext4 $(BIN)/run-image-setup $(B
 build/rootfs.erofs: build/rootfs.ext4 $(BIN)/create-erofs-from-ext4
 	$(BIN)/create-erofs-from-ext4 $< $@
 
-dist/riscbox.cfg: Makefile build/rootfs.erofs riscbox.cfg $(WEB_SOURCES) $(JS_SOURCES) $(ROOT)/js/riscbox.js $(ROOT)/build/js/.built $(WASM) $(ROOT)/kernel/.asset-name $(ROOT)/opensbi/.asset-name $(BIN)/build-distribution $(ROOT)/tools/splitimg.py $(ROOT)/tools/image_deployment.py ../DEPLOYMENT.md ../web/index.html
+dist/riscbox.cfg: Makefile build/rootfs.erofs riscbox.cfg $(WEB_SOURCES) $(JS_SOURCES) $(ROOT)/js/riscbox.js $(ROOT)/js/p9/README.md $(ROOT)/build/js/.built $(WASM) $(ROOT)/kernel/.asset-name $(ROOT)/opensbi/.asset-name $(BIN)/build-distribution $(ROOT)/tools/splitimg.py $(ROOT)/tools/image_deployment.py ../DEPLOYMENT.md ../web/index.html
 	$(BIN)/build-distribution . build/rootfs.ext4 --erofs
 
 profile: all

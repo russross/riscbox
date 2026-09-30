@@ -21,6 +21,8 @@ const bytes = await workspace.readFile("hello.txt");
 
 Configure `fs0: { server: "workspace", tag: "shared" }` and mount `shared`
 with Linux `trans=virtio,version=9p2000.L,cache=none`. Bind before VM startup.
+Rebinding an existing key while inactive selects a different handle and keeps
+the old namespace intact. Active or halted VM bindings cannot be changed.
 Multiple endpoints in one VM may use the same tree. A filesystem belongs to
 its runtime's WASM instance and cannot be attached to a second live VM.
 
@@ -77,7 +79,8 @@ Lifecycle and browser boundary
 Host access works before boot and while halted. VM reset/reboot preserves the
 namespace and pending host source reads, but discards protocol state. Halt and
 shutdown preserve device and protocol state. Destroy releases the VM attachment
-while retaining filesystem handles and bindings. Close requires VM teardown for
+while retaining filesystem handles and bindings. Destroy also cancels
+config/asset startup and retires late HTTP responses. Close requires VM teardown for
 bound handles; close aborts outstanding sources and rejects pending host reads.
 Filesystem reset can run while the VM runs and invalidates guest fids; the guest
 may need to remount. Pending host reads reject with `ESTALE`.

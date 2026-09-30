@@ -75,6 +75,7 @@ mkdir -p "$stage_dir/p9"
 for p9_module in "$ROOT_DIR/build/js/p9/"*.js "$ROOT_DIR/build/js/p9/"*.d.ts; do
     install -m 644 "$p9_module" "$stage_dir/p9/$(basename "$p9_module")"
 done
+install -m 644 "$ROOT_DIR/js/p9/README.md" "$stage_dir/p9/README.md"
 mkdir -p "$stage_dir/network"
 for network_module in "$ROOT_DIR/build/js/network/"*.js "$ROOT_DIR/build/js/network/"*.d.ts; do
     install -m 644 "$network_module" "$stage_dir/network/$(basename "$network_module")"
@@ -94,6 +95,10 @@ if [ -f "$image_dir/build/ui/bundle.js" ]; then
 fi
 if [ -d "$image_dir/examples" ]; then
     cp -R "$image_dir/examples" "$stage_dir/examples"
+    if [ -f "$image_dir/examples/examples.json" ]; then
+        "$ROOT_DIR/tools/image_deployment.py" examples \
+            "$image_dir/examples/examples.json" "$stage_dir/examples/examples.json"
+    fi
 fi
 split_result=$("$ROOT_DIR/tools/splitimg.py" "$distribution_image" "$stage_dir")
 drive_name=${split_result%% *}

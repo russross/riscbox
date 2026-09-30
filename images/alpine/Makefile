@@ -12,7 +12,7 @@ build/rootfs.ext4: setup.sh $(BIN)/create-alpine-ext4 $(BIN)/run-image-setup $(R
 	$(BIN)/create-alpine-ext4 64 $@
 	$(BIN)/run-image-setup $@ setup.sh
 
-dist/riscbox.cfg: Makefile build/rootfs.ext4 riscbox.cfg $(JS_SOURCES) $(ROOT)/js/riscbox.js $(ROOT)/build/js/.built $(WASM) $(ROOT)/kernel/.asset-name $(ROOT)/opensbi/.asset-name $(BIN)/build-distribution $(ROOT)/tools/splitimg.py $(ROOT)/tools/image_deployment.py ../DEPLOYMENT.md ../web/index.html
+dist/riscbox.cfg: Makefile build/rootfs.ext4 riscbox.cfg $(JS_SOURCES) $(ROOT)/js/riscbox.js $(ROOT)/js/p9/README.md $(ROOT)/build/js/.built $(WASM) $(ROOT)/kernel/.asset-name $(ROOT)/opensbi/.asset-name $(BIN)/build-distribution $(ROOT)/tools/splitimg.py $(ROOT)/tools/image_deployment.py ../DEPLOYMENT.md ../web/index.html
 	$(BIN)/build-distribution . build/rootfs.ext4
 
 clean:

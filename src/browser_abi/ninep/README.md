@@ -71,7 +71,9 @@ capacity. Change tracking starts disabled. Handles and host request IDs are
 monotonic and never recycled within a WASM instance; zero is not a handle.
 
 Bind before VM startup. Configured `{ server, tag }` endpoints matching the key
-receive independent Rust sessions. Several endpoints or keys may share a handle
+receive independent Rust sessions. An existing key may be rebound while the
+runtime is inactive; rebinding leaves the previous handle's namespace intact.
+Several endpoints or keys may share a handle
 in one VM. A namespace attachment guard rejects a second live VM. Failed startup
 releases acquired guards; reset, reboot, shutdown, and host halt retain them.
 Destroy releases them, while the filesystem and key bindings remain available

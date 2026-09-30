@@ -231,6 +231,7 @@
             this.started = false;
             this.pendingControls = [];
             this.blockGenerations = new Map();
+            this.httpGeneration = 0;
         }
 
         static hostImports(options = {}) {
@@ -381,6 +382,8 @@
                         if (name === "reset" || name === "request_shutdown" ||
                             name === "request_reboot") this.scheduleWakeup(0);
                         if (name === "destroy") {
+                            this.httpGeneration++;
+                            this.started = false;
                             this.cancelWakeup();
                             this.options.onVmDestroyed?.();
                         }
@@ -586,6 +589,7 @@
                 const ptr = this.exports.riscbox_action_data_address();
                 const len = this.exports.riscbox_action_data_length();
                 if (kind === 1) {
+                    const generation = this.httpGeneration;
                     const url = decoder.decode(this.bytes(ptr, len));
                     const fetchRequest = this.options.fetch ?? globalThis.fetch;
                     if (typeof fetchRequest !== "function")
@@ -595,6 +599,7 @@
                         : hashedPath ? "force-cache" : "default";
                     Promise.resolve(fetchRequest(url, { cache })).then(async (response) => {
                         const data = new Uint8Array(await response.arrayBuffer());
+                        if (generation !== this.httpGeneration) return;
                         const status = response.status ?? 200;
                         this.withBytes(data, (dataPtr, dataLen) => {
                             const result = this.exports.riscbox_http_complete(
@@ -606,7 +611,9 @@
                         this.drainActions();
                         if (this.started)
                             this.scheduleWakeup(0);
-                    }).catch((error) => this.options.onError?.(error));
+                    }).catch((error) => {
+                        if (generation === this.httpGeneration) this.options.onError?.(error);
+                    });
                 } else if (kind === 2) {
                     this.started = true;
                     this.options.onVmStarted?.();
@@ -637,6 +644,7 @@
                     this.cancelWakeup();
                     this.options.onVmHalted?.(cause);
                 } else if (kind === 11) {
+                    this.httpGeneration++;
                     const cause = LIFECYCLE_CAUSES[value];
                     if (cause === undefined)
                         throw new Error(`invalid VM reset cause ${value}`);

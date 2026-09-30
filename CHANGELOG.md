@@ -4,6 +4,13 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Migrated Risclet to Rust filesystem handles and promise-based editor,
+    file-tree, instruction, and notification operations. Example manifests
+    publish file sizes; bodies load only on demand. One WASM runtime retains
+    all examples across VM lifetimes. Switching cancels pending startup and
+    guards late UI results; inactive bindings can select another handle.
+    Rebuilt Risclet, Alpine, and xv6 profile distributions with the Rust facade.
+
 *   Replaced the browser TypeScript 9p server with a promise-based `Filesystem`
     facade over the Rust namespace and 9P2000.L sessions. Host operations work
     before boot, reject with Linux errno, and retain state across VM lifetimes.

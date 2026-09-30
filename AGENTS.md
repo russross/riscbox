@@ -155,6 +155,9 @@ retaining host backends, 9p servers, HTTP clean cache and CoW data, and guest
 RAM mappings. Pending 9p work is retired by generation; pending HTTP requests
 are retired without reusing request IDs. Console and framebuffer host callbacks
 receive reset notifications. Destroy releases the machine and 9p sessions.
+Destroy also cancels config/asset startup, retires its pending HTTP response,
+and permits reuse of the runtime and independent filesystem handles. Browser
+HTTP completions and errors are guarded by the VM lifecycle generation.
 
 The Risclet demo loads the custom Linux kernel directly through OpenSBI. Its
 single EROFS disk is the read-only root filesystem; tmpfs supplies `/tmp` and
@@ -162,6 +165,10 @@ the writable overlay layers for `/var` and `/home`. The device tree model
 identifies the platform as `riscbox`; QEMU names remain in functional board
 bindings and build targets. Linux uses UART early and the VirtIO console for
 login.
+The Risclet host creates all example namespace handles in one runtime before
+boot. Deployed manifests declare file sizes, and HTTP bodies load only on reads.
+Editor operations and notifications use promises and numeric origin filtering.
+Example switching serializes VM teardown and binding and guards late UI reads.
 
 Rust sizes each execution quantum from a measured emulated cycle rate and a
 target duration, twenty milliseconds by default. Each quantum locks its rate

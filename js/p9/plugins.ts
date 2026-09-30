@@ -17,7 +17,8 @@ export function createHttpsSeedPlugin(
 ): SeedPlugin<string> {
     const builder = new SeedBuilder<string>();
     for (const file of manifest.files) {
-        const source = new URL(file.source ?? file.path, baseUrl).href;
+        const path = file.path.split("/").map(encodeURIComponent).join("/");
+        const source = new URL(file.source ?? path, baseUrl).href;
         builder.addFile(file.path, file.size, source,
             file.inodeKey === undefined ? {} : { inodeKey: file.inodeKey });
     }

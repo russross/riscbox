@@ -18,7 +18,7 @@ use crate::machine::{
     MachineError,
 };
 use crate::ninep::{Filesystem, FilesystemError, LoadTicket};
-use crate::ninep_backend::{RustFilesystem, RustNineP};
+use crate::ninep_backend::{FilesystemAttachment, RustFilesystem, RustNineP};
 use crate::platform::FinishStatus;
 use crate::tinyemu_core::CpuRunExitReason;
 use crate::virtio_devices::{
@@ -456,6 +456,7 @@ struct Running {
     host_blocks: BTreeMap<HostBlockProviderId, (usize, HostBlockGeneration)>,
     ninep_slots: Vec<usize>,
     ninep_endpoints: BTreeMap<NinePEndpointId, usize>,
+    _filesystem_attachments: Vec<FilesystemAttachment>,
     pending_http: BTreeMap<u32, PendingHttp>,
 }
 
@@ -567,13 +568,47 @@ impl BrowserRuntime {
         key: String,
         filesystem: Filesystem,
     ) -> Result<(), RuntimeError> {
+        self.register_filesystem_handle(key, RustFilesystem::new(filesystem))
+    }
+
+    /// Registers an independently owned filesystem handle before startup.
+    ///
+    /// # Errors
+    /// Returns an error for duplicate keys or a VM that has begun startup.
+    pub fn register_filesystem_handle(
+        &mut self,
+        key: String,
+        filesystem: RustFilesystem,
+    ) -> Result<(), RuntimeError> {
         if !matches!(self.state, State::VmInactive) || self.filesystems.contains_key(&key) {
             return Err(RuntimeError::InvalidConfig(
                 "filesystem registration requires an unused key before startup".into(),
             ));
         }
-        self.filesystems
-            .insert(key, RustFilesystem::new(filesystem));
+        self.filesystems.insert(key, filesystem);
+        Ok(())
+    }
+
+    /// Removes a binding after VM teardown without destroying its namespace.
+    ///
+    /// # Errors
+    /// Returns an error while VM resources or startup are active.
+    pub fn unregister_filesystem(&mut self, key: &str) -> Result<(), RuntimeError> {
+        if !matches!(self.state, State::VmInactive) {
+            return Err(RuntimeError::AlreadyStarted);
+        }
+        self.filesystems.remove(key);
+        Ok(())
+    }
+
+    /// Publishes host namespace changes after its borrow has ended.
+    ///
+    /// # Errors
+    /// Returns an error for invalid backend results or guest descriptors.
+    pub fn poll_filesystems(&mut self) -> Result<(), RuntimeError> {
+        if let State::Running(running) | State::Halted(running) = &mut self.state {
+            running.machine.poll_ninep()?;
+        }
         Ok(())
     }
 
@@ -1499,6 +1534,18 @@ impl BrowserRuntime {
                 block_slots.push(machine.add_http_block_device(store, id)?);
             }
         }
+        // Claims are held by the VM rather than individual endpoints. Failed
+        // construction drops these claims and closes any sessions already added.
+        let mut trees: Vec<RustFilesystem> = Vec::new();
+        let mut filesystem_attachments = Vec::new();
+        for entry in &config.filesystems {
+            if let Some(tree) = self.filesystems.get(&entry.server)
+                && !trees.iter().any(|other| tree.same_tree(other))
+            {
+                filesystem_attachments.push(tree.attach().map_err(RuntimeError::Filesystem)?);
+                trees.push(tree.clone());
+            }
+        }
         let (ninep_slots, ninep_endpoints) = self.add_filesystems(&mut machine, &config)?;
         let console_slot = if config.console == Console::Virtio {
             Some(machine.add_console_device(80, 25)?)
@@ -1555,6 +1602,7 @@ impl BrowserRuntime {
             host_blocks,
             ninep_slots,
             ninep_endpoints,
+            _filesystem_attachments: filesystem_attachments,
             pending_http: BTreeMap::new(),
         }));
         self.pump_ninep_transport_actions()?;

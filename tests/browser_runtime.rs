@@ -6,6 +6,7 @@ use riscbox::browser_runtime::{
 use riscbox::config::VmConfig;
 use riscbox::host_block::HostBlockProviderId;
 use riscbox::ninep::{FileRead, Filesystem, Limits};
+use riscbox::ninep_backend::RustFilesystem;
 use riscbox::virtio_devices::{
     NinePBackend, NinePEndpointId, NinePGeneration, NinePRequestId, NinePTransportAction,
 };
@@ -19,6 +20,63 @@ fn start() -> RuntimeStart {
         height: 0,
         has_network: false,
     }
+}
+
+#[test]
+fn filesystem_handle_claims_one_vm_and_releases_on_destroy_or_failed_start() {
+    let tree = RustFilesystem::new(Filesystem::new(Limits::default(), 100));
+    let config = VmConfig::from_resolved(
+        r#"{"version":1,"machine":"riscv64","memory_size":32,"console":"uart",
+        "uart_output":true,"rtc_local_time":false,"cmdline":"","bios":"https://host/fw.bin",
+        "fs0":{"server":"share","tag":"first"},"fs1":{"server":"alias","tag":"second"}}"#,
+    )
+    .unwrap();
+    let mut first = BrowserRuntime::default();
+    first
+        .register_filesystem_handle("share".into(), tree.clone())
+        .unwrap();
+    first
+        .register_filesystem_handle("alias".into(), tree.clone())
+        .unwrap();
+    first.start_resolved(start(), config.clone()).unwrap();
+    let (id, _) = request(&mut first);
+    first
+        .complete_http(id, 200, vec![0x73, 0, 0x50, 0x10])
+        .unwrap();
+    assert!(tree.is_attached());
+    let mut second = BrowserRuntime::default();
+    second
+        .register_filesystem_handle("share".into(), tree.clone())
+        .unwrap();
+    second
+        .register_filesystem_handle("alias".into(), tree.clone())
+        .unwrap();
+    second.start_resolved(start(), config.clone()).unwrap();
+    let (id, _) = request(&mut second);
+    assert!(
+        second
+            .complete_http(id, 200, vec![0x73, 0, 0x50, 0x10])
+            .is_err()
+    );
+    first.reset().unwrap();
+    assert!(tree.is_attached());
+    first.halt().unwrap();
+    assert!(tree.is_attached());
+    first.destroy().unwrap();
+    assert!(!tree.is_attached());
+    second.start_resolved(start(), config.clone()).unwrap();
+    let (id, _) = request(&mut second);
+    assert!(second.complete_http(id, 200, Vec::new()).is_err());
+    assert!(!tree.is_attached());
+    second.start_resolved(start(), config).unwrap();
+    let (id, _) = request(&mut second);
+    second
+        .complete_http(id, 200, vec![0x73, 0, 0x50, 0x10])
+        .unwrap();
+    assert!(tree.is_attached());
+    second.halt().unwrap();
+    second.destroy().unwrap();
+    assert!(!tree.is_attached());
 }
 
 #[test]

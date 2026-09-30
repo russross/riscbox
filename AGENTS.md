@@ -64,8 +64,11 @@ Repository map and terminology
 *   `src/ninep.rs` and `src/ninep/` own the standalone Rust namespace;
     `src/ninep_protocol.rs` and `src/ninep_protocol/` own its 9P2000.L session.
     `src/ninep_backend.rs` connects registered Rust trees to VirtIO and the
-    browser runtime. Registration is currently an internal Rust API; production
-    browser applications still use the TypeScript server. The calling contract is in
+    browser runtime. `src/browser_abi/ninep.rs` exposes raw filesystem handles,
+    copied host-operation packets, source tickets, and change events; its ABI
+    guide is `src/browser_abi/ninep/README.md`. The promise facade is not yet
+    migrated, so production browser applications still use TypeScript. The
+    protocol contract is in
     `src/ninep_protocol/README.md`; migration coordination is in `DEV.md`.
 *   `images/` contains reproducible Makefile-driven image definitions and deployment tooling.
     Generated downloads, images, boot assets, and distributions are not source.
@@ -228,9 +231,16 @@ Timing and execution lexicon
 VirtIO 9p supports concurrent pending requests and resident synchronous replies.
 Rust validates descriptors and message envelopes; its registered filesystem
 backend owns protocol semantics and drains earlier retirements before `Rflush`.
-Each configured `{ server, tag }` endpoint gets an independent session. Internal
-Rust runtime registrations take ownership before boot and retain namespace state
-across VM lifetimes; unregistered keys still use the browser host registry.
+Each configured `{ server, tag }` endpoint gets an independent session. Raw
+filesystem handles exist before boot and retain namespace state across VM
+lifetimes. Bind keys before startup; a VM lifetime guard rejects a second live
+VM over one handle while allowing several endpoints in the attached VM. Halt,
+shutdown, and reset retain the guard; destroy releases it. Unregistered keys
+still use the transitional browser host registry. Host reads pin their inode
+through asynchronous loading, independent of rename, unlink, and path reuse.
+Source and host-operation completions run between CPU activations and poll
+guest sessions after releasing namespace borrows. Namespace reset reports
+`ESTALE` for pending host reads; obsolete source completions are ignored.
 The supplied TypeScript server provides shared
 inode state, independent sessions, hard links, stable directory cookies,
 quotas, byte-range locks, explicit application results, and optional lazy seed
@@ -294,7 +304,8 @@ Validation
 ----------
 
 *   `make test-unit` runs Rust, Python tool, JavaScript adapter/server tests,
-    and an executable raw-WASM 9p namespace/protocol/transport and CPU probe in Node.
+    and executable raw-WASM 9p namespace/protocol/transport, CPU, and deployed
+    filesystem ABI probes in Node.
 *   `make test` adds real WASM/Chrome network integration and 9p server tests
     for development.
 *   `make check` adds strict Clippy and Python type checks. The GitHub release

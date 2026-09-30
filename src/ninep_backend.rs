@@ -2,9 +2,9 @@
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
-use crate::ninep::{FileBody, Filesystem, FilesystemError, LoadStart, LoadTicket};
+use crate::ninep::{FileBody, Filesystem, FilesystemError, InodeId, LoadStart, LoadTicket};
 use crate::ninep_protocol::{NinePSession, Outcome, RequestId, Submission};
 use crate::virtio_devices::{
     DeviceError, NinePBackend, NinePCompletion, NinePGeneration, NinePOutcome, NinePRequestId,
@@ -15,6 +15,7 @@ use crate::virtio_devices::{
 pub struct RustFilesystem {
     filesystem: Rc<RefCell<Filesystem>>,
     loads: Rc<RefCell<VecDeque<LoadTicket>>>,
+    attachment: Rc<RefCell<Weak<()>>>,
 }
 
 impl RustFilesystem {
@@ -23,6 +24,7 @@ impl RustFilesystem {
         Self {
             filesystem: Rc::new(RefCell::new(filesystem)),
             loads: Rc::new(RefCell::new(VecDeque::new())),
+            attachment: Rc::new(RefCell::new(Weak::new())),
         }
     }
 
@@ -37,6 +39,41 @@ impl RustFilesystem {
         self.loads.borrow_mut().pop_front()
     }
 
+    /// Starts or joins namespace source work for a host operation.
+    ///
+    /// # Errors
+    /// Returns the namespace load validation error.
+    pub fn begin_load(&self, inode: InodeId) -> Result<LoadTicket, FilesystemError> {
+        let start = self.with_filesystem(|fs| fs.begin_load(inode))?;
+        if let LoadStart::Started(ticket) = start {
+            self.loads.borrow_mut().push_back(ticket);
+        }
+        Ok(start.ticket())
+    }
+
+    #[must_use]
+    pub fn same_tree(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.filesystem, &other.filesystem)
+    }
+
+    #[must_use]
+    pub fn is_attached(&self) -> bool {
+        self.attachment.borrow().upgrade().is_some()
+    }
+
+    /// Claims a tree for one VM; several endpoints share this one claim.
+    ///
+    /// # Errors
+    /// Returns an error while another VM retains the attachment.
+    pub fn attach(&self) -> Result<FilesystemAttachment, FilesystemError> {
+        if self.is_attached() {
+            return Err(FilesystemError::AlreadyExists);
+        }
+        let token = Rc::new(());
+        *self.attachment.borrow_mut() = Rc::downgrade(&token);
+        Ok(FilesystemAttachment { _token: token })
+    }
+
     fn prune_loads(&self) {
         // A host write or namespace reset may supersede source work before
         // the runtime gets back to JavaScript. Do not dispatch those tickets.
@@ -47,6 +84,11 @@ impl RustFilesystem {
                     if *load == ticket.id && *source == ticket.source && *size == ticket.size)
         });
     }
+}
+
+/// Dropping the VM's claim permits a later VM to attach the retained tree.
+pub struct FilesystemAttachment {
+    _token: Rc<()>,
 }
 
 pub struct RustNineP {

@@ -40,6 +40,58 @@ pub extern "C" fn riscbox_free(address: u32, length: u32) {
     browser_abi::riscbox_free(address, length);
 }
 
+// Filesystem packets are copied into owned storage before namespace access.
+// Returned snapshots must be copied before another filesystem activation.
+#[unsafe(no_mangle)]
+pub extern "C" fn riscbox_fs_create(address: u32, length: u32) -> u32 {
+    browser_abi::ninep::riscbox_fs_create(address, length)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn riscbox_fs_bind(handle: u32, address: u32, length: u32) -> i32 {
+    browser_abi::ninep::riscbox_fs_bind(handle, address, length)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn riscbox_fs_call(handle: u32, address: u32, length: u32) -> i32 {
+    browser_abi::ninep::riscbox_fs_call(handle, address, length)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn riscbox_fs_close(handle: u32) -> i32 {
+    browser_abi::ninep::riscbox_fs_close(handle)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn riscbox_fs_next_load() -> u32 {
+    browser_abi::ninep::riscbox_fs_next_load()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn riscbox_fs_complete_load(handle: u32, address: u32, length: u32) -> i32 {
+    browser_abi::ninep::riscbox_fs_complete_load(handle, address, length)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn riscbox_fs_next_change(handle: u32) -> i32 {
+    browser_abi::ninep::riscbox_fs_next_change(handle)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn riscbox_fs_status() -> i32 {
+    browser_abi::ninep::riscbox_fs_status()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn riscbox_fs_data_address() -> u32 {
+    browser_abi::ninep::riscbox_fs_data_address()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn riscbox_fs_data_length() -> u32 {
+    browser_abi::ninep::riscbox_fs_data_length()
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn riscbox_start(
     url_address: u32,

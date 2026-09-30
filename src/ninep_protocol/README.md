@@ -4,7 +4,8 @@ Rust 9P2000.L endpoint
 The [session](../ninep_protocol.rs) implements the standalone Rust server
 profile over [namespace state](../ninep.rs). The [Rust backend](../ninep_backend.rs)
 connects it to VirtIO and the runtime registry. The production browser still
-uses the TypeScript server until the filesystem ABI and facade are exposed.
+uses the TypeScript server until the promise facade is migrated. The
+[filesystem ABI](../browser_abi/ninep/README.md) exposes handles and source work.
 
 Wire behavior follows the [9P2000.L reference](https://github.com/chaos/diod/blob/master/protocol.md)
 and its linked Plan 9 operation specifications. TypeScript behavior is useful
@@ -85,8 +86,9 @@ Runtime and transport ownership
 startup. Configured endpoints matching the key receive independent Rust
 sessions over that tree. Unregistered keys use the transitional JavaScript
 backend. Registry entries outlive VM reset, shutdown, destroy, and recreation.
-The runtime owns each registered namespace; another runtime cannot register
-the same owned `Filesystem`. The public browser handle boundary comes later.
+The runtime may register an owned namespace or an independently owned handle.
+A VM lifetime guard permits several endpoints over a handle but rejects a
+second live VM. Destroy releases the guard while retaining the namespace.
 
 `BrowserRuntime::with_filesystem(key, operation)` finishes the host operation,
 releases its namespace borrow, and polls all attached endpoints. This includes

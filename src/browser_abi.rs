@@ -15,6 +15,9 @@ use crate::virtio_devices::{
     NinePEndpointId, NinePGeneration, NinePOutcome, NinePRequestId, NinePTransportAction,
 };
 
+#[path = "browser_abi/ninep.rs"]
+pub mod ninep;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StartRequest {
     pub config_url: String,
@@ -32,6 +35,7 @@ struct AbiState {
     start: Option<StartRequest>,
     runtime: BrowserRuntime,
     action: Option<HostAction>,
+    filesystems: ninep::FilesystemAbi,
 }
 
 thread_local! {

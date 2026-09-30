@@ -196,6 +196,13 @@ browser-runtime modules for focused testing and custom Rust-side integration.
 The crate is not published on crates.io. Its stable deployment boundary is the
 raw WASM ABI wrapped by `js/riscbox.js`.
 
+The raw WASM exports also provide independently owned Rust filesystem handles
+for advanced embedding. They support host operations before VM startup,
+on-demand source tickets, change events, and retained state across VM lifetimes.
+The [filesystem ABI guide](src/browser_abi/ninep/README.md) documents packets,
+buffer lifetimes, and attachment rules. The promise facade is still being
+migrated; the normal browser API below continues to use TypeScript 9p servers.
+
 VM configuration
 ----------------
 

@@ -4,6 +4,16 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Added raw WASM filesystem handles with whole-file host operations,
+    directory and metadata snapshots, atomic seed installation, on-demand
+    source tickets/completions, and change events with 64-bit host origins.
+    Pending host reads pin their inode through rename, unlink, and path reuse;
+    reset invalidates them explicitly. VM attachment guards reject a second
+    live VM while permitting shared endpoints, and release on destroy or
+    failed startup. Added native and deployed-WASM ABI regression probes,
+    including asynchronous guest reads through a non-PIE firmware program.
+    Existing browser applications retain the TypeScript facade during migration.
+
 *   Connected Rust 9p sessions to VirtIO and the browser runtime's internal
     filesystem registry. Resident requests complete within the notifying CPU
     run; external loads use explicit tickets dispatched between activations.

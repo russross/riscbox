@@ -76,13 +76,12 @@ remove this active plan.
 
 #### Status and scope
 
-Milestones 1–3 are complete. Registered Rust trees now use independent sessions
-through VirtIO and the browser runtime; production browser applications still
-use TypeScript until the raw ABI and facade migration. The protocol profile,
+Milestones 1–4 are complete. Production browser applications still use
+TypeScript until the facade migration. The protocol profile,
 transport ownership, and calling contract are documented in
-[the session guide](src/ninep_protocol/README.md). Milestone 4 exposes filesystem
-handles and source work to JavaScript. Do not treat the Rust server as supported
-by the host application yet.
+[the session guide](src/ninep_protocol/README.md), and binary packets are in
+[the filesystem ABI guide](src/browser_abi/ninep/README.md). Do not treat the Rust
+server as supported by the host application yet.
 
 The goal is a Rust-owned 9P2000.L filesystem and protocol engine with a small
 browser facade. A filesystem exists before VM boot and remains usable while
@@ -164,17 +163,9 @@ browser migration must preserve editor origin filtering with numeric origin IDs.
 
 #### Remaining milestones
 
-Milestones 1–3 are complete; milestones 4–7 have not started. Advance these
-statuses here when a milestone passes its stated tests and is committed.
-
-4.  **Expose filesystem handles and on-demand loads through raw WASM.** Add
-    scalar exports in `src/browser_abi.rs` and `riscbox-wasm/src/lib.rs` for
-    creating and configuring a filesystem before VM startup, host operations,
-    attaching configured server keys, load actions/completions, change events,
-    and reset. Use copied buffers with explicit lifetimes. Reject attaching
-    one handle to a second live VM, but allow both Risclet endpoints to share
-    its handle. Test bounds, invalid handles, ownership, late completions, and
-    VM destroy/recreation in native and real WASM builds.
+Milestones 1–4 are complete; milestones 5–7 have not started.
+Advance these statuses here when a milestone
+passes its stated tests and is committed.
 
 5.  **Replace the browser 9p implementation.** Make `js/p9/` a typed facade
     for promise-returning host operations, change subscriptions, `SeedBuilder`,
@@ -182,6 +173,9 @@ statuses here when a milestone passes its stated tests and is committed.
     model and no `load`, `readFileAsync`, or `not-loaded` result. Update
     `js/riscbox.js` to start plugin promises after WASM returns, deliver
     completion bytes once, and dispatch change listeners outside WASM calls.
+    Keep source polling separate from `riscbox_next_action`: drain
+    `riscbox_fs_next_load` after host reads and every host-service boundary,
+    then schedule wakeups on asynchronous completions.
     Remove `p9Sessions`, `expectResponse`, hints, and the microtask-yield loop
     only after same-quantum resident replies and delayed wakeups pass real
     Chrome tests. Remove generic JavaScript 9p server registration in favor

@@ -20,6 +20,7 @@ test-unit: js
 
 test: test-unit wasm
 	node --test tests/network_browser.test.mjs
+	node --test tests/alpine_iso_browser.test.mjs
 	RISCBOX_TEST_BROWSER=1 node --test tests/ninep_wasm.test.mjs
 	RISCBOX_TEST_BROWSER=1 node --test tests/ninep_abi.test.mjs
 

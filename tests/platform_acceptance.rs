@@ -40,6 +40,87 @@ impl BlockBackend for ImageBlock {
 }
 
 #[test]
+#[ignore = "requires a RISC-V Alpine standard ISO and built OpenSBI/U-Boot assets"]
+fn alpine_iso_boots_through_efi_and_shuts_down() {
+    let iso = read(&required_path("RISCBOX_ALPINE_ISO"));
+    let firmware = read(Path::new("opensbi/fw_dynamic.bin"));
+    let bootloader = read(Path::new("uboot/u-boot.bin"));
+    let mut machine = Machine::new(MachineConfig {
+        ram_size: 512 << 20,
+        framebuffer: None,
+    })
+    .expect("ISO machine");
+
+    // The ISO uses the same whole-sector block transport as ordinary disks.
+    // Writes remain private to this test's in-memory copy of the media.
+    machine
+        .add_block_device(
+            Box::new(ImageBlock { bytes: iso }),
+            *b"riscbox-iso-disk-000",
+        )
+        .expect("ISO block device");
+    machine
+        .load_boot(BootImages {
+            firmware: Some(&firmware),
+            kernel: Some(&bootloader),
+            initrd: None,
+            command_line: "",
+        })
+        .expect("ISO boot images");
+
+    // Follow the unmodified media through EFI, GRUB, Linux, and live userspace.
+    // UART commands check both the ISO tree and its embedded FAT boot image.
+    let mut transcript = Vec::new();
+    let mut logged_in = false;
+    let mut command_sent = false;
+    let mut pending = Vec::new();
+    let mut submitted = 0;
+    for batch in 0..20_000_u64 {
+        let ticks = batch * 100_000;
+        machine.present_guest_clocks(ticks, ticks * 100);
+        for _ in 0..15 {
+            submitted += machine.receive_console(&pending[submitted..]);
+            let _ = machine.run_cpu(200_000);
+        }
+        let output = machine.take_console_output();
+        trace_guest_output(&output);
+        transcript.extend(output);
+        let text = String::from_utf8_lossy(&transcript);
+        if !logged_in && text.contains("login:") {
+            assert_eq!(machine.receive_console(b"root\r"), 5);
+            logged_in = true;
+        }
+        if logged_in && !command_sent && text.contains(":~#") {
+            let command = concat!(
+                "mkdir -p /mnt/iso /mnt/fat; ",
+                "mount -t iso9660 -o ro /dev/vda /mnt/iso && ",
+                "test -s /mnt/iso/boot/grub/grub.cfg && ",
+                "mount -t vfat -o ro,loop /mnt/iso/boot/grub/efi.img /mnt/fat && ",
+                "test -s /mnt/fat/efi/boot/bootriscv64.efi && ",
+                "echo ISO_BOOT_OK; poweroff -f\r"
+            );
+            pending.extend_from_slice(command.as_bytes());
+            command_sent = true;
+        }
+
+        // A completed shutdown must follow successful filesystem checks.
+        if machine.finish_status() != riscbox::platform::FinishStatus::Running {
+            assert!(command_sent, "ISO guest stopped before login\n{text}");
+            assert!(
+                text.lines().any(|line| line.trim() == "ISO_BOOT_OK"),
+                "ISO/FAT checks failed\n{text}"
+            );
+            return;
+        }
+        assert!(!text.contains("Kernel panic"), "ISO guest panic\n{text}");
+    }
+    panic!(
+        "ISO acceptance timed out\n{}",
+        String::from_utf8_lossy(&transcript)
+    );
+}
+
+#[test]
 #[ignore = "requires ignored Alpine deployment assets and runs a complete guest"]
 fn alpine_reaches_login_and_shuts_down() {
     let directory = acceptance_directory();

@@ -4,6 +4,16 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Enabled RISC-V ISO boot through U-Boot EFI scanning, FAT, and El Torito
+    boot images. Linux now includes its EFI stub, compressed initramfs loading,
+    FAT/VFAT, ISO9660 with Rock Ridge/Joliet, loop devices, and SquashFS with
+    zlib/XZ/Zstandard. Validated Alpine standard 3.24.2 riscv64 through EFI,
+    GRUB, login, ISO9660/FAT reads, and shutdown on Riscbox and in Chrome.
+    The rebuilt kernel also passed EFI boot and ISO9660/FAT/SquashFS reads
+    from an ISO with only an El Torito boot catalog and no GPT.
+    Added optional native and browser ISO acceptance tests; browser coverage
+    selects host-array or split HTTP media.
+
 *   Buffered Risclet editor writes with a bounded thirty-second flush deadline,
     revision acknowledgements, retained failed edits, automatic retry, and
     conflict decisions before external changes replace dirty text. File and

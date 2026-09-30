@@ -19,7 +19,7 @@ Typical uses include:
 
 Riscbox supports one little-endian RV64 hart, M/S/U privilege modes, Sv39,
 OpenSBI, current xv6, and a focused QEMU `virt`-style device set. It intentionally
-does not support RV32, SMP, vectors, hypervisor mode, PCIe, UEFI, or general
+does not support RV32, SMP, vectors, hypervisor mode, PCIe, or general
 device emulation. Native Rust builds support testing; the browser is the
 deployment target.
 
@@ -52,6 +52,36 @@ versions in this repository. To use U-Boot, set `kernel` to the archive's
 `/boot/Image` and `/boot/extlinux/extlinux.conf` in the guest disk; U-Boot
 loads Linux from the disk. Decompress the included `linux-HASH.gz` asset to
 supply that Image.
+
+To boot a RISC-V installation ISO, use OpenSBI as `bios`, U-Boot as `kernel`,
+and attach the ISO as `drive0`. Split the `.iso` with `tools/splitimg.py` and
+set `drive0.file` to its `drive-HASH/blk.txt`, or attach its bytes through a
+host block provider. Allocate 512 MiB of RAM for the Alpine standard ISO.
+U-Boot scans FAT EFI boot partitions, including El Torito boot images, for
+`/EFI/BOOT/BOOTRISCV64.EFI`. The ISO's EFI loader supplies its own kernel and
+initramfs; the included Linux Image is not required for this boot path.
+Alpine standard 3.24.2 riscv64 has been validated through login, filesystem
+access, and shutdown in Chrome. HTTP disk writes remain session-local.
+
+The supplied Linux Image also includes its RISC-V EFI stub, compressed
+initramfs support, FAT/VFAT, ISO9660 with Rock Ridge and Joliet, loop devices,
+and SquashFS with zlib, XZ, and Zstandard decompression. U-Boot reads the FAT
+boot image inside an ISO; an EFI application such as GRUB reads the ISO9660
+tree. Boot media must contain a RISC-V EFI loader compatible with this platform.
+
+To run the optional ISO acceptance tests after building OpenSBI, U-Boot,
+WASM, and JavaScript:
+
+```sh
+RISCBOX_ALPINE_ISO=/path/to/alpine-standard-riscv64.iso \
+    cargo test --release --test platform_acceptance alpine_iso_boots_through_efi_and_shuts_down -- --ignored
+RISCBOX_ALPINE_ISO=/path/to/alpine-standard-riscv64.iso \
+    node --test tests/alpine_iso_browser.test.mjs
+```
+
+Set `RISCBOX_ISO_TRANSPORT=http` for the browser test to exercise split HTTP
+media instead of a host array. Both paths check ISO9660 and the embedded FAT
+image and require guest poweroff.
 
 Quick start
 -----------

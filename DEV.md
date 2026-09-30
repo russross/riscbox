@@ -104,16 +104,13 @@ size).
 
 ### Bootloader and installation media
 
-ISO boot remains deferred until a concrete guest image requires it. The
-trimmed U-Boot build lacks ISO9660, El Torito, EFI, and FAT support, and the
-custom Linux kernel lacks ISO9660. Revisit the required firmware, boot image,
-filesystem, and storage path together against an actual ISO.
-
-Supporting installation media also needs a separate storage milestone. Extend
+Installation media can boot through the supplied U-Boot EFI path using existing
+split HTTP or host-array drives. Direct HTTP attachment of plain image assets
+and installer target-disk policies remain a separate storage milestone. Extend
 the resolved drive configuration and host block providers for
 plain image assets or installation media. Select read-only, session CoW, or
 mutable behavior explicitly. Validate multiple attached drives, failed reads,
-and write behavior before documenting ISO or installer boot as supported.
+and write behavior before documenting an installation-to-disk workflow.
 
 ### HTTP block consolidation
 

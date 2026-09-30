@@ -28,7 +28,7 @@ status and configuration interrupts, and bound pending frames and bytes. The
 repository supplies a local Node protocol stub for real WASM/Chrome tests but
 no production network origin service, native TAP backend, or SLIRP backend.
 
-RV32, multiple harts, vectors, the hypervisor extension, PCIe, AIA, UEFI,
+RV32, multiple harts, vectors, the hypervisor extension, PCIe, AIA,
 general device emulation, a native UI, SDL, SLIRP, and native filesystem or
 socket backends are outside the current scope. Networking exists but is not a
 near-term expansion area.
@@ -118,6 +118,14 @@ opaque. Boot configuration can override firmware, kernel, initrd, and device
 tree physical addresses; the loader validates their RAM bounds and overlap.
 The reset ROM passes OpenSBI `fw_dynamic.bin` a dynamic-info block with the
 next-stage address. Without firmware, the kernel starts directly in M-mode.
+The supplied U-Boot supports FAT and EFI bootflow scanning, GPT EFI partitions,
+and El Torito FAT boot images on 512-byte VirtIO block media. RISC-V ISO boot
+uses `/EFI/BOOT/BOOTRISCV64.EFI`; GRUB or another EFI application reads the
+ISO9660 tree and loads the media's kernel and initramfs. Alpine standard
+3.24.2 riscv64 boots through login and shutdown in the actual browser runtime.
+The custom Linux Image includes its EFI stub, compressed initramfs loading,
+FAT/VFAT, ISO9660 with Rock Ridge/Joliet, loop devices, and SquashFS with
+zlib/XZ/Zstandard. ISO media uses existing split HTTP or host block providers.
 Decompressed output is bounded by the boot layout. Image
 deployments gzip firmware and the next-stage payload while naming them from
 their uncompressed hashes. HTTP
@@ -321,7 +329,7 @@ Validation
     and executable raw-WASM 9p namespace/protocol/transport, CPU, and deployed
     filesystem ABI probes in Node.
 *   `make test` adds real WASM/Chrome network integration and 9p server tests
-    for development.
+    for development, plus ISO boot coverage when `RISCBOX_ALPINE_ISO` is set.
 *   `make check` adds strict Clippy and Python type checks. The GitHub release
     workflow runs unit tests, type checks, Clippy, and builds without Chrome or
     full-guest tests.
@@ -332,6 +340,12 @@ Validation
     during asynchronous reads. Browser tests use temporary profiles and normal
     event-loop timing; they use headed Chrome when a display is available.
 *   `make wasm` builds the deployed Rust WebAssembly artifact.
+*   `RISCBOX_ALPINE_ISO=/path/to/alpine-standard-riscv64.iso cargo test --release
+    --test platform_acceptance alpine_iso_boots_through_efi_and_shuts_down --
+    --ignored` exercises the ISO's EFI loader, live userspace, ISO9660/FAT
+    reads, and shutdown. With the same environment variable, run
+    `node --test tests/alpine_iso_browser.test.mjs` for real Chrome/WASM coverage;
+    `RISCBOX_ISO_TRANSPORT=http` selects split HTTP rather than host-array media.
 *   `make kernel`, `make opensbi`, and `make uboot` build the pinned guest
     components and their hash-named gzip assets. The default `make` builds
     those with the core WASM and JavaScript and packages the release archive.

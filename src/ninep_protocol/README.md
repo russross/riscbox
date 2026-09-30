@@ -3,8 +3,8 @@ Rust 9P2000.L endpoint
 
 The [session](../ninep_protocol.rs) implements the standalone Rust server
 profile over [namespace state](../ninep.rs). The [Rust backend](../ninep_backend.rs)
-connects it to VirtIO and the runtime registry. The production browser still
-uses the TypeScript server until the promise facade is migrated. The
+connects it to VirtIO and the runtime registry. The browser promise facade uses
+the same Rust server. The
 [filesystem ABI](../browser_abi/ninep/README.md) exposes handles and source work.
 
 Wire behavior follows the [9P2000.L reference](https://github.com/chaos/diod/blob/master/protocol.md)

@@ -58,16 +58,15 @@ Repository map and terminology
     TypeScript split-HTTP and host-array providers. The browser adapter
     dispatches their requests through the raw WASM ABI; Rust retains VirtIO
     descriptor validation and device ordering.
-*   `js/p9/` is the authoritative TypeScript 9P2000.L server, shared in-memory
-    filesystem, and optional seed plugins. Generated JavaScript and declarations
+*   `js/p9/` is the promise-based TypeScript facade for Rust filesystem handles
+    and optional on-demand seed plugins. Generated JavaScript and declarations
     go under `build/js/p9/`.
 *   `src/ninep.rs` and `src/ninep/` own the standalone Rust namespace;
     `src/ninep_protocol.rs` and `src/ninep_protocol/` own its 9P2000.L session.
     `src/ninep_backend.rs` connects registered Rust trees to VirtIO and the
     browser runtime. `src/browser_abi/ninep.rs` exposes raw filesystem handles,
     copied host-operation packets, source tickets, and change events; its ABI
-    guide is `src/browser_abi/ninep/README.md`. The promise facade is not yet
-    migrated, so production browser applications still use TypeScript. The
+    guide is `src/browser_abi/ninep/README.md`. The promise facade uses this ABI; Rust owns production protocol semantics. The
     protocol contract is in
     `src/ninep_protocol/README.md`; migration coordination is in `DEV.md`.
 *   `images/` contains reproducible Makefile-driven image definitions and deployment tooling.
@@ -209,7 +208,7 @@ Timing and execution lexicon
 *   An **execution quantum** is one logical bounded unit of guest work. It can
     contain several synchronous JS-to-WASM activations and several **CPU runs**
     (individual C interpreter calls). A **host-service boundary** returns an
-    active quantum to JavaScript for queued device actions or hinted replies.
+    active quantum to JavaScript for queued device actions and source requests.
 *   The **quantum target duration** is the configured nominal host-time interval
     plus any carried guest-clock lead; it determines the **quantum cycle budget**.
     A **CPU-run cycle limit** is
@@ -235,16 +234,17 @@ Each configured `{ server, tag }` endpoint gets an independent session. Raw
 filesystem handles exist before boot and retain namespace state across VM
 lifetimes. Bind keys before startup; a VM lifetime guard rejects a second live
 VM over one handle while allowing several endpoints in the attached VM. Halt,
-shutdown, and reset retain the guard; destroy releases it. Unregistered keys
-still use the transitional browser host registry. Host reads pin their inode
+shutdown, and reset retain the guard; destroy releases it. Unregistered keys reject VM startup. Host reads pin their inode
 through asynchronous loading, independent of rename, unlink, and path reuse.
 Source and host-operation completions run between CPU activations and poll
 guest sessions after releasing namespace borrows. Namespace reset reports
 `ESTALE` for pending host reads; obsolete source completions are ignored.
-The supplied TypeScript server provides shared
-inode state, independent sessions, hard links, stable directory cookies,
-quotas, byte-range locks, explicit application results, and optional lazy seed
-loading. Do not restore the removed `file`, `socket`, or `js9p` configuration
+The TypeScript facade supplies promises, copied packets, source dispatch, and
+change subscriptions; Rust owns inode state, sessions, locking, and replies.
+Source polling is separate from the generic host-action queue. The adapter
+polls it after host calls and every CPU boundary, then wakes the guest after
+completion. Filesystem handles belong to their runtime's WASM instance.
+Do not restore the removed `file`, `socket`, or `js9p` configuration
 forms.
 
 Architecture rules

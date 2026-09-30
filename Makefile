@@ -32,6 +32,7 @@ wasm: $(RUSTBOX_WASM)
 js: build/js/.built
 
 build/js/.built: js/tsconfig.json $(JS_SOURCES)
+	rm -f build/js/p9/session.js build/js/p9/session.d.ts
 	images/risclet/ui/node_modules/.bin/tsc -p js/tsconfig.json
 	@mkdir -p build/js
 	@touch $@

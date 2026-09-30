@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { createRequire } from "node:module";
 import { abiRegression } from "./fixtures/ninep_abi.mjs";
+import { facadeRegression } from "./fixtures/ninep_facade.mjs";
+import { runChromePage } from "./chrome.mjs";
+import { Filesystem, SeedBuilder } from "../build/js/p9/index.js";
+const { Riscbox } = createRequire(import.meta.url)("../js/riscbox.js");
 
 test("deployed filesystem ABI owns bytes and handles through async and VM lifetimes", async () => {
     const directory = await mkdtemp(join(tmpdir(), "riscbox-ninep-abi-"));
@@ -30,13 +35,19 @@ test("deployed filesystem ABI owns bytes and handles through async and VM lifeti
             new Uint8Array(instance.exports.memory.buffer, address, length).fill(42); return 0;
         } } });
         assert.equal(await abiRegression(instance.exports, firmware), 1);
+        const runtime = new Riscbox(instance.exports, { onError: error => { throw error; } });
+        try { assert.equal(await facadeRegression(Filesystem, SeedBuilder, runtime, firmware), 1); }
+        finally { runtime.cancelWakeup(); }
 
         if (process.env.RISCBOX_TEST_BROWSER === "1") {
             const source = (await readFile(join(import.meta.dirname, "fixtures/ninep_abi.mjs"), "utf8"))
                 .replace("export async function abiRegression", "async function abiRegression");
-            const page = join(directory, "probe.html");
-            await writeFile(page, `<!doctype html><body>pending<script type="module">
+            const facade = (await readFile(join(import.meta.dirname, "fixtures/ninep_facade.mjs"), "utf8"))
+                .replace("export async function facadeRegression", "async function facadeRegression");
+            await runChromePage(`<!doctype html><body>pending<script src="/js/riscbox.js"></script><script type="module">
+                import { Filesystem, SeedBuilder } from "/build/js/p9/index.js";
                 ${source}
+                ${facade}
                 try {
                     const bytes = Uint8Array.from(atob("${bytes.toString("base64")}"), value => value.charCodeAt(0));
                     let instance;
@@ -45,14 +56,11 @@ test("deployed filesystem ABI owns bytes and handles through async and VM lifeti
                     } } }));
                     const firmware = Uint8Array.from(atob("${Buffer.from(firmware).toString("base64")}"), value => value.charCodeAt(0));
                     await abiRegression(instance.exports, firmware);
-                    document.body.textContent = "NINEP_ABI_PASS";
-                } catch (error) { document.body.textContent = "FAIL: " + error; }
-            </script>`);
-            const chrome = spawnSync("google-chrome", ["--headless=new", "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage",
-                `--user-data-dir=${join(directory, "chrome")}`, "--virtual-time-budget=5000", "--dump-dom", `file://${page}`],
-                { encoding: "utf8", timeout: 20_000 });
-            assert.equal(chrome.status, 0, chrome.stderr);
-            assert.match(chrome.stdout, /<body>NINEP_ABI_PASS<\/body>/);
+                    const runtime = new Riscbox(instance.exports, { onError: error => { throw error; } });
+                    await facadeRegression(Filesystem, SeedBuilder, runtime, firmware);
+                    await fetch("/result?status=pass");
+                } catch (error) { await fetch("/result?status=" + encodeURIComponent(String(error))); }
+            </script>`, directory);
         }
     } finally {
         await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });

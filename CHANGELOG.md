@@ -4,6 +4,14 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Replaced the browser TypeScript 9p server with a promise-based `Filesystem`
+    facade over the Rust namespace and 9P2000.L sessions. Host operations work
+    before boot, reject with Linux errno, and retain state across VM lifetimes.
+    Source plugins load on demand; subscriptions carry exact numeric origins.
+    Removed JavaScript protocol-server registration, response hints, and the
+    microtask reply-wait loop. Real WASM/Chrome tests cover host source races,
+    pinned reads, failures, resets, and guest wakeups through the adapter.
+
 *   Added raw WASM filesystem handles with whole-file host operations,
     directory and metadata snapshots, atomic seed installation, on-demand
     source tickets/completions, and change events with 64-bit host origins.

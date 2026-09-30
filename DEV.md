@@ -76,12 +76,11 @@ remove this active plan.
 
 #### Status and scope
 
-Milestones 1–4 are complete. Production browser applications still use
-TypeScript until the facade migration. The protocol profile,
-transport ownership, and calling contract are documented in
-[the session guide](src/ninep_protocol/README.md), and binary packets are in
-[the filesystem ABI guide](src/browser_abi/ninep/README.md). Do not treat the Rust
-server as supported by the host application yet.
+Milestones 1–5 are complete. The browser promise facade uses Rust filesystem
+handles; existing image applications await migration in milestone 6. The
+protocol profile, transport ownership, and calling contract are documented in
+[the session guide](src/ninep_protocol/README.md), [the filesystem ABI guide](src/browser_abi/ninep/README.md),
+and [the facade guide](js/p9/README.md).
 
 The goal is a Rust-owned 9P2000.L filesystem and protocol engine with a small
 browser facade. A filesystem exists before VM boot and remains usable while
@@ -112,9 +111,7 @@ state and protocol state; they do not reset VirtIO queues. Filesystem reset repl
 the namespace, retires every endpoint session and load, and emits a reset
 notification even if the VM is running. The running guest may need to remount
 because its fids are invalidated. VM destroy releases the attachment but need
-not destroy the independently held filesystem. These operations need separate
-generations and focused tests; the current `Filesystem::reset` alone does not
-implement the complete lifecycle contract.
+not destroy the independently held filesystem. Separate namespace and transport generations keep these operations coherent.
 
 #### Specification and browser boundaries
 
@@ -163,23 +160,8 @@ browser migration must preserve editor origin filtering with numeric origin IDs.
 
 #### Remaining milestones
 
-Milestones 1–4 are complete; milestones 5–7 have not started.
-Advance these statuses here when a milestone
-passes its stated tests and is committed.
-
-5.  **Replace the browser 9p implementation.** Make `js/p9/` a typed facade
-    for promise-returning host operations, change subscriptions, `SeedBuilder`,
-    and HTTPS and tar on-demand source plugins. The host API has one error
-    model and no `load`, `readFileAsync`, or `not-loaded` result. Update
-    `js/riscbox.js` to start plugin promises after WASM returns, deliver
-    completion bytes once, and dispatch change listeners outside WASM calls.
-    Keep source polling separate from `riscbox_next_action`: drain
-    `riscbox_fs_next_load` after host reads and every host-service boundary,
-    then schedule wakeups on asynchronous completions.
-    Remove `p9Sessions`, `expectResponse`, hints, and the microtask-yield loop
-    only after same-quantum resident replies and delayed wakeups pass real
-    Chrome tests. Remove generic JavaScript 9p server registration in favor
-    of filesystem handles and source plugins.
+Milestones 1–5 are complete; milestones 6–7 have not started. Advance these
+statuses when a milestone passes its stated tests and is committed.
 
 6.  **Migrate images and host applications.** Change
     `images/risclet/ui/index.ts` to create a filesystem for each example from

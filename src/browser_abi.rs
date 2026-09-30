@@ -11,9 +11,6 @@ use crate::config::VmConfig;
 use crate::host_block::{
     HostBlockGeneration, HostBlockKind, HostBlockOutcome, HostBlockProviderId, HostBlockRequestId,
 };
-use crate::virtio_devices::{
-    NinePEndpointId, NinePGeneration, NinePOutcome, NinePRequestId, NinePTransportAction,
-};
 
 #[path = "browser_abi/ninep.rs"]
 pub mod ninep;
@@ -353,9 +350,6 @@ pub extern "C" fn riscbox_next_action() -> u32 {
             Some(HostAction::Console(_)) => 3,
             Some(HostAction::Network(_)) => 4,
             Some(HostAction::Framebuffer(_)) => 6,
-            Some(HostAction::NineP(NinePTransportAction::Open { .. })) => 7,
-            Some(HostAction::NineP(NinePTransportAction::Request { .. })) => 8,
-            Some(HostAction::NineP(NinePTransportAction::Close { .. })) => 9,
             Some(HostAction::Halted(_)) => 10,
             Some(HostAction::Reset(_)) => 11,
             Some(HostAction::HostBlock(HostBlockAction::Request(_))) => 12,
@@ -381,11 +375,6 @@ pub extern "C" fn riscbox_action_value() -> u32 {
 #[must_use]
 pub extern "C" fn riscbox_action_endpoint() -> u32 {
     STATE.with_borrow(|state| match state.action.as_ref() {
-        Some(HostAction::NineP(action)) => match action {
-            NinePTransportAction::Open { endpoint, .. }
-            | NinePTransportAction::Request { endpoint, .. }
-            | NinePTransportAction::Close { endpoint, .. } => endpoint.0,
-        },
         Some(HostAction::HostBlock(action)) => match action {
             HostBlockAction::Request(request) => request.provider.0,
             HostBlockAction::Reset { provider, .. } | HostBlockAction::Close { provider } => {
@@ -399,11 +388,6 @@ pub extern "C" fn riscbox_action_endpoint() -> u32 {
 #[must_use]
 pub extern "C" fn riscbox_action_generation() -> u32 {
     STATE.with_borrow(|state| match state.action.as_ref() {
-        Some(HostAction::NineP(action)) => match action {
-            NinePTransportAction::Open { generation, .. }
-            | NinePTransportAction::Request { generation, .. }
-            | NinePTransportAction::Close { generation, .. } => generation.0,
-        },
         Some(HostAction::HostBlock(HostBlockAction::Request(request))) => request.generation.0,
         Some(HostAction::HostBlock(HostBlockAction::Reset { generation, .. })) => generation.0,
         _ => 0,
@@ -413,7 +397,6 @@ pub extern "C" fn riscbox_action_generation() -> u32 {
 #[must_use]
 pub extern "C" fn riscbox_action_request_id() -> u32 {
     STATE.with_borrow(|state| match state.action.as_ref() {
-        Some(HostAction::NineP(NinePTransportAction::Request { request_id, .. })) => request_id.0,
         Some(HostAction::HostBlock(HostBlockAction::Request(request))) => request.id.0,
         _ => 0,
     })
@@ -422,9 +405,6 @@ pub extern "C" fn riscbox_action_request_id() -> u32 {
 #[must_use]
 pub extern "C" fn riscbox_action_reply_capacity() -> u32 {
     STATE.with_borrow(|state| match state.action.as_ref() {
-        Some(HostAction::NineP(NinePTransportAction::Request { reply_capacity, .. })) => {
-            *reply_capacity
-        }
         Some(HostAction::HostBlock(HostBlockAction::Request(request))) => request.length,
         _ => 0,
     })
@@ -540,39 +520,6 @@ pub extern "C" fn riscbox_http_complete(id: u32, status: u32, address: u32, leng
 }
 
 #[must_use]
-pub extern "C" fn riscbox_p9_complete(
-    endpoint: u32,
-    generation: u32,
-    request_id: u32,
-    outcome: u32,
-    address: u32,
-    length: u32,
-) -> i32 {
-    STATE.with_borrow_mut(|state| {
-        let outcome = match outcome {
-            0 => {
-                let Some(bytes) = completion_bytes(state, address, length) else {
-                    return -1;
-                };
-                NinePOutcome::Reply(bytes)
-            }
-            1 if length == 0 => NinePOutcome::Suppressed,
-            2 if length == 0 => NinePOutcome::EndpointFailure,
-            _ => return -1,
-        };
-        state
-            .runtime
-            .complete_ninep(
-                NinePEndpointId(endpoint),
-                NinePGeneration(generation),
-                NinePRequestId(request_id),
-                outcome,
-            )
-            .map_or(-1, |()| 0)
-    })
-}
-
-#[must_use]
 pub fn take_start_request() -> Option<StartRequest> {
     STATE.with_borrow_mut(|state| state.start.take())
 }
@@ -603,18 +550,10 @@ fn completion_bytes(state: &AbiState, address: u32, length: u32) -> Option<Vec<u
 fn action_bytes(state: &AbiState) -> Option<&[u8]> {
     match state.action.as_ref()? {
         HostAction::Request(request) => Some(request.url.as_bytes()),
-        HostAction::Console(bytes)
-        | HostAction::Network(bytes)
-        | HostAction::NineP(NinePTransportAction::Request { bytes, .. }) => Some(bytes),
+        HostAction::Console(bytes) | HostAction::Network(bytes) => Some(bytes),
         HostAction::HostBlock(HostBlockAction::Request(request)) => Some(&request.data),
         HostAction::Framebuffer(update) => state.runtime.framebuffer_bytes(*update),
-        HostAction::NineP(NinePTransportAction::Open { server_key, .. }) => {
-            Some(server_key.as_bytes())
-        }
-        HostAction::NineP(NinePTransportAction::Close { .. })
-        | HostAction::Started
-        | HostAction::Halted(_)
-        | HostAction::Reset(_) => None,
+        HostAction::Started | HostAction::Halted(_) | HostAction::Reset(_) => None,
         HostAction::HostBlock(HostBlockAction::Reset { .. } | HostBlockAction::Close { .. }) => {
             None
         }

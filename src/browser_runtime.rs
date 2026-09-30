@@ -21,10 +21,7 @@ use crate::ninep::{Filesystem, FilesystemError, LoadTicket};
 use crate::ninep_backend::{FilesystemAttachment, RustFilesystem, RustNineP};
 use crate::platform::FinishStatus;
 use crate::tinyemu_core::CpuRunExitReason;
-use crate::virtio_devices::{
-    DeviceError, InputKind, NetworkBackend, NinePBackend, NinePEndpointId, NinePGeneration,
-    NinePOutcome, NinePRequestId, NinePTransportAction,
-};
+use crate::virtio_devices::{DeviceError, InputKind, NetworkBackend};
 
 pub type EntropyCallback = Rc<RefCell<dyn FnMut(&mut [u8]) -> Result<(), EntropyError>>>;
 
@@ -35,71 +32,6 @@ struct CallbackEntropy {
 impl EntropySource for CallbackEntropy {
     fn fill(&mut self, destination: &mut [u8]) -> Result<(), EntropyError> {
         (self.callback.borrow_mut())(destination)
-    }
-}
-
-pub struct BrowserNineP {
-    endpoint: NinePEndpointId,
-    generation: NinePGeneration,
-    server_key: String,
-    actions: VecDeque<NinePTransportAction>,
-}
-
-impl BrowserNineP {
-    #[must_use]
-    pub fn new(endpoint: NinePEndpointId, server_key: String) -> Self {
-        let generation = NinePGeneration(1);
-        let actions = VecDeque::from([NinePTransportAction::Open {
-            endpoint,
-            generation,
-            server_key: server_key.clone(),
-        }]);
-        Self {
-            endpoint,
-            generation,
-            server_key,
-            actions,
-        }
-    }
-}
-
-impl NinePBackend for BrowserNineP {
-    fn submit(
-        &mut self,
-        request_id: NinePRequestId,
-        request: Vec<u8>,
-        reply_capacity: u32,
-    ) -> Option<NinePOutcome> {
-        self.actions.push_back(NinePTransportAction::Request {
-            endpoint: self.endpoint,
-            generation: self.generation,
-            request_id,
-            bytes: request,
-            reply_capacity,
-        });
-        None
-    }
-
-    fn reset(&mut self, generation: NinePGeneration) {
-        self.actions.clear();
-        self.actions.push_back(NinePTransportAction::Close {
-            endpoint: self.endpoint,
-            generation: self.generation,
-        });
-        self.generation = generation;
-        self.actions.push_back(NinePTransportAction::Open {
-            endpoint: self.endpoint,
-            generation,
-            server_key: self.server_key.clone(),
-        });
-    }
-
-    fn next_transport_action(&mut self) -> Option<NinePTransportAction> {
-        self.actions.pop_front()
-    }
-
-    fn has_transport_action(&self) -> bool {
-        !self.actions.is_empty()
     }
 }
 
@@ -126,7 +58,6 @@ pub enum HostAction {
     Console(Vec<u8>),
     Network(Vec<u8>),
     Framebuffer(FramebufferUpdate),
-    NineP(NinePTransportAction),
     HostBlock(HostBlockAction),
     Halted(LifecycleCause),
     Reset(LifecycleCause),
@@ -454,8 +385,6 @@ struct Running {
     network_output: Rc<RefCell<VecDeque<Vec<u8>>>>,
     block_slots: Vec<usize>,
     host_blocks: BTreeMap<HostBlockProviderId, (usize, HostBlockGeneration)>,
-    ninep_slots: Vec<usize>,
-    ninep_endpoints: BTreeMap<NinePEndpointId, usize>,
     _filesystem_attachments: Vec<FilesystemAttachment>,
     pending_http: BTreeMap<u32, PendingHttp>,
 }
@@ -1158,62 +1087,6 @@ impl BrowserRuntime {
         }
     }
 
-    /// Completes one asynchronous browser 9p request.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for an unknown endpoint, current-generation duplicate,
-    /// malformed response, endpoint failure, or invalid guest descriptor.
-    pub fn complete_ninep(
-        &mut self,
-        endpoint: NinePEndpointId,
-        generation: NinePGeneration,
-        request_id: NinePRequestId,
-        outcome: NinePOutcome,
-    ) -> Result<(), RuntimeError> {
-        let halted = self.is_halted();
-        let mut running = match core::mem::replace(&mut self.state, State::VmInactive) {
-            State::Running(running) | State::Halted(running) => running,
-            other => {
-                self.state = other;
-                return Err(RuntimeError::Machine("9p completion without a VM".into()));
-            }
-        };
-        let Some(slot) = running.ninep_endpoints.get(&endpoint).copied() else {
-            self.state = if halted {
-                State::Halted(running)
-            } else {
-                State::Running(running)
-            };
-            return Err(RuntimeError::Machine("unknown 9p endpoint".into()));
-        };
-        let endpoint_failure = matches!(outcome, NinePOutcome::EndpointFailure);
-        let result = running
-            .machine
-            .complete_ninep_transport_request(slot, generation, request_id, outcome);
-        if let Err(error) = result {
-            self.state = if halted {
-                State::Halted(running)
-            } else {
-                State::Running(running)
-            };
-            if endpoint_failure {
-                return Ok(());
-            }
-            return Err(error.into());
-        }
-        self.state = if halted {
-            State::Halted(running)
-        } else {
-            State::Running(running)
-        };
-        if halted {
-            Ok(())
-        } else {
-            self.pump_http_requests()
-        }
-    }
-
     /// Runs one bounded interpreter slice and collects host-facing output.
     ///
     /// # Errors
@@ -1455,7 +1328,6 @@ impl BrowserRuntime {
         self.state = State::Running(running);
         self.actions.push_back(HostAction::Reset(cause));
         self.pump_host_block_actions()?;
-        self.pump_ninep_transport_actions()?;
         self.pump_http_requests()
     }
 
@@ -1546,7 +1418,7 @@ impl BrowserRuntime {
                 trees.push(tree.clone());
             }
         }
-        let (ninep_slots, ninep_endpoints) = self.add_filesystems(&mut machine, &config)?;
+        self.add_filesystems(&mut machine, &config)?;
         let console_slot = if config.console == Console::Virtio {
             Some(machine.add_console_device(80, 25)?)
         } else {
@@ -1600,12 +1472,9 @@ impl BrowserRuntime {
             network_output,
             block_slots,
             host_blocks,
-            ninep_slots,
-            ninep_endpoints,
             _filesystem_attachments: filesystem_attachments,
             pending_http: BTreeMap::new(),
         }));
-        self.pump_ninep_transport_actions()?;
         self.actions.push_back(HostAction::Started);
         self.pump_http_requests()
     }
@@ -1614,25 +1483,18 @@ impl BrowserRuntime {
         &self,
         machine: &mut Machine,
         config: &VmConfig,
-    ) -> Result<(Vec<usize>, BTreeMap<NinePEndpointId, usize>), RuntimeError> {
-        let mut slots = Vec::new();
-        let mut endpoints = BTreeMap::new();
-        for (index, filesystem) in config.filesystems.iter().enumerate() {
-            let endpoint = NinePEndpointId(
-                u32::try_from(index + 1)
-                    .map_err(|_| RuntimeError::InvalidConfig("too many 9p endpoints".into()))?,
-            );
-            let backend: Box<dyn NinePBackend> =
-                if let Some(tree) = self.filesystems.get(&filesystem.server) {
-                    Box::new(RustNineP::new(tree.clone()).map_err(RuntimeError::Filesystem)?)
-                } else {
-                    Box::new(BrowserNineP::new(endpoint, filesystem.server.clone()))
-                };
-            let slot = machine.add_ninep_device(backend, filesystem.tag.as_bytes())?;
-            slots.push(slot);
-            endpoints.insert(endpoint, slot);
+    ) -> Result<(), RuntimeError> {
+        for filesystem in &config.filesystems {
+            let tree = self.filesystems.get(&filesystem.server).ok_or_else(|| {
+                RuntimeError::InvalidConfig(format!(
+                    "9p filesystem is not bound: {}",
+                    filesystem.server
+                ))
+            })?;
+            let backend = Box::new(RustNineP::new(tree.clone()).map_err(RuntimeError::Filesystem)?);
+            machine.add_ninep_device(backend, filesystem.tag.as_bytes())?;
         }
-        Ok((slots, endpoints))
+        Ok(())
     }
 
     fn pump_http_requests(&mut self) -> Result<(), RuntimeError> {
@@ -1654,7 +1516,7 @@ impl BrowserRuntime {
         }
         self.state = State::Running(running);
         self.pump_host_block_actions()?;
-        self.pump_ninep_transport_actions()
+        Ok(())
     }
 
     fn pump_host_block_actions(&mut self) -> Result<(), RuntimeError> {
@@ -1715,18 +1577,6 @@ impl BrowserRuntime {
         outcome?;
         if !halted {
             self.pump_http_requests()?;
-        }
-        Ok(())
-    }
-
-    fn pump_ninep_transport_actions(&mut self) -> Result<(), RuntimeError> {
-        let State::Running(running) = &mut self.state else {
-            return Ok(());
-        };
-        for slot in running.ninep_slots.clone() {
-            while let Some(action) = running.machine.next_ninep_transport_action(slot)? {
-                self.actions.push_back(HostAction::NineP(action));
-            }
         }
         Ok(())
     }

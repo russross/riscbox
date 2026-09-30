@@ -3,8 +3,7 @@ Filesystem raw WASM ABI
 
 The scalar `riscbox_fs_*` exports expose independently owned Rust filesystems.
 The [protocol guide](../../ninep_protocol/README.md) describes the guest profile
-and reset contract. The JavaScript promise facade is a separate migration step;
-existing browser applications still use the TypeScript server.
+and reset contract. The [JavaScript promise facade](../../../js/p9/README.md) wraps this interface.
 
 Buffer and execution contract
 -----------------------------
@@ -78,7 +77,7 @@ releases acquired guards; reset, reboot, shutdown, and host halt retain them.
 Destroy releases them, while the filesystem and key bindings remain available
 for later VM creation. Closing a bound handle requires VM teardown, including
 teardown of a halted VM. Closing an unbound standalone handle is independent of
-another VM. Transitional unregistered keys still use JavaScript servers.
+another VM. Unregistered keys reject VM startup.
 
 Host commands
 -------------

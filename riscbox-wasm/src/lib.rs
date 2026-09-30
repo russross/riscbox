@@ -330,15 +330,3 @@ pub extern "C" fn riscbox_block_complete(
 pub extern "C" fn riscbox_http_complete(id: u32, status: u32, address: u32, length: u32) -> i32 {
     browser_abi::riscbox_http_complete(id, status, address, length)
 }
-
-#[unsafe(no_mangle)]
-pub extern "C" fn riscbox_p9_complete(
-    endpoint: u32,
-    generation: u32,
-    request_id: u32,
-    outcome: u32,
-    address: u32,
-    length: u32,
-) -> i32 {
-    browser_abi::riscbox_p9_complete(endpoint, generation, request_id, outcome, address, length)
-}

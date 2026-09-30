@@ -1,56 +1,89 @@
-9P2000.L server profile
-=======================
+Rust filesystem browser facade
+==============================
 
-`MemoryFilesystem` owns the shared namespace and application operations.
-`Memory9PServer` is its registration-compatible name. Each `connect()` creates
-an independent `P9Session` with its own negotiated message size, fid table,
-active tags, cancellation state, and lifetime. Sessions share namespace data
-and change subscriptions only.
-`request(bytes, replyCapacity, expectResponse)` returns a promise. The session
-calls the single-shot `expectResponse` callback before work that can settle
-without blocking I/O, including suppression of an earlier request by flush,
-version reset, or close. Lazy seed loads do not issue that hint. Promise
-settlement remains the only reply or suppression result.
+`Filesystem` exposes the Rust namespace through promises. Rust owns all
+9P2000.L sessions and VirtIO replies. The facade owns source plugins, pending
+host reads, and subscriptions. See the [protocol profile](../../src/ninep_protocol/README.md)
+and [raw ABI guide](../../src/browser_abi/ninep/README.md).
 
-Operation matrix
-----------------
+Host operations
+---------------
 
-| Operations | Status |
-| ---------- | ------ |
-| `version`, `flush`, `attach`, `walk`, `lopen`, `lcreate` | Implemented |
-| `read`, `write`, `clunk`, `statfs`, `getattr`, `setattr` | Implemented |
-| `readdir`, `fsync`, `symlink`, `readlink`, `mkdir` | Implemented |
-| `link`, `renameat`, `unlinkat` | Implemented |
-| `lock`, `getlock` | Shared POSIX byte-range locks |
-| `auth`, `mknod`, `xattrwalk`, and unknown operations | `EOPNOTSUPP` |
+```js
+import { Filesystem, createHttpsSeedPlugin } from "./p9/index.js";
+const runtime = await Riscbox.instantiate(wasmBytes, options);
+const workspace = await Filesystem.create(runtime);
+await workspace.writeFile("hello.txt", "hello\n");
+await workspace.bind("workspace");
+await runtime.startFromUrl(configUrl);
+const bytes = await workspace.readFile("hello.txt");
+```
 
-Directory entries refer to stable inode/QID identities. Regular-file hard links
-share contents and metadata, unlinked inodes remain live through open fids, and
-directory cookies are monotonic within each directory. A session close or
-`Tversion` releases its fids and byte-range locks.
+Configure `fs0: { server: "workspace", tag: "shared" }` and mount `shared`
+with Linux `trans=virtio,version=9p2000.L,cache=none`. Bind before VM startup.
+Multiple endpoints in one VM may use the same tree. A filesystem belongs to
+its runtime's WASM instance and cannot be attached to a second live VM.
 
-`MemoryFilesystem` accepts optional `maxFileBytes`, `maxTreeBytes`, `maxInodes`,
-and `maxDirectoryEntries` limits. Defaults are 256 MiB per file, 1 GiB of
-logical regular-file data, and 2^20 inodes and directory entries. File bytes are
-counted once per inode, including an open inode after its last link is removed.
+All host operations return promises and reject with `FilesystemError`, whose
+`errno` is a positive Linux errno. Operations include `readFile`, `writeFile`,
+`mkdir`, `remove`, `rename`, `listDirectory`, `listFiles`, `stat`, `symlink`,
+`readlink`, `link`, `installSeed`, `retrySource`, `reset`, `bind`, and `close`.
+Writes replace whole regular files and require existing parent directories.
+Paths are literal namespace paths; the root is the empty string. Host reads
+pin their inode through lazy loading even if its path is renamed or reused.
+File identities, sizes, times, and origin values that use u64 are `bigint`.
 
-Application API and lazy seeds
+`Filesystem.create(runtime, limits)` accepts `maxFileBytes`, `maxTreeBytes`,
+`maxInodes`, and `maxDirectoryEntries`. Defaults are 256 MiB per file, 1 GiB of
+logical regular-file data, and 2^20 inodes and directory entries. Hard links
+count their shared data once. Open unlinked inodes remain quota-accounted.
+
+Sources and notifications
+-------------------------
+
+`SeedBuilder<Key>` validates and freezes a manifest. `installSeed(plugin)`
+atomically replaces the namespace, creates implicit parent directories, and
+retains optional metadata and shared inode keys. The loader is arbitrary host
+code with signature `load(key: Key, signal: AbortSignal): Promise<Uint8Array>`.
+It may implement authenticated S3, Google Drive, GitHub, or another source.
+Return exactly the declared file size. Source failures become `EIO`; call
+`retrySource(path)` to allow a subsequent read to retry.
+
+`createHttpsSeedPlugin(manifest, baseUrl)` supplies URL-based fetches.
+`createTarSeedPlugin(archive)` declares an already downloaded tar archive and
+copies file ranges when read. There is no preload API or automatic preload.
+Only host or guest reads request unloaded bodies; concurrent readers join one
+source load. Whole-file writes can satisfy reads while a source is pending.
+Obsolete completions cannot restore overwritten or reset data.
+
+```js
+const unsubscribe = await workspace.subscribe(change => {
+    if (change.source === "host" && change.origin === 1n) return;
+    // Inspect path, oldPath, aliases, kind, inode, source and origin.
+});
+await workspace.writeFile("hello.txt", "edited\n", 1n);
+await unsubscribe();
+```
+
+Listeners run in microtasks after copied events leave WASM and the synchronous
+service loop. `reset` invalidates the namespace; `rescan` invalidates a cached
+view after tracking enablement or queue overflow. Rename invalidates both path
+prefixes. Disable tracking by removing the last subscriber. Listener failures
+reach the runtime's `onError` callback, or the console when none is supplied.
+
+Lifecycle and browser boundary
 ------------------------------
 
-Application operations return `SyncResult` values. A successful result has
-`kind: "ok"`; expected filesystem failures have `kind: "error"`. Reading a
-lazy seed before loading it returns `kind: "not-loaded"` with every path for
-that inode. Use `load(paths, retry)` or `readFileAsync(path, retry)` to request
-content explicitly. A failed load is retained until a call sets `retry`.
+Host access works before boot and while halted. VM reset/reboot preserves the
+namespace and pending host source reads, but discards protocol state. Halt and
+shutdown preserve device and protocol state. Destroy releases the VM attachment
+while retaining filesystem handles and bindings. Close requires VM teardown for
+bound handles; close aborts outstanding sources and rejects pending host reads.
+Filesystem reset can run while the VM runs and invalidates guest fids; the guest
+may need to remount. Pending host reads reject with `ESTALE`.
 
-`SeedBuilder<Key>` constructs and freezes a validated namespace with optional
-metadata and shared regular-file inode keys. Pass its entries and one
-`SeedLoader<Key>` to the third `MemoryFilesystem` constructor argument, or use
-`MemoryFilesystem.fromSeed(plugin)`. Concurrent application and 9P reads share
-one load. Whole-file application writes replace an unloaded or loading seed
-without waiting, and stale loader completions cannot restore old content.
-
-`createHttpsSeedPlugin()` is a small manifest-backed example whose opaque keys
-are resolved URLs. `createTarSeedPlugin()` inspects an already downloaded tar
-archive and lazily copies regular-file ranges. A filesystem pins the entry list
-and loader objects stored in its inodes; refreshes require a new filesystem.
+Resident guest requests complete within their notifying CPU run, without a
+JavaScript callback or promise. Async source requests leave WASM through the
+source queue; the adapter resumes the current quantum after dispatch and wakes
+a sleeping VM after completion. No response hint or promise-yield loop exists.
+Input and output bytes are copied; no WASM-backed view survives an await.

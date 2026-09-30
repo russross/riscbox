@@ -1,15 +1,12 @@
 use riscbox::browser_input::BrowserInputQueue;
 use riscbox::browser_runtime::{
-    BrowserNineP, BrowserRuntime, HostAction, HostBlockAction, LifecycleCause, QuantumOutcome,
-    QuantumStart, RuntimeError, RuntimeStart,
+    BrowserRuntime, HostAction, HostBlockAction, LifecycleCause, QuantumOutcome, QuantumStart,
+    RuntimeError, RuntimeStart,
 };
 use riscbox::config::VmConfig;
 use riscbox::host_block::HostBlockProviderId;
 use riscbox::ninep::{FileRead, Filesystem, Limits};
 use riscbox::ninep_backend::RustFilesystem;
-use riscbox::virtio_devices::{
-    NinePBackend, NinePEndpointId, NinePGeneration, NinePRequestId, NinePTransportAction,
-};
 
 fn start() -> RuntimeStart {
     RuntimeStart {
@@ -642,102 +639,18 @@ fn drive_manifest_precedes_machine_start_and_prefetch_requests_follow_it() {
 }
 
 #[test]
-fn configured_9p_servers_are_connected() {
-    let mut backend = BrowserNineP::new(NinePEndpointId(7), "workspace".into());
-    assert_eq!(
-        backend.next_transport_action(),
-        Some(NinePTransportAction::Open {
-            endpoint: NinePEndpointId(7),
-            generation: NinePGeneration(1),
-            server_key: "workspace".into(),
-        })
-    );
-    let old_message = [7, 0, 0, 0, 100, 1, 0];
-    backend.submit(NinePRequestId(9), old_message.to_vec(), 4096);
-    backend.reset(NinePGeneration(2));
-    assert_eq!(
-        backend.next_transport_action(),
-        Some(NinePTransportAction::Close {
-            endpoint: NinePEndpointId(7),
-            generation: NinePGeneration(1),
-        })
-    );
-    assert_eq!(
-        backend.next_transport_action(),
-        Some(NinePTransportAction::Open {
-            endpoint: NinePEndpointId(7),
-            generation: NinePGeneration(2),
-            server_key: "workspace".into(),
-        })
-    );
-    let message = [7, 0, 0, 0, 100, 1, 0];
-    backend.submit(NinePRequestId(1), message.to_vec(), 4096);
-    assert_eq!(
-        backend.next_transport_action(),
-        Some(NinePTransportAction::Request {
-            endpoint: NinePEndpointId(7),
-            generation: NinePGeneration(2),
-            request_id: NinePRequestId(1),
-            bytes: message.to_vec(),
-            reply_capacity: 4096,
-        })
-    );
-
+fn unbound_9p_filesystems_reject_startup() {
     let mut runtime = BrowserRuntime::default();
     runtime.start(start()).expect("start");
     let (config_id, _) = request(&mut runtime);
-    runtime
-        .complete_http(
-            config_id,
-            200,
-            br#"{version:1,machine:"riscv64",memory_size:32,bios:"fw.bin",console:"uart",fs0:{server:"workspace",tag:"shared"},fs1:{server:"workspace",tag:"peer"}}"#.to_vec(),
-        )
-        .expect("JavaScript 9p configuration");
+    runtime.complete_http(config_id, 200,
+        br#"{version:1,machine:"riscv64",memory_size:32,bios:"fw.bin",console:"uart",fs0:{server:"missing",tag:"shared"}}"#.to_vec()).expect("config");
     let (firmware_id, _) = request(&mut runtime);
-    runtime
-        .complete_http(firmware_id, 200, vec![0; 64])
-        .expect("firmware");
-    assert!(runtime.is_running());
-    assert_eq!(
-        runtime.next_action(),
-        Some(HostAction::NineP(NinePTransportAction::Open {
-            endpoint: NinePEndpointId(1),
-            generation: NinePGeneration(1),
-            server_key: "workspace".into(),
-        }))
-    );
-    assert_eq!(
-        runtime.next_action(),
-        Some(HostAction::NineP(NinePTransportAction::Open {
-            endpoint: NinePEndpointId(2),
-            generation: NinePGeneration(1),
-            server_key: "workspace".into(),
-        }))
-    );
-    assert_eq!(runtime.next_action(), Some(HostAction::Started));
-    assert_eq!(runtime.next_action(), None);
-    runtime.reset().expect("reset 9p transport");
-    assert_eq!(
-        runtime.next_action(),
-        Some(HostAction::Reset(LifecycleCause::HostReset))
-    );
-    for endpoint in [1, 2] {
-        assert_eq!(
-            runtime.next_action(),
-            Some(HostAction::NineP(NinePTransportAction::Close {
-                endpoint: NinePEndpointId(endpoint),
-                generation: NinePGeneration(1),
-            }))
-        );
-        assert_eq!(
-            runtime.next_action(),
-            Some(HostAction::NineP(NinePTransportAction::Open {
-                endpoint: NinePEndpointId(endpoint),
-                generation: NinePGeneration(2),
-                server_key: "workspace".into(),
-            }))
-        );
-    }
+    assert!(matches!(
+        runtime.complete_http(firmware_id, 200, vec![0; 64]),
+        Err(RuntimeError::InvalidConfig(_))
+    ));
+    assert!(!runtime.is_running());
 }
 
 #[test]

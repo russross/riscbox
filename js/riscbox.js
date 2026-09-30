@@ -189,6 +189,8 @@
 
     class Riscbox {
         constructor(exports, options = {}) {
+            if (Object.hasOwn(options, "p9Servers"))
+                throw new TypeError("p9Servers was removed; bind a Rust Filesystem before startup");
             if (!(exports.memory instanceof WebAssembly.Memory))
                 throw new TypeError("Riscbox WASM must export memory");
             if (typeof exports.riscbox_configure_quantum !== "function" ||
@@ -220,10 +222,8 @@
                 intervalNoCatchUpSkew: 0,
                 sessionCatchUpSkews: [],
             } : null;
-            this.p9Sessions = new Map();
-            this.p9Requests = new Map();
-            this.hints = new Set();
-            this.settledHints = 0;
+            this.filesystems = new Map();
+            this.servicingFilesystems = false;
             this.quantumRunning = false;
             this.wakeupTimer = null;
             this.wakeupToken = 0;
@@ -382,11 +382,6 @@
                             name === "request_reboot") this.scheduleWakeup(0);
                         if (name === "destroy") {
                             this.cancelWakeup();
-                            for (const [endpoint, current] of this.p9Sessions) {
-                                this.retireP9(endpoint, current.generation);
-                                current.session.close();
-                            }
-                            this.p9Sessions.clear();
                             this.options.onVmDestroyed?.();
                         }
                         resolve();
@@ -488,7 +483,7 @@
         }
 
         async runQuantum() {
-            // One quantum may pause for host service and resume through microtasks.
+            // Host service drains copied queues before the same quantum resumes.
             if (this.quantumRunning)
                 return;
             const now = Date.now();
@@ -522,17 +517,7 @@
                         vmInactive = reason === QUANTUM_VM_INACTIVE;
                         break;
                     }
-                    if (reason === QUANTUM_HOST_SERVICE_REQUIRED) {
-                        // Each settled hinted reply restarts the dry-yield allowance.
-                        let dryYields = 0;
-                        while (this.hints.size > 0 && dryYields < 20) {
-                            const settled = this.settledHints;
-                            await Promise.resolve();
-                            dryYields = this.settledHints === settled ? dryYields + 1 : 0;
-                        }
-                        if (dryYields === 20 && this.hints.size > 0)
-                            console.error("Riscbox 9p response hint did not settle", [...this.hints]);
-                    }
+
                 }
                 const end = Date.now();
                 const elapsedMs = performance.now() - startedAt;
@@ -593,8 +578,10 @@
                 return;
             for (;;) {
                 const kind = this.exports.riscbox_next_action();
-                if (kind === 0)
+                if (kind === 0) {
+                    this.serviceFilesystems();
                     return;
+                }
                 const value = this.exports.riscbox_action_value();
                 const ptr = this.exports.riscbox_action_data_address();
                 const len = this.exports.riscbox_action_data_length();
@@ -642,87 +629,6 @@
                         memory.subarray(ptr, end),
                         { x, y, width, height, stride },
                     );
-                } else if (kind === 7) {
-                    const endpoint = this.exports.riscbox_action_endpoint();
-                    const generation = this.exports.riscbox_action_generation();
-                    const serverKey = decoder.decode(this.bytes(ptr, len));
-                    const server = this.options.p9Servers?.get(serverKey);
-                    if (!server || typeof server.connect !== "function")
-                        throw new Error(`9p server is not registered: ${serverKey}`);
-                    const session = server.connect();
-                    if (!session || typeof session.request !== "function" ||
-                        typeof session.close !== "function")
-                        throw new TypeError(`9p server returned an invalid session: ${serverKey}`);
-                    const previous = this.p9Sessions.get(endpoint);
-                    if (previous)
-                        this.retireP9(endpoint, previous.generation);
-                    previous?.session.close();
-                    this.p9Sessions.set(endpoint, { generation, session });
-                } else if (kind === 8) {
-                    const endpoint = this.exports.riscbox_action_endpoint();
-                    const generation = this.exports.riscbox_action_generation();
-                    const requestId = this.exports.riscbox_action_request_id();
-                    const replyCapacity = this.exports.riscbox_action_reply_capacity();
-                    const current = this.p9Sessions.get(endpoint);
-                    if (!current || current.generation !== generation)
-                        throw new Error(`9p request targets an inactive endpoint ${endpoint}`);
-                    const request = this.bytes(ptr, len);
-                    const key = `${endpoint}:${generation}:${requestId}`;
-                    // Keys include the endpoint generation so a reset cannot reuse a hint.
-                    this.p9Requests.set(key, true);
-                    const expectResponse = () => {
-                        if (this.p9Requests.has(key))
-                            this.hints.add(key);
-                    };
-                    let outcomePromise;
-                    try {
-                        outcomePromise = current.session.request(
-                            request, replyCapacity, expectResponse,
-                        );
-                        if (!outcomePromise || typeof outcomePromise.then !== "function")
-                            throw new TypeError("9p session request must return a promise");
-                    } catch (error) {
-                        outcomePromise = Promise.reject(error);
-                    }
-                    outcomePromise.then((outcome) => {
-                        // Only promise settlement supplies a reply or suppression result.
-                        if (outcome?.kind === "suppressed")
-                            return { outcome: 1, bytes: new Uint8Array() };
-                        if (outcome?.kind === "reply" &&
-                            outcome.bytes instanceof Uint8Array &&
-                            outcome.bytes.length <= replyCapacity)
-                            return { outcome: 0, bytes: outcome.bytes };
-                        else
-                            throw new TypeError("9p session returned an invalid outcome");
-                    }).catch((error) => {
-                        const active = this.p9Sessions.get(endpoint);
-                        if (active?.generation === generation) {
-                            this.p9Sessions.delete(endpoint);
-                            active.session.close();
-                        }
-                        if (this.p9Requests.has(key))
-                            this.completeP9(endpoint, generation, requestId, 2);
-                        this.retireP9(endpoint, generation);
-                        this.options.onError?.(error);
-                        return null;
-                    }).then((completion) => {
-                        if (completion && this.p9Requests.has(key))
-                            this.completeP9(
-                                endpoint, generation, requestId,
-                                completion.outcome, completion.bytes,
-                            );
-                    }).catch((error) => {
-                        this.options.onError?.(error);
-                    });
-                } else if (kind === 9) {
-                    const endpoint = this.exports.riscbox_action_endpoint();
-                    const generation = this.exports.riscbox_action_generation();
-                    const current = this.p9Sessions.get(endpoint);
-                    if (current?.generation === generation) {
-                        this.retireP9(endpoint, generation);
-                        this.p9Sessions.delete(endpoint);
-                        current.session.close();
-                    }
                 } else if (kind === 10) {
                     const cause = LIFECYCLE_CAUSES[value];
                     if (cause === undefined)
@@ -792,31 +698,39 @@
             if (this.started) this.scheduleWakeup(0);
         }
 
-        completeP9(endpoint, generation, requestId, outcome, bytes = new Uint8Array()) {
-            // A late completion clears its hint and replaces a WFI wakeup timer.
-            const key = `${endpoint}:${generation}:${requestId}`;
-            this.p9Requests.delete(key);
-            if (this.hints.delete(key))
-                this.settledHints++;
-            const result = this.withBytes(bytes, (ptr, len) =>
-                this.exports.riscbox_p9_complete(
-                    endpoint, generation, requestId, outcome, ptr, len,
-                ));
-            if (result !== 0)
-                throw new Error(`Riscbox rejected 9p completion ${requestId}`);
-            this.drainActions();
-            if (this.started)
-                this.scheduleWakeup(0);
+        reportFilesystemError(error) {
+            if (this.options.onError) this.options.onError(error);
+            else console.error(error);
         }
 
-        retireP9(endpoint, generation) {
-            const prefix = `${endpoint}:${generation}:`;
-            for (const key of this.p9Requests.keys()) {
-                if (key.startsWith(prefix)) {
-                    this.p9Requests.delete(key);
-                    this.hints.delete(key);
+        // Namespace work is polled only between WASM activations. Source dispatch
+        // copies its ticket before another allocation and starts plugin promises later.
+        serviceFilesystems() {
+            if (this.servicingFilesystems || !this.exports.riscbox_fs_next_load) return;
+            this.servicingFilesystems = true;
+            try {
+                for (;;) {
+                    const handle = this.exports.riscbox_fs_next_load();
+                    if (handle === 0) {
+                        if (this.exports.riscbox_fs_status() < 0)
+                            throw new Error("Riscbox could not poll filesystem sources");
+                        break;
+                    }
+                    const ticket = this.bytes(this.exports.riscbox_fs_data_address(),
+                        this.exports.riscbox_fs_data_length());
+                    const filesystem = this.filesystems.get(handle);
+                    if (!filesystem) throw new Error(`Filesystem handle ${handle} has no source owner`);
+                    filesystem.dispatch(ticket);
                 }
+                for (const filesystem of this.filesystems.values()) filesystem.poll();
+            } finally {
+                this.servicingFilesystems = false;
             }
+        }
+
+        filesystemChanged() {
+            this.serviceFilesystems();
+            if (this.started && !this.quantumRunning) this.scheduleWakeup(0);
         }
 
         consoleInput(data) {

@@ -142,7 +142,7 @@ the latest guest-clock lead sampled at the start of a quantum. The variance fiel
 50th, 90th, and 99th percentiles across runnable quanta since boot. Timing
 reports stop when the VM powers off.
 Integrations can also provide
-`networkWrite`, `framebufferRefresh`, and `p9Servers`. Host input methods are
+`networkWrite`, `framebufferRefresh`, and `onError`. Host input methods are
 `consoleInput(bytes)`, `consoleResize(columns, rows)`, `keyEvent()`,
 `pointerEvent()`, `wheelEvent()`, `networkInput()`, and `networkCarrier()`.
 `runQuantum()` explicitly requests a quantum when a host integration needs to
@@ -200,8 +200,8 @@ The raw WASM exports also provide independently owned Rust filesystem handles
 for advanced embedding. They support host operations before VM startup,
 on-demand source tickets, change events, and retained state across VM lifetimes.
 The [filesystem ABI guide](src/browser_abi/ninep/README.md) documents packets,
-buffer lifetimes, and attachment rules. The promise facade is still being
-migrated; the normal browser API below continues to use TypeScript 9p servers.
+buffer lifetimes, and attachment rules. The promise facade below wraps these
+exports.
 
 VM configuration
 ----------------
@@ -368,92 +368,44 @@ for image layout and publishing details.
 
 VirtIO 9p lets a guest mount a filesystem owned by the host page. It is suited
 to editable student workspaces, importing starter files, exporting results,
-sharing one tree with host UI, and controlled sharing between VMs. It is not an
-authentication boundary or a persistent store by itself.
+sharing one tree with host UI. It is not an authentication boundary or a
+persistent store by itself.
 
-Configure a channel and register the matching server key:
-
-```js
-// riscbox.cfg
-fs0: { server: "workspace", tag: "shared" },
-```
+Configure `fs0: { server: "workspace", tag: "shared" }`, then create and bind
+its filesystem before starting the VM:
 
 ```js
-import { Memory9PServer } from "./p9/index.js";
-
-const workspace = new Memory9PServer({
-    "hello.txt": "shared with the guest\n",
-});
-
-const runtime = await Riscbox.instantiate(wasmBytes, {
-    p9Servers: new Map([["workspace", workspace]]),
-});
+import { Filesystem, createHttpsSeedPlugin } from "./p9/index.js";
+const runtime = await Riscbox.instantiate(wasmBytes, options);
+const workspace = await Filesystem.create(runtime);
+await workspace.writeFile("hello.txt", "shared with the guest\n");
+await workspace.bind("workspace");
+await runtime.startFromUrl(configUrl);
+const bytes = await workspace.readFile("hello.txt");
 ```
 
 Mount it in Linux with:
 
-    mount -t 9p -o trans=virtio,version=9p2000.L shared /mnt/shared
+    mount -t 9p -o trans=virtio,version=9p2000.L,cache=none shared /mnt/shared
 
-Use `cache=none` when host code or another VM must see changes promptly,
-`cache=mmap` when executable mappings matter and some staleness is acceptable,
-and `cache=loose` only for an exclusive guest mount. Two simultaneous mounts
-need two configured channels with distinct tags, though both may select the
-same server and shared tree.
+Two simultaneous mounts need distinct configured tags; both may select one
+filesystem. Only one live VM may attach a filesystem. Reboot/reset retains
+files while resetting protocol state. Shutdown/halt preserves device state.
+Destroy releases the attachment but retains host access and bindings.
+`await workspace.reset()` replaces the namespace even while mounted; pending
+host reads receive `ESTALE`, and the guest may need to remount.
 
-The supplied `Memory9PServer` implements the common 9P2000.L file, directory,
-link, rename, metadata, locking, and lifecycle operations. Host application
-methods include `readFile`, `writeFile`, `remove`, `rename`, `listFiles`,
-`load`, `readFileAsync`, and `subscribe`. Expected failures are returned as
-discriminated results:
+Host methods always return promises and reject with `FilesystemError` carrying
+positive Linux `errno`. They include whole-file reads/writes, directory and link
+operations, metadata, and change subscriptions. `await workspace.subscribe(fn)`
+returns an async unsubscribe function. Events include aliases and a numeric
+`bigint` host origin for filtering an application's own writes.
 
-```js
-const result = workspace.readFile("hello.txt");
-if (result.kind === "ok") {
-    console.log(new TextDecoder().decode(result.value));
-} else if (result.kind === "error") {
-    console.error(result.error.message);
-}
-```
+9p source plugins
+-----------------
 
-The optional limits are `maxFileBytes`, `maxTreeBytes`, `maxInodes`, and
-`maxDirectoryEntries`. Defaults are 256 MiB per file, 1 GiB of logical file
-data, and 2^20 inodes and directory entries.
-
-9p servers and seed plugins
----------------------------
-
-A custom server only needs to create an independent session for each VirtIO
-endpoint. Requests may complete out of order:
-
-```ts
-interface P9Server {
-    connect(): P9Session;
-}
-
-interface P9Session {
-    request(
-        bytes: Uint8Array,
-        replyCapacity: number,
-        expectResponse: () => void,
-    ): Promise<{ kind: "reply"; bytes: Uint8Array } | { kind: "suppressed" }>;
-    close(): void;
-}
-```
-
-The server owns 9P2000.L negotiation, fids, tags, flush ordering, errors, and
-filesystem semantics. Rejecting a request promise means the endpoint failed;
-normal filesystem errors must be encoded as 9p replies. Do not retain request
-or WASM-backed buffers after their documented lifetime.
-Call `expectResponse()` once, before starting the promise or microtask chain,
-when the request can settle without blocking I/O. Call the retained callback
-for each earlier request that a flush, reset, or close can settle. Do not call
-it for HTTP, local-storage, or other asynchronous work. The callback carries
-no result; only the returned promise completes a request. After 20 consecutive
-microtask yields without a response, the driver logs unresolved hints and the
-guest continues. Each delivered response resets that count.
-
-For large static trees, a seed plugin is usually simpler than a custom server.
-It declares the complete namespace and lazily loads regular-file bodies:
+Rust owns the 9P2000.L server. Custom plugins supply a namespace and asynchronous
+file bodies; generic JavaScript protocol servers are no longer supported:
 
 ```ts
 interface SeedPlugin<Key> {
@@ -464,13 +416,19 @@ interface SeedPlugin<Key> {
 }
 ```
 
-Build entries with `SeedBuilder`, then call `MemoryFilesystem.fromSeed(plugin)`
-or pass the plugin to `Memory9PServer`. `createHttpsSeedPlugin()` and
-`createTarSeedPlugin()` demonstrate remote manifests and pre-downloaded tar
-archives. One filesystem instance pins its namespace and loader interpretation;
-create a new instance to publish a new generation. See
-[9p documentation](https://github.com/russross/riscbox/blob/main/js/p9/README.md)
-for the supported operation profile.
+Build entries with `SeedBuilder`, then `await workspace.installSeed(plugin)`.
+`createHttpsSeedPlugin()` supports HTTP manifests; `createTarSeedPlugin()`
+exposes an already downloaded archive. Hosts can supply credentials and protocol
+handling for other sources through the same loader interface. Bodies load only
+on host or guest reads; there is no preload mechanism. Concurrent readers join
+one source request. Failure returns `EIO`; `retrySource(path)` permits a later
+read to retry. Host writes supersede pending source bytes.
+
+The optional limits are `maxFileBytes`, `maxTreeBytes`, `maxInodes`, and
+`maxDirectoryEntries`: defaults are 256 MiB per file, 1 GiB of logical file data,
+and 2^20 inodes and directory entries. See the [facade guide](js/p9/README.md)
+for host methods, notifications, and lifecycle details, and the
+[protocol profile](src/ninep_protocol/README.md) for supported guest operations.
 
 Platform summary
 ----------------

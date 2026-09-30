@@ -89,8 +89,8 @@ Build targets
 | Target              | Result                                                       |
 | ------------------- | ------------------------------------------------------------ |
 | `make release`      | Optimized Rust workspace for development and native tests    |
-| `make test-unit`    | Rust, Python, JavaScript, and raw-WASM namespace tests         |
-| `make test`         | Unit tests and Chrome/WASM network and namespace tests        |
+| `make test-unit`    | Rust, Python, JavaScript, and raw-WASM 9p server tests         |
+| `make test`         | Unit tests and Chrome/WASM network and 9p server tests        |
 | `make check`        | Full tests, strict Clippy, TypeScript, and Python type checks  |
 | `make wasm`         | `target/wasm32-unknown-unknown/release/riscbox_wasm.wasm`       |
 | `make` / `make all` | Build the complete release archive in `build/releases/`      |

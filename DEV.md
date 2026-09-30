@@ -81,23 +81,21 @@ serves production guests. The committed VirtIO seam, `c1f1b45` (`Allow
 immediate 9p backend replies`), permits `NinePBackend::submit` to return an
 immediate `NinePOutcome`; `NinePDevice::notify` completes its descriptor before
 returning in that case. The existing browser backend remains asynchronous.
-Milestone 1's corrective pass is complete in `src/ninep.rs`. Its validation
-includes 22 namespace tests, five VirtIO 9p transport tests, `make check`, and
-a release WASM build in a fresh target directory. The standalone namespace
-probe executes in both Node and Chrome with no operating-system imports.
-The worktree's `src/ninep_protocol.rs` is an unfinished
-milestone 2 slice that currently handles only version, attach, and walk; it
-is not part of the milestone 1 commit. Neither module is attached to the VM,
-raw ABI, or browser adapter. Previous build-only WASM validation missed the
-clock trap because the namespace was not called. The corrective gate executes
-a standalone exported namespace operation in Node and Chrome. Do not treat
-the Rust server as supported yet.
+Milestones 1 and 2 are complete. The standalone Rust namespace and
+9P2000.L session have 46 focused native tests, plus an import-free raw-WASM
+probe executed in Node and Chrome. Validation includes `make check` and a
+release WASM build in a fresh target directory. The supported protocol profile
+and calling contract are documented in [the session guide](src/ninep_protocol/README.md).
+Neither module is attached to the VM, production raw ABI, or browser adapter;
+milestone 3 connects the session to VirtIO. Do not treat the Rust server as
+supported by the host application yet.
 
 The goal is a Rust-owned 9P2000.L filesystem and protocol engine with a small
 browser facade. A filesystem exists before VM boot and remains usable while
 the VM is halted. It may attach to one VM at a time; multiple 9p endpoints in
-that VM may share its tree but have independent fids, tags, locks, and protocol
-generations. The host API always returns promises. Seed plugins declare the
+that VM may share its tree but have independent fids, tags, cleanup IDs, and
+protocol generations. Byte-range locks share process/client ownership across
+endpoints. The host API always returns promises. Seed plugins declare the
 namespace and supply asynchronous bodies only when a host or guest reads an
 unloaded file. There is no explicit or automatic preload mechanism.
 
@@ -172,29 +170,8 @@ browser migration must preserve editor origin filtering with numeric origin IDs.
 
 #### Remaining milestones
 
-Milestone 1 is complete; milestone 2 is in progress; milestones 3–7 have not
-started. Advance these statuses here when a milestone passes its stated tests
-and is committed.
-
-2.  **Complete the 9P2000.L session.** Port the operation matrix in
-    `js/p9/README.md` to `src/ninep_protocol.rs`: version, flush, attach,
-    walk, open/create, read/write, clunk, statfs, attributes, readdir, fsync,
-    symlink/readlink, mkdir, link, rename/unlink, and locks. Keep documented
-    unsupported operations as `EOPNOTSUPP`. Model an immediate reply,
-    suppression, or pending load explicitly; retain tag and fid state per
-    endpoint. Parse and validate a complete request before state changes;
-    bound replies by the negotiated message size and descriptor capacity.
-    Bind each session to filesystem identity/generation and reject stale fids
-    before lookup. Release session locks on close/version. Return partial
-    `Rwalk` without installing `newfid`, enforce walk limits and directory/open
-    rules, and retain the parsed request tag on error responses. Add inode-based
-    range read/write/resize operations to the namespace for retained unlinked
-    fids; do not route guest I/O through whole-file path operations. Model
-    `Tsetattr` validity masks and timestamp precision explicitly rather than
-    using seed metadata as the complete protocol update model.
-    Test malformed input, duplicate tags, partial walks, flush ordering,
-    concurrent endpoints, and session reset/close against the specifications;
-    compare TypeScript separately for intentional host compatibility changes.
+Milestones 1–2 are complete; milestones 3–7 have not started. Advance these
+statuses here when a milestone passes its stated tests and is committed.
 
 3.  **Connect Rust sessions to VirtIO and browser runtime state.** Replace
     `BrowserNineP` in `src/browser_runtime.rs` with a backend that references

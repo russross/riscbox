@@ -1,6 +1,80 @@
 //! Shared 9p namespace state, independent of the lifetime of a guest VM.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::rc::Rc;
+
+#[path = "ninep/inode.rs"]
+mod inode;
+
+const MAX_NAME_BYTES: usize = 255;
+
+/// A lifetime token distinguishes independently created namespaces.
+#[derive(Clone, Debug)]
+pub struct FilesystemIdentity(Rc<()>);
+
+impl PartialEq for FilesystemIdentity {
+    fn eq(&self, other: &Self) -> bool {
+        Rc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for FilesystemIdentity {}
+
+/// Protocol timestamps retain nanoseconds independently of the runtime clock.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FileTime {
+    seconds: u64,
+    nanoseconds: u32,
+}
+
+impl FileTime {
+    /// # Errors
+    /// Rejects nanoseconds outside one second.
+    pub fn new(seconds: u64, nanoseconds: u64) -> Result<Self, FilesystemError> {
+        if nanoseconds >= 1_000_000_000 {
+            return Err(FilesystemError::InvalidPath);
+        }
+        Ok(Self {
+            seconds,
+            nanoseconds: u32::try_from(nanoseconds).map_err(|_| FilesystemError::InvalidPath)?,
+        })
+    }
+
+    #[must_use]
+    pub const fn seconds(self) -> u64 {
+        self.seconds
+    }
+
+    #[must_use]
+    pub const fn nanoseconds(self) -> u32 {
+        self.nanoseconds
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TimeUpdate {
+    Current,
+    Explicit(FileTime),
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct AttributeUpdate {
+    pub mode: Option<u32>,
+    pub uid: Option<u32>,
+    pub gid: Option<u32>,
+    pub size: Option<u64>,
+    pub atime: Option<TimeUpdate>,
+    pub mtime: Option<TimeUpdate>,
+    pub change_ctime: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SpaceUsage {
+    pub maximum_bytes: usize,
+    pub used_bytes: usize,
+    pub maximum_inodes: usize,
+    pub used_inodes: usize,
+}
 
 /// A stable identity for one inode, including one with no remaining links.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -82,6 +156,9 @@ pub struct Inode {
     pub atime: u64,
     pub mtime: u64,
     pub ctime: u64,
+    pub atime_nanoseconds: u32,
+    pub mtime_nanoseconds: u32,
+    pub ctime_nanoseconds: u32,
 }
 
 impl Inode {
@@ -168,6 +245,8 @@ pub enum FilesystemError {
     NoSpace,
     LoadFailed,
     StaleLoad,
+    NeedsLoad,
+    NameTooLong,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -239,6 +318,8 @@ pub struct Change {
 
 /// The tree remains live across VM reset and shutdown.
 pub struct Filesystem {
+    identity: FilesystemIdentity,
+    next_session: u64,
     inodes: BTreeMap<InodeId, Inode>,
     links: BTreeMap<InodeId, BTreeSet<(InodeId, String)>>,
     root: InodeId,
@@ -279,9 +360,14 @@ impl Filesystem {
                 atime: now,
                 mtime: now,
                 ctime: now,
+                atime_nanoseconds: 0,
+                mtime_nanoseconds: 0,
+                ctime_nanoseconds: 0,
             },
         );
         Self {
+            identity: FilesystemIdentity(Rc::new(())),
+            next_session: 1,
             inodes,
             links: BTreeMap::new(),
             root,
@@ -316,6 +402,41 @@ impl Filesystem {
         inode.version = inode.version.wrapping_add(1);
         inode.mtime = now;
         inode.ctime = now;
+        inode.mtime_nanoseconds = 0;
+        inode.ctime_nanoseconds = 0;
+    }
+
+    #[must_use]
+    pub fn identity(&self) -> FilesystemIdentity {
+        self.identity.clone()
+    }
+
+    /// # Errors
+    /// Reports exhaustion instead of reusing a live session's cleanup ID.
+    pub fn allocate_session(&mut self) -> Result<u64, FilesystemError> {
+        let id = self.next_session;
+        self.next_session = id.checked_add(1).ok_or(FilesystemError::NoSpace)?;
+        Ok(id)
+    }
+
+    #[must_use]
+    pub const fn time(&self) -> u64 {
+        self.now
+    }
+
+    #[must_use]
+    pub const fn mutation_source(&self) -> ChangeSource {
+        self.mutation_source
+    }
+
+    #[must_use]
+    pub fn space_usage(&self) -> SpaceUsage {
+        SpaceUsage {
+            maximum_bytes: self.limits.max_tree_bytes,
+            used_bytes: self.logical_bytes,
+            maximum_inodes: self.limits.max_inodes,
+            used_inodes: self.inodes.len(),
+        }
     }
 
     #[must_use]
@@ -623,6 +744,9 @@ impl Filesystem {
         {
             return Err(FilesystemError::InvalidPath);
         }
+        if parts.iter().any(|part| part.len() > MAX_NAME_BYTES) {
+            return Err(FilesystemError::NameTooLong);
+        }
         Ok(parts)
     }
 
@@ -652,6 +776,9 @@ impl Filesystem {
         if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\0']) {
             return Err(FilesystemError::InvalidPath);
         }
+        if name.len() > MAX_NAME_BYTES {
+            return Err(FilesystemError::NameTooLong);
+        }
         let inode = self.inodes.get(&parent).ok_or(FilesystemError::NotFound)?;
         let InodeKind::Directory { entries, .. } = &inode.kind else {
             return Err(FilesystemError::NotDirectory);
@@ -670,20 +797,7 @@ impl Filesystem {
     /// Returns a path or type error if the path does not name a directory.
     pub fn list_directory(&self, path: &str) -> Result<Vec<ListedEntry>, FilesystemError> {
         let id = self.lookup(path)?;
-        let inode = self.inodes.get(&id).ok_or(FilesystemError::NotFound)?;
-        let InodeKind::Directory { entries, .. } = &inode.kind else {
-            return Err(FilesystemError::NotDirectory);
-        };
-        let mut listed: Vec<_> = entries
-            .iter()
-            .map(|(name, entry)| ListedEntry {
-                name: name.clone(),
-                inode: entry.inode,
-                cookie: entry.cookie,
-            })
-            .collect();
-        listed.sort_by_key(|entry| entry.cookie);
-        Ok(listed)
+        self.directory_entries(id)
     }
 
     /// Lists regular-file paths recursively, without loading their bodies.
@@ -731,6 +845,7 @@ impl Filesystem {
         }
         inode.version = inode.version.wrapping_add(1);
         inode.ctime = self.now;
+        inode.ctime_nanoseconds = 0;
         self.apply_seed_metadata(id, update)?;
         self.emit_inode(ChangeKind::Metadata, id, self.mutation_source);
         Ok(())
@@ -784,12 +899,15 @@ impl Filesystem {
         }
         if let Some(atime) = metadata.atime {
             inode.atime = atime;
+            inode.atime_nanoseconds = 0;
         }
         if let Some(mtime) = metadata.mtime {
             inode.mtime = mtime;
+            inode.mtime_nanoseconds = 0;
         }
         if let Some(ctime) = metadata.ctime {
             inode.ctime = ctime;
+            inode.ctime_nanoseconds = 0;
         }
         Ok(())
     }
@@ -800,6 +918,8 @@ impl Filesystem {
     /// Returns a malformed path, duplicate entry, invalid link, or quota error.
     pub fn install_seed(&mut self, entries: &[SeedEntry]) -> Result<(), FilesystemError> {
         let mut candidate = Self::new(self.limits, self.now);
+        candidate.identity = self.identity.clone();
+        candidate.next_session = self.next_session;
         candidate.record_changes = false;
         candidate.mutation_source = self.mutation_source;
         candidate.replace_root(self.next_inode)?;
@@ -947,6 +1067,9 @@ impl Filesystem {
                 atime: self.now,
                 mtime: self.now,
                 ctime: self.now,
+                atime_nanoseconds: 0,
+                mtime_nanoseconds: 0,
+                ctime_nanoseconds: 0,
             },
         );
         self.links.entry(id).or_default().insert((parent, name));
@@ -959,23 +1082,7 @@ impl Filesystem {
     /// Returns a path, duplicate-entry, or quota error.
     pub fn mkdir(&mut self, path: &str) -> Result<InodeId, FilesystemError> {
         let (parent, name) = self.parent(path)?;
-        let id = self.insert(
-            parent,
-            name,
-            InodeKind::Directory {
-                entries: BTreeMap::new(),
-                next_cookie: 1,
-            },
-            0o755,
-        )?;
-        self.emit(
-            ChangeKind::Create,
-            Some(id),
-            path,
-            None,
-            self.mutation_source,
-        );
-        Ok(id)
+        self.mkdir_at(parent, &name, 0o755, 1000, 1000)
     }
 
     /// Adds a symbolic link without resolving its target.
@@ -983,19 +1090,8 @@ impl Filesystem {
     /// # Errors
     /// Returns a path, duplicate-entry, or quota error.
     pub fn symlink(&mut self, path: &str, target: &str) -> Result<InodeId, FilesystemError> {
-        if target.len() > usize::from(u16::MAX) || target.contains('\0') {
-            return Err(FilesystemError::InvalidPath);
-        }
         let (parent, name) = self.parent(path)?;
-        let id = self.insert(parent, name, InodeKind::Symlink(target.to_owned()), 0o777)?;
-        self.emit(
-            ChangeKind::Create,
-            Some(id),
-            path,
-            None,
-            self.mutation_source,
-        );
-        Ok(id)
+        self.symlink_at(parent, &name, target, 1000, 1000)
     }
 
     /// Returns a symbolic link's literal target.
@@ -1071,6 +1167,15 @@ impl Filesystem {
     /// Returns a path, type, or nonempty-directory error.
     pub fn remove(&mut self, path: &str) -> Result<(), FilesystemError> {
         let (parent, name) = self.parent(path)?;
+        self.remove_at(parent, &name)
+    }
+
+    /// Removes one literal entry without invalidating retained inode fids.
+    /// # Errors
+    /// Reports invalid names, missing entries, or nonempty directories.
+    pub fn remove_at(&mut self, parent: InodeId, name: &str) -> Result<(), FilesystemError> {
+        let path = self.entry_path(parent, name)?;
+        let name = name.to_owned();
         let id = match &self
             .inodes
             .get(&parent)
@@ -1111,6 +1216,7 @@ impl Filesystem {
         let inode = self.inodes.get_mut(&id).ok_or(FilesystemError::NotFound)?;
         inode.link_count -= 1;
         inode.ctime = self.now;
+        inode.ctime_nanoseconds = 0;
         inode.version = inode.version.wrapping_add(1);
         if inode.link_count == 0 {
             inode.parent = None;
@@ -1123,7 +1229,7 @@ impl Filesystem {
         self.emit(
             ChangeKind::Remove,
             Some(id),
-            path,
+            &path,
             None,
             self.mutation_source,
         );
@@ -1136,6 +1242,21 @@ impl Filesystem {
     /// Returns a path, type, duplicate-entry, or quota error.
     pub fn hard_link(&mut self, existing: &str, new_path: &str) -> Result<(), FilesystemError> {
         let id = self.lookup(existing)?;
+        let (parent, name) = self.parent(new_path)?;
+        self.link_at(parent, &name, id)
+    }
+
+    /// Links an inode, including a retained inode without a current path.
+    /// # Errors
+    /// Reports directory targets, invalid names, duplicate entries, or quotas.
+    pub fn link_at(
+        &mut self,
+        parent: InodeId,
+        name: &str,
+        id: InodeId,
+    ) -> Result<(), FilesystemError> {
+        let new_path = self.entry_path(parent, name)?;
+        let name = name.to_owned();
         let inode = self.inodes.get(&id).ok_or(FilesystemError::NotFound)?;
         if matches!(inode.kind, InodeKind::Directory { .. }) {
             return Err(FilesystemError::IsDirectory);
@@ -1144,7 +1265,6 @@ impl Filesystem {
             .link_count
             .checked_add(1)
             .ok_or(FilesystemError::NoSpace)?;
-        let (parent, name) = self.parent(new_path)?;
         let at_capacity = self.directory_entries >= self.limits.max_directory_entries;
         let directory = self
             .inodes
@@ -1177,12 +1297,13 @@ impl Filesystem {
         let inode = self.inodes.get_mut(&id).ok_or(FilesystemError::NotFound)?;
         inode.link_count = next_links;
         inode.ctime = self.now;
+        inode.ctime_nanoseconds = 0;
         inode.version = inode.version.wrapping_add(1);
         self.links.entry(id).or_default().insert((parent, name));
         self.emit(
             ChangeKind::Create,
             Some(id),
-            new_path,
+            &new_path,
             None,
             self.mutation_source,
         );
@@ -1194,17 +1315,25 @@ impl Filesystem {
     /// # Errors
     /// Returns a path, type, nonempty-directory, or cookie exhaustion error.
     pub fn rename(&mut self, old_path: &str, new_path: &str) -> Result<(), FilesystemError> {
-        let old_parts = Self::parts(old_path)?;
-        let new_parts = Self::parts(new_path)?;
-        if old_parts.is_empty() || new_parts.is_empty() {
-            return Err(FilesystemError::InvalidPath);
-        }
-        if old_parts == new_parts {
-            self.lookup(old_path)?;
-            return Ok(());
-        }
         let (old_parent, old_name) = self.parent(old_path)?;
         let (new_parent, new_name) = self.parent(new_path)?;
+        self.rename_at(old_parent, &old_name, new_parent, &new_name)
+    }
+
+    /// Moves literal entries between directory inodes.
+    /// # Errors
+    /// Rejects cycles, incompatible replacements, invalid names, and quotas.
+    pub fn rename_at(
+        &mut self,
+        old_parent: InodeId,
+        old_name: &str,
+        new_parent: InodeId,
+        new_name: &str,
+    ) -> Result<(), FilesystemError> {
+        let old_path = self.entry_path(old_parent, old_name)?;
+        let new_path = self.entry_path(new_parent, new_name)?;
+        let old_name = old_name.to_owned();
+        let new_name = new_name.to_owned();
         let old_entry = match &self
             .inodes
             .get(&old_parent)
@@ -1221,8 +1350,14 @@ impl Filesystem {
             .inodes
             .get(&old_entry.inode)
             .ok_or(FilesystemError::NotFound)?;
-        if matches!(moving.kind, InodeKind::Directory { .. }) && new_parts.starts_with(&old_parts) {
-            return Err(FilesystemError::InvalidPath);
+        if matches!(moving.kind, InodeKind::Directory { .. }) {
+            let mut ancestor = Some(new_parent);
+            while let Some(id) = ancestor {
+                if id == moving.id {
+                    return Err(FilesystemError::InvalidPath);
+                }
+                ancestor = self.parent_inode(id);
+            }
         }
         let new_directory = self
             .inodes
@@ -1271,7 +1406,7 @@ impl Filesystem {
         // All fallible checks precede the entry changes, so readers never see
         // a half-moved path after an expected filesystem error.
         if replaced.is_some() {
-            self.remove(new_path)?;
+            self.remove_at(new_parent, &new_name)?;
         }
         let directory = self
             .inodes
@@ -1316,12 +1451,13 @@ impl Filesystem {
             inode.parent = Some(new_parent);
         }
         inode.ctime = self.now;
+        inode.ctime_nanoseconds = 0;
         inode.version = inode.version.wrapping_add(1);
         self.emit(
             ChangeKind::Rename,
             Some(old_entry.inode),
-            new_path,
-            Some(old_path),
+            &new_path,
+            Some(&old_path),
             self.mutation_source,
         );
         Ok(())
@@ -1516,7 +1652,11 @@ impl Filesystem {
         let source = self.mutation_source;
         let record_changes = self.record_changes;
         let following_inode = next_inode.checked_add(1).ok_or(FilesystemError::NoSpace)?;
+        let identity = self.identity.clone();
+        let next_session = self.next_session;
         *self = Self::new(limits, self.now);
+        self.identity = identity;
+        self.next_session = next_session;
         self.replace_root(next_inode)?;
         self.next_inode = following_inode;
         self.next_load = next_load;

@@ -61,6 +61,11 @@ Repository map and terminology
 *   `js/p9/` is the authoritative TypeScript 9P2000.L server, shared in-memory
     filesystem, and optional seed plugins. Generated JavaScript and declarations
     go under `build/js/p9/`.
+*   `src/ninep.rs` and `src/ninep/` own the standalone Rust namespace;
+    `src/ninep_protocol.rs` and `src/ninep_protocol/` own its 9P2000.L session.
+    They are tested on native and raw WASM targets but are not yet attached to
+    production browser VMs. The session profile and calling contract are in
+    `src/ninep_protocol/README.md`; migration coordination is in `DEV.md`.
 *   `images/` contains reproducible Makefile-driven image definitions and deployment tooling.
     Generated downloads, images, boot assets, and distributions are not source.
 *   `kernel/` owns the canonical custom Linux kernel consumed by image builds.
@@ -284,8 +289,8 @@ Validation
 ----------
 
 *   `make test-unit` runs Rust, Python tool, JavaScript adapter/server tests,
-    and an executable raw-WASM 9p namespace regression probe in Node.
-*   `make test` adds real WASM/Chrome network integration and namespace tests
+    and an executable raw-WASM 9p namespace/protocol regression probe in Node.
+*   `make test` adds real WASM/Chrome network integration and 9p server tests
     for development.
 *   `make check` adds strict Clippy and Python type checks. The GitHub release
     workflow runs unit tests, type checks, Clippy, and builds without Chrome or

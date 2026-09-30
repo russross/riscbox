@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-test("9p namespace executes on raw WASM without operating-system imports", async () => {
+test("9p namespace and protocol execute on raw WASM without operating-system imports", async () => {
     const directory = await mkdtemp(join(tmpdir(), "riscbox-ninep-"));
     try {
         const wasm = join(directory, "namespace.wasm");
@@ -20,6 +20,7 @@ test("9p namespace executes on raw WASM without operating-system imports", async
         assert.deepEqual(WebAssembly.Module.imports(module), []);
         const instance = await WebAssembly.instantiate(module, {});
         assert.equal(instance.exports.namespace_regression(), 1);
+        assert.equal(instance.exports.protocol_regression(), 1);
 
         // make test also invokes this probe in Chrome. A promise continuation
         // enters WASM only after the previous activation has returned.
@@ -30,8 +31,10 @@ test("9p namespace executes on raw WASM without operating-system imports", async
                     const bytes = Uint8Array.from(atob("${bytes.toString("base64")}"), c => c.charCodeAt(0));
                     const { instance } = await WebAssembly.instantiate(bytes, {});
                     if (instance.exports.namespace_regression() !== 1) throw Error("first call");
+                    if (instance.exports.protocol_regression() !== 1) throw Error("protocol call");
                     await Promise.resolve();
                     if (instance.exports.namespace_regression() !== 1) throw Error("second call");
+                    if (instance.exports.protocol_regression() !== 1) throw Error("protocol continuation");
                     document.body.textContent = "NINEP_WASM_PASS";
                 } catch (error) { document.body.textContent = "FAIL: " + error; }
             </script>`);

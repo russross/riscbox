@@ -4,6 +4,15 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Added a standalone Rust 9P2000.L endpoint with the supported operation
+    matrix, explicit lazy-load submissions and completion queues, filesystem
+    identity/generation checks, and separate namespace/device/session resets.
+    Guest file I/O operates on retained inodes and requested ranges. Corrected
+    partial walks, open access modes, existing-file create flags, attribute
+    validity masks and nanosecond timestamps, directory cookies, and lock
+    owner reporting. Added protocol regressions and executable Node/Chrome
+    WASM coverage. Production VM attachment remains on the TypeScript server.
+
 *   Corrected the standalone Rust 9p namespace's process/client lock ownership,
     partial unlocks, and range conversion. Supplied epoch time explicitly for
     raw WASM; lazy loading preserves file timestamps and QID versions, and

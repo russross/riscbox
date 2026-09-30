@@ -66,6 +66,17 @@ dependencies live under `risclet/ui/`. The distribution build installs them
 when needed, runs the type checker, and bundles the CodeMirror, Ghostty,
 Split.js, and CommonMark frontend into `dist/bundle.js`.
 
+Filesystem browser acceptance
+-----------------------------
+
+Run `make test-images` from the repository root to rebuild the three image
+distributions and test native Alpine and the deployed Risclet UI in Chrome.
+The Risclet test covers preboot namespaces, on-demand HTTP reads and failures,
+editor and guest writes, notifications, renamed paths, reboot/shutdown,
+namespace reset followed by VM remount, and switching during pending reads.
+It uses an isolated browser profile and a local HTTP server; no deployment
+or remote origin service is required.
+
 Browser timing tests
 --------------------
 

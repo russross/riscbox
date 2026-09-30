@@ -27,6 +27,13 @@ check: test
 	cargo clippy --all-targets --workspace -- -D warnings
 	uvx --quiet ty check tools/splitimg.py tools/image_deployment.py
 
+test-images:
+	$(MAKE) -C images/risclet
+	$(MAKE) -C images/alpine
+	$(MAKE) -C images/xv6-profile
+	cargo test --release --test platform_acceptance alpine_reaches_login_and_shuts_down -- --ignored
+	node --test tests/risclet_browser.test.mjs
+
 wasm: $(RUSTBOX_WASM)
 
 js: build/js/.built
@@ -69,4 +76,4 @@ clean:
 
 clean-all: clean
 
-.PHONY: all release test-unit test check wasm js js-check kernel opensbi uboot dist clean clean-all
+.PHONY: all release test-unit test check test-images wasm js js-check kernel opensbi uboot dist clean clean-all

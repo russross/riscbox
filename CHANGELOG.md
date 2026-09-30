@@ -4,6 +4,14 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Completed the Rust 9p migration and added `make test-images` for reproducible
+    deployed Risclet/Chrome and native Alpine acceptance. Coverage includes
+    preboot host access, lazy HTTP success/failure, guest-created files, host
+    replacements, editor and guest notifications, renamed directory paths,
+    guest reboot/shutdown, namespace reset with VM remount, and destroy/rebind
+    while an older host read is pending. Browser probes run with normal timers
+    and MessageChannel tasks rather than advancing virtual browser time.
+
 *   Migrated Risclet to Rust filesystem handles and promise-based editor,
     file-tree, instruction, and notification operations. Example manifests
     publish file sizes; bodies load only on demand. One WASM runtime retains
@@ -27,7 +35,6 @@ Unreleased
     live VM while permitting shared endpoints, and release on destroy or
     failed startup. Added native and deployed-WASM ABI regression probes,
     including asynchronous guest reads through a non-PIE firmware program.
-    Existing browser applications retain the TypeScript facade during migration.
 
 *   Connected Rust 9p sessions to VirtIO and the browser runtime's internal
     filesystem registry. Resident requests complete within the notifying CPU
@@ -36,8 +43,7 @@ Unreleased
     shared endpoints after mutations. Registered trees remain available before
     boot and across VM reset, shutdown, destroy, and recreation. Added real-ring
     CPU probes on native and Node/Chrome WASM targets, plus an Alpine mount,
-    file-operation, lazy-load, and shutdown acceptance test. Public browser
-    filesystem registration remains scheduled for the raw ABI migration.
+    file-operation, lazy-load, and shutdown acceptance test.
 
 *   Added a standalone Rust 9P2000.L endpoint with the supported operation
     matrix, explicit lazy-load submissions and completion queues, filesystem
@@ -46,7 +52,7 @@ Unreleased
     partial walks, open access modes, existing-file create flags, attribute
     validity masks and nanosecond timestamps, directory cookies, and lock
     owner reporting. Added protocol regressions and executable Node/Chrome
-    WASM coverage. Production VM attachment remains on the TypeScript server.
+    WASM coverage.
 
 *   Corrected the standalone Rust 9p namespace's process/client lock ownership,
     partial unlocks, and range conversion. Supplied epoch time explicitly for
@@ -56,7 +62,6 @@ Unreleased
     history signals rescan on overflow, and typed host origins support editor
     filtering. Load initiation distinguishes started and joined readers.
     Added native regression coverage and executable Node/Chrome WASM probes.
-    The TypeScript server remains the production implementation.
 
 *   Restored decayed P99 guest-clock skew while retaining lead carryover and
     extended quantum budgets. Carried quanta use the slower of the P99-skewed

@@ -8,8 +8,7 @@ the same Rust server. The
 [filesystem ABI](../browser_abi/ninep/README.md) exposes handles and source work.
 
 Wire behavior follows the [9P2000.L reference](https://github.com/chaos/diod/blob/master/protocol.md)
-and its linked Plan 9 operation specifications. TypeScript behavior is useful
-for migration comparisons but does not define protocol correctness.
+and its linked Plan 9 operation specifications.
 
 Supported profile
 -----------------
@@ -84,8 +83,8 @@ Runtime and transport ownership
 
 `BrowserRuntime::register_filesystem(key, filesystem)` takes ownership before
 startup. Configured endpoints matching the key receive independent Rust
-sessions over that tree. Unregistered keys use the transitional JavaScript
-backend. Registry entries outlive VM reset, shutdown, destroy, and recreation.
+sessions over that tree. Unregistered keys reject startup. Registry entries
+outlive VM reset, shutdown, destroy, and recreation.
 The runtime may register an owned namespace or an independently owned handle.
 A VM lifetime guard permits several endpoints over a handle but rejects a
 second live VM. Destroy releases the guard while retaining the namespace.

@@ -443,26 +443,31 @@ async function updateInstructions(): Promise<void> {
     }
 }
 
+function changeAffectsPath(change: P9Change, path: string): boolean {
+    if (change.kind === "reset" || change.kind === "rescan") return true;
+    const names = [change.path, ...change.aliases];
+    if (change.oldPath !== undefined) names.push(change.oldPath);
+    return names.some(name => path === name || path.startsWith(`${name}/`));
+}
+
 async function handleFilesystemChange(example: ExampleState, change: P9Change): Promise<void> {
     if (example !== currentExample) {
         return;
     }
-    if (change.kind === "rename" && change.oldPath === currentPath) {
-        currentPath = change.path;
+    // Directory renames move every displayed child path. Alias events also
+    // invalidate an open editor even when the guest wrote through another link.
+    if (change.kind === "rename" && change.oldPath !== undefined && currentPath !== null
+        && (currentPath === change.oldPath || currentPath.startsWith(`${change.oldPath}/`))) {
+        currentPath = change.path + currentPath.slice(change.oldPath.length);
     }
     if (change.kind !== "write") {
         void renderFileTree().catch(reportUiError);
     }
-    if (change.path === DOC_PATH
-        || (change.kind === "rename" && change.oldPath === DOC_PATH)
-        || change.kind === "reset" || change.kind === "rescan") {
+    if (changeAffectsPath(change, DOC_PATH)) {
         void updateInstructions().catch(reportUiError);
     }
     if (currentPath !== null && !(change.source === "host" && change.origin === EDITOR_ORIGIN)
-        && (change.path === currentPath
-            || change.aliases.includes(currentPath)
-            || change.kind === "reset" || change.kind === "rescan"
-            || (change.kind === "rename" && change.oldPath === currentPath))) {
+        && changeAffectsPath(change, currentPath)) {
         const view = viewGeneration;
         const path = currentPath;
         const paths = await example.filesystem.listFiles();

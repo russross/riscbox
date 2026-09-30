@@ -234,7 +234,10 @@ export class Filesystem implements FilesystemService {
             } catch (error: unknown) { this.pending.delete(request); pending.reject(error); }
         }
         // Capture recipients with each copied event, then leave the synchronous service path.
-        while (this.runtime.exports.riscbox_fs_next_change(this.handle) === 1) {
+        for (;;) {
+            const status = this.runtime.exports.riscbox_fs_next_change(this.handle);
+            checked(status);
+            if (status === 0) break;
             const reader = new Reader(this.snapshot());
             const changeKind = changes[reader.u32() - 1]; const inode = reader.u64();
             const source = sources[reader.u32()]; const origin = reader.u64(); const path = reader.str();

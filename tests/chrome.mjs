@@ -2,16 +2,17 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { createServer } from "node:http";
-import { join, resolve } from "node:path";
+import { extname, join, resolve } from "node:path";
 
 // Real timers and MessageChannel tasks must run normally during VM tests.
 // The page reports its result over HTTP instead of advancing Chrome virtual time.
-export async function runChromePage(html, directory) {
+export async function runChromePage(html, directory, options = {}) {
     const root = resolve(import.meta.dirname, "..");
     let finish;
     const result = new Promise(resolveResult => { finish = resolveResult; });
     const server = createServer(async (request, response) => {
         const url = new URL(request.url, "http://localhost");
+        options.onRequest?.(url);
         if (url.pathname === "/result") {
             finish(url.searchParams.get("status")); response.end("received"); return;
         }
@@ -21,8 +22,12 @@ export async function runChromePage(html, directory) {
         const path = resolve(root, `.${url.pathname}`);
         if (!path.startsWith(`${root}/`)) { response.writeHead(403).end(); return; }
         try {
-            const bytes = await readFile(path);
-            response.setHeader("Content-Type", path.endsWith(".js") || path.endsWith(".mjs") ? "text/javascript" : "application/octet-stream");
+            const override = await options.response?.(url);
+            if (override !== undefined) { response.writeHead(override.status).end(override.body); return; }
+            let bytes = await readFile(path);
+            if (options.transform) bytes = await options.transform(path, bytes);
+            const types = { ".html": "text/html", ".css": "text/css", ".js": "text/javascript", ".mjs": "text/javascript", ".wasm": "application/wasm", ".svg": "image/svg+xml" };
+            response.setHeader("Content-Type", types[extname(path)] ?? "application/octet-stream");
             response.end(bytes);
         } catch { response.writeHead(404).end(); }
     });
@@ -35,7 +40,7 @@ export async function runChromePage(html, directory) {
     let errors = "";
     chrome.stderr.on("data", bytes => { errors += bytes.toString(); });
     chrome.on("error", error => finish(String(error)));
-    const timeout = setTimeout(() => finish("timeout"), 20_000);
+    const timeout = setTimeout(() => finish("timeout"), options.timeoutMs ?? 20_000);
     try { assert.equal(await result, "pass", errors); }
     finally {
         clearTimeout(timeout);

@@ -86,18 +86,19 @@ console page.
 Build targets
 -------------
 
-| Target              | Result                                                       |
-| ------------------- | ------------------------------------------------------------ |
-| `make release`      | Optimized Rust workspace for development and native tests    |
-| `make test-unit`    | Rust, Python, JavaScript, and raw-WASM 9p server tests         |
-| `make test`         | Unit tests and Chrome/WASM network and 9p server tests        |
-| `make check`        | Full tests, strict Clippy, TypeScript, and Python type checks  |
-| `make wasm`         | `target/wasm32-unknown-unknown/release/riscbox_wasm.wasm`       |
-| `make` / `make all` | Build the complete release archive in `build/releases/`      |
-| `make kernel`       | Canonical kernel and its `kernel/linux-HASH.gz` asset         |
-| `make opensbi`      | OpenSBI and its `opensbi/fw_dynamic.bin-HASH.gz` asset         |
-| `make uboot`        | U-Boot and its `uboot/u-boot.bin-HASH.gz` asset                 |
-| `make dist`         | Update the release archive from all build components          |
+| Target              | Result                                                                 |
+| ------------------- | ---------------------------------------------------------------------- |
+| `make release`      | Optimized Rust workspace for development and native tests              |
+| `make test-unit`    | Rust, Python, JavaScript, and raw-WASM 9p server tests                 |
+| `make test`         | Unit tests and Chrome/WASM network and 9p server tests                 |
+| `make check`        | Full tests, strict Clippy, TypeScript, and Python type checks          |
+| `make test-images`  | Build image distributions; native Alpine and Chrome Risclet acceptance |
+| `make wasm`         | `target/wasm32-unknown-unknown/release/riscbox_wasm.wasm`              |
+| `make` / `make all` | Build the complete release archive in `build/releases/`                |
+| `make kernel`       | Canonical kernel and its `kernel/linux-HASH.gz` asset                  |
+| `make opensbi`      | OpenSBI and its `opensbi/fw_dynamic.bin-HASH.gz` asset                 |
+| `make uboot`        | U-Boot and its `uboot/u-boot.bin-HASH.gz` asset                        |
+| `make dist`         | Update the release archive from all build components                   |
 
 Browser library
 ---------------

@@ -19,7 +19,7 @@ The supported machine is deliberately narrow:
     SiFive test finisher, simple framebuffer, and VirtIO MMIO block, 9p,
     network, entropy, keyboard, and tablet devices.
 *   Browser delivery through raw WebAssembly, a handwritten JavaScript adapter,
-    HTTP-backed disks, and host-provided 9P2000.L servers.
+    HTTP-backed disks, and Rust 9P2000.L filesystems with host source plugins.
 
 The optional TypeScript network adapter carries one Ethernet frame per binary
 WebSocket message to a host-selected origin endpoint. Browser network devices
@@ -310,7 +310,7 @@ intended loadable section explicitly.
 Validation
 ----------
 
-*   `make test-unit` runs Rust, Python tool, JavaScript adapter/server tests,
+*   `make test-unit` runs Rust, Python tool, JavaScript adapter/facade tests,
     and executable raw-WASM 9p namespace/protocol/transport, CPU, and deployed
     filesystem ABI probes in Node.
 *   `make test` adds real WASM/Chrome network integration and 9p server tests
@@ -318,6 +318,12 @@ Validation
 *   `make check` adds strict Clippy and Python type checks. The GitHub release
     workflow runs unit tests, type checks, Clippy, and builds without Chrome or
     full-guest tests.
+*   `make test-images` rebuilds Risclet, Alpine, and xv6 profile distributions,
+    runs native Alpine acceptance, and exercises the deployed Risclet UI and
+    guest in Chrome. It covers host/editor/guest changes, lazy HTTP failures,
+    notifications, reboot/shutdown, namespace reset with VM remount, and switching
+    during asynchronous reads. Browser tests use temporary profiles and normal
+    event-loop timing; they use headed Chrome when a display is available.
 *   `make wasm` builds the deployed Rust WebAssembly artifact.
 *   `make kernel`, `make opensbi`, and `make uboot` build the pinned guest
     components and their hash-named gzip assets. The default `make` builds

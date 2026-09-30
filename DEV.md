@@ -76,19 +76,13 @@ remove this active plan.
 
 #### Status and scope
 
-The TypeScript server in `js/p9/session.ts` and `js/p9/filesystem.ts` still
-serves production guests. The committed VirtIO seam, `c1f1b45` (`Allow
-immediate 9p backend replies`), permits `NinePBackend::submit` to return an
-immediate `NinePOutcome`; `NinePDevice::notify` completes its descriptor before
-returning in that case. The existing browser backend remains asynchronous.
-Milestones 1 and 2 are complete. The standalone Rust namespace and
-9P2000.L session have 46 focused native tests, plus an import-free raw-WASM
-probe executed in Node and Chrome. Validation includes `make check` and a
-release WASM build in a fresh target directory. The supported protocol profile
-and calling contract are documented in [the session guide](src/ninep_protocol/README.md).
-Neither module is attached to the VM, production raw ABI, or browser adapter;
-milestone 3 connects the session to VirtIO. Do not treat the Rust server as
-supported by the host application yet.
+Milestones 1–3 are complete. Registered Rust trees now use independent sessions
+through VirtIO and the browser runtime; production browser applications still
+use TypeScript until the raw ABI and facade migration. The protocol profile,
+transport ownership, and calling contract are documented in
+[the session guide](src/ninep_protocol/README.md). Milestone 4 exposes filesystem
+handles and source work to JavaScript. Do not treat the Rust server as supported
+by the host application yet.
 
 The goal is a Rust-owned 9P2000.L filesystem and protocol engine with a small
 browser facade. A filesystem exists before VM boot and remains usable while
@@ -170,20 +164,8 @@ browser migration must preserve editor origin filtering with numeric origin IDs.
 
 #### Remaining milestones
 
-Milestones 1–2 are complete; milestones 3–7 have not started. Advance these
+Milestones 1–3 are complete; milestones 4–7 have not started. Advance these
 statuses here when a milestone passes its stated tests and is committed.
-
-3.  **Connect Rust sessions to VirtIO and browser runtime state.** Replace
-    `BrowserNineP` in `src/browser_runtime.rs` with a backend that references
-    a registered Rust filesystem. Update `src/machine.rs` and
-    `src/virtio_devices.rs` so resident requests finish before `notify`
-    returns and only lazy reads retain descriptors. Add a completion/retirement
-    drain keyed by request ID so one submission can finish earlier requests,
-    with `Rflush` ordered after retirement. Do not rely solely on the current
-    request's `Option<NinePOutcome>`. Keep C CPU-run borrowing exclusive of
-    filesystem access by host callbacks. Retire pending work by
-    generation on VM and device reset. Test same-call resident completion,
-    out-of-order async completion, flush, and reset in native Rust.
 
 4.  **Expose filesystem handles and on-demand loads through raw WASM.** Add
     scalar exports in `src/browser_abi.rs` and `riscbox-wasm/src/lib.rs` for

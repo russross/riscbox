@@ -5,6 +5,7 @@ use riscbox::browser_runtime::{
 };
 use riscbox::config::VmConfig;
 use riscbox::host_block::HostBlockProviderId;
+use riscbox::ninep::{FileRead, Filesystem, Limits};
 use riscbox::virtio_devices::{
     NinePBackend, NinePEndpointId, NinePGeneration, NinePRequestId, NinePTransportAction,
 };
@@ -18,6 +19,62 @@ fn start() -> RuntimeStart {
         height: 0,
         has_network: false,
     }
+}
+
+#[test]
+fn registered_rust_namespace_exists_before_boot_and_survives_vm_lifetimes() {
+    let mut runtime = BrowserRuntime::default();
+    runtime
+        .register_filesystem("workspace".into(), Filesystem::new(Limits::default(), 100))
+        .unwrap();
+    runtime
+        .with_filesystem("workspace", |fs| fs.write_file("host", b"before"))
+        .unwrap();
+    assert!(
+        runtime
+            .register_filesystem("workspace".into(), Filesystem::new(Limits::default(), 100))
+            .is_err()
+    );
+    for _ in 0..2 {
+        let config = VmConfig::from_resolved(
+            r#"{"version":1,"machine":"riscv64","memory_size":32,"console":"uart",
+            "uart_output":true,"rtc_local_time":false,"cmdline":"",
+            "bios":"https://host/fw.bin","fs0":{"server":"workspace","tag":"shared"},
+            "fs1":{"server":"workspace","tag":"peer"}}"#,
+        )
+        .unwrap();
+        runtime.start_resolved(start(), config).unwrap();
+        let (firmware, _) = request(&mut runtime);
+        runtime
+            .complete_http(firmware, 200, vec![0x73, 0, 0x50, 0x10])
+            .unwrap();
+        assert_eq!(runtime.next_action(), Some(HostAction::Started));
+        assert!(runtime.next_action().is_none());
+        assert_eq!(
+            runtime
+                .with_filesystem("workspace", |fs| fs.read_file("host"))
+                .unwrap(),
+            FileRead::Resident(b"before".to_vec())
+        );
+        runtime.reset().unwrap();
+        assert_eq!(
+            runtime
+                .with_filesystem("workspace", |fs| fs.read_file("host"))
+                .unwrap(),
+            FileRead::Resident(b"before".to_vec())
+        );
+        runtime.halt().unwrap();
+        runtime.destroy().unwrap();
+        assert!(runtime.next_ninep_load().is_none());
+    }
+    runtime
+        .with_filesystem("workspace", Filesystem::reset)
+        .unwrap();
+    assert!(
+        runtime
+            .with_filesystem("workspace", |fs| fs.read_file("host"))
+            .is_err()
+    );
 }
 
 #[test]

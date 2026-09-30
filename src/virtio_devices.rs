@@ -679,6 +679,14 @@ pub trait NinePBackend {
 
     fn reset(&mut self, _: NinePGeneration) {}
 
+    /// Drains replies and retirements queued before the current submission.
+    ///
+    /// # Errors
+    /// Returns an error if the backend cannot safely publish a completion.
+    fn next_completion(&mut self) -> Result<Option<NinePCompletion>, DeviceError> {
+        Ok(None)
+    }
+
     fn next_transport_action(&mut self) -> Option<NinePTransportAction> {
         None
     }
@@ -700,6 +708,10 @@ impl<T: NinePBackend + ?Sized> NinePBackend for Box<T> {
 
     fn reset(&mut self, generation: NinePGeneration) {
         (**self).reset(generation);
+    }
+
+    fn next_completion(&mut self) -> Result<Option<NinePCompletion>, DeviceError> {
+        (**self).next_completion()
     }
 
     fn next_transport_action(&mut self) -> Option<NinePTransportAction> {
@@ -725,6 +737,13 @@ pub enum NinePOutcome {
     Reply(Vec<u8>),
     Suppressed,
     EndpointFailure,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NinePCompletion {
+    pub generation: NinePGeneration,
+    pub request: NinePRequestId,
+    pub outcome: NinePOutcome,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -820,7 +839,11 @@ impl<B: NinePBackend> VirtioDevice for NinePDevice<B> {
             let reply_capacity = chain.writable;
             self.pending
                 .insert(request_id, PendingNineP { queue, chain, tag });
-            if let Some(outcome) = self.backend.submit(request_id, req, reply_capacity) {
+            let outcome = self.backend.submit(request_id, req, reply_capacity);
+            // Flush may retire an older descriptor. Publish that retirement
+            // before acknowledging the request that made it possible.
+            self.drain_completions(transport, memory)?;
+            if let Some(outcome) = outcome {
                 self.complete(transport, memory, self.generation, request_id, outcome)?;
             }
             if self.pending.len() >= pending_limit {
@@ -843,6 +866,27 @@ impl<B: NinePBackend> VirtioDevice for NinePDevice<B> {
 }
 
 impl<B: NinePBackend> NinePDevice<B> {
+    /// Publishes backend completions without submitting another guest request.
+    ///
+    /// # Errors
+    /// Returns an error for invalid backend results or guest descriptors.
+    pub fn drain_completions(
+        &mut self,
+        transport: &mut VirtioTransport,
+        memory: &mut dyn MemoryAccess,
+    ) -> Result<(), DeviceError> {
+        while let Some(completion) = self.backend.next_completion()? {
+            self.complete(
+                transport,
+                memory,
+                completion.generation,
+                completion.request,
+                completion.outcome,
+            )?;
+        }
+        Ok(())
+    }
+
     fn allocate_request_id(&mut self) -> Result<NinePRequestId, DeviceError> {
         let id = NinePRequestId(self.next_request_id);
         self.next_request_id = self

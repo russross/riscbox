@@ -2,8 +2,9 @@ Rust 9P2000.L endpoint
 =====================
 
 The [session](../ninep_protocol.rs) implements the standalone Rust server
-profile over [namespace state](../ninep.rs). The production browser still
-uses the TypeScript server; runtime and VirtIO attachment is separate work.
+profile over [namespace state](../ninep.rs). The [Rust backend](../ninep_backend.rs)
+connects it to VirtIO and the runtime registry. The production browser still
+uses the TypeScript server until the filesystem ABI and facade are exposed.
 
 Wire behavior follows the [9P2000.L reference](https://github.com/chaos/diod/blob/master/protocol.md)
 and its linked Plan 9 operation specifications. TypeScript behavior is useful
@@ -77,12 +78,45 @@ flush messages cannot generate an `Rlerror`; valid flush messages always get
 must dispatch source promises and notification listeners after WASM returns,
 and must not keep a JavaScript memory view across an await.
 
+Runtime and transport ownership
+-------------------------------
+
+`BrowserRuntime::register_filesystem(key, filesystem)` takes ownership before
+startup. Configured endpoints matching the key receive independent Rust
+sessions over that tree. Unregistered keys use the transitional JavaScript
+backend. Registry entries outlive VM reset, shutdown, destroy, and recreation.
+The runtime owns each registered namespace; another runtime cannot register
+the same owned `Filesystem`. The public browser handle boundary comes later.
+
+`BrowserRuntime::with_filesystem(key, operation)` finishes the host operation,
+releases its namespace borrow, and polls all attached endpoints. This includes
+operations that report an error after settling a load as failed. Operations
+also work before startup and while halted. `next_ninep_load()` yields a server
+key and a started load ticket; joined requests do not dispatch source work.
+Host writes and namespace resets discard superseded queued tickets. Device
+reset retains valid source loads while discarding old protocol completions.
+
+The backend never calls JavaScript. `NinePDevice::notify` drains earlier
+completions before publishing the current reply. Machine MMIO also polls other
+9p endpoints after a guest mutation, so truncation can satisfy another session's
+pending read without a host round trip. Resident requests finish in the same
+CPU run; only external source work requests a host-service exit. After source
+completion, `Machine::poll_ninep()` publishes replies and updates device IRQs.
+Host mutation and source dispatch occur between exclusive CPU activations.
+Quantum entry supplies filesystem epoch time explicitly; standalone operations
+supply it through `Filesystem::set_time`.
+
 Validation
 ----------
 
 `cargo test ninep --lib` covers the namespace and protocol through independent
 packet builders. The raw-WASM probe in `tests/fixtures/ninep_wasm.rs` executes
-both implementations in Node during `make test-unit` and Chrome during
+the namespace, session, transport, and TinyEMU CPU in Node during `make test-unit` and Chrome during
 `make test`. Native tests cover malformed/truncated requests, bounded replies,
 partial walks, open modes, ownership, nanoseconds, cookies, locks, shared loads,
 flush ordering, fid reuse, host writes, and the separate reset lifetimes.
+The shared transport probe uses real guest rings and a small firmware program
+to distinguish resident WFI completion from an external-load service exit.
+The ignored Alpine acceptance test additionally mounts the Rust share, performs
+Linux file and directory operations, completes a lazy load between CPU calls,
+and shuts down after verifying the guest's writes through the host API.

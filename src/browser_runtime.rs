@@ -17,6 +17,8 @@ use crate::machine::{
     BootAddresses, BootImages, FramebufferConfig, FramebufferUpdate, Machine, MachineConfig,
     MachineError,
 };
+use crate::ninep::{Filesystem, FilesystemError, LoadTicket};
+use crate::ninep_backend::{RustFilesystem, RustNineP};
 use crate::platform::FinishStatus;
 use crate::tinyemu_core::CpuRunExitReason;
 use crate::virtio_devices::{
@@ -384,6 +386,7 @@ pub enum RuntimeError {
     HttpStatus(u16),
     InvalidConfig(String),
     Machine(String),
+    Filesystem(FilesystemError),
 }
 
 impl fmt::Display for RuntimeError {
@@ -518,6 +521,7 @@ enum State {
 
 pub struct BrowserRuntime {
     state: State,
+    filesystems: BTreeMap<String, RustFilesystem>,
     next_request_id: u32,
     actions: VecDeque<HostAction>,
     retired_http: BTreeSet<u32>,
@@ -536,6 +540,7 @@ impl Default for BrowserRuntime {
     fn default() -> Self {
         Self {
             state: State::VmInactive,
+            filesystems: BTreeMap::new(),
             next_request_id: 1,
             actions: VecDeque::new(),
             retired_http: BTreeSet::new(),
@@ -553,6 +558,55 @@ impl Default for BrowserRuntime {
 }
 
 impl BrowserRuntime {
+    /// Registers a namespace before startup; configured endpoints use its key.
+    ///
+    /// # Errors
+    /// Returns an error for duplicate keys or a VM that has begun startup.
+    pub fn register_filesystem(
+        &mut self,
+        key: String,
+        filesystem: Filesystem,
+    ) -> Result<(), RuntimeError> {
+        if !matches!(self.state, State::VmInactive) || self.filesystems.contains_key(&key) {
+            return Err(RuntimeError::InvalidConfig(
+                "filesystem registration requires an unused key before startup".into(),
+            ));
+        }
+        self.filesystems
+            .insert(key, RustFilesystem::new(filesystem));
+        Ok(())
+    }
+
+    /// Mutates a registered tree, then publishes any newly satisfied guest I/O.
+    ///
+    /// # Errors
+    /// Returns an error for unknown keys, failed host operations, or guest I/O.
+    pub fn with_filesystem<T>(
+        &mut self,
+        key: &str,
+        operation: impl FnOnce(&mut Filesystem) -> Result<T, FilesystemError>,
+    ) -> Result<T, RuntimeError> {
+        let tree = self
+            .filesystems
+            .get(key)
+            .ok_or_else(|| RuntimeError::InvalidConfig("unknown filesystem".into()))?;
+        let result = tree.with_filesystem(operation);
+        // Even a failed operation can settle a load as failed. Poll after the
+        // namespace borrow ends, and while the machine's CPU is not borrowed.
+        if let State::Running(running) | State::Halted(running) = &mut self.state {
+            running.machine.poll_ninep()?;
+        }
+        result.map_err(RuntimeError::Filesystem)
+    }
+
+    /// Source work is dispatched by the host only after execution returns.
+    #[must_use]
+    pub fn next_ninep_load(&self) -> Option<(String, LoadTicket)> {
+        self.filesystems
+            .iter()
+            .find_map(|(key, tree)| tree.next_load().map(|ticket| (key.clone(), ticket)))
+    }
+
     /// Configures the duration and optional counters before a quantum starts.
     ///
     /// # Errors
@@ -596,6 +650,9 @@ impl BrowserRuntime {
         );
         // Carry clock lead into the duration and budget of this quantum.
         let host_ticks = host_epoch_ms.saturating_mul(GUEST_TICKS_PER_MILLISECOND);
+        for tree in self.filesystems.values() {
+            tree.with_filesystem(|filesystem| filesystem.set_time(host_epoch_ms / 1_000));
+        }
         let carried_ticks = self.guest_clock_floor_ticks.saturating_sub(host_ticks);
         let target_ms = self.target_quantum_ms
             + integer_as_f64(carried_ticks) / integer_as_f64(GUEST_TICKS_PER_MILLISECOND);
@@ -1442,7 +1499,7 @@ impl BrowserRuntime {
                 block_slots.push(machine.add_http_block_device(store, id)?);
             }
         }
-        let (ninep_slots, ninep_endpoints) = Self::add_filesystems(&mut machine, &config)?;
+        let (ninep_slots, ninep_endpoints) = self.add_filesystems(&mut machine, &config)?;
         let console_slot = if config.console == Console::Virtio {
             Some(machine.add_console_device(80, 25)?)
         } else {
@@ -1506,6 +1563,7 @@ impl BrowserRuntime {
     }
 
     fn add_filesystems(
+        &self,
         machine: &mut Machine,
         config: &VmConfig,
     ) -> Result<(Vec<usize>, BTreeMap<NinePEndpointId, usize>), RuntimeError> {
@@ -1517,7 +1575,11 @@ impl BrowserRuntime {
                     .map_err(|_| RuntimeError::InvalidConfig("too many 9p endpoints".into()))?,
             );
             let backend: Box<dyn NinePBackend> =
-                Box::new(BrowserNineP::new(endpoint, filesystem.server.clone()));
+                if let Some(tree) = self.filesystems.get(&filesystem.server) {
+                    Box::new(RustNineP::new(tree.clone()).map_err(RuntimeError::Filesystem)?)
+                } else {
+                    Box::new(BrowserNineP::new(endpoint, filesystem.server.clone()))
+                };
             let slot = machine.add_ninep_device(backend, filesystem.tag.as_bytes())?;
             slots.push(slot);
             endpoints.insert(endpoint, slot);

@@ -424,6 +424,12 @@ impl PlatformBus {
                 .write(&mut self.memory, device_offset, value32, width)
                 .map_err(|_| BusError::AccessFault)?;
             self.host_service_requested |= device.needs_host();
+            // A mutation on one endpoint can satisfy pending I/O on another
+            // endpoint sharing its tree. All accesses here remain inside Rust.
+            if matches!(device, VirtioSlot::NineP(_)) {
+                self.drain_ninep_completions()
+                    .map_err(|_| BusError::AccessFault)?;
+            }
         } else {
             return Err(BusError::AccessFault);
         }
@@ -433,6 +439,17 @@ impl PlatformBus {
 }
 
 impl PlatformBus {
+    fn drain_ninep_completions(&mut self) -> Result<(), DeviceError> {
+        for slot in &mut self.virtio {
+            if let VirtioSlot::NineP(device) = slot {
+                device
+                    .device
+                    .drain_completions(&mut device.transport, &mut self.memory)?;
+            }
+        }
+        Ok(())
+    }
+
     /// Reads a physical RAM or device address.
     ///
     /// # Errors
@@ -1173,6 +1190,16 @@ impl Machine {
             return Err(MachineError::WrongVirtioDevice);
         };
         Ok(device.device.backend_mut().next_transport_action())
+    }
+
+    /// Polls shared Rust filesystems after host mutations or load completion.
+    ///
+    /// # Errors
+    /// Returns an error for invalid backend results or guest descriptors.
+    pub fn poll_ninep(&mut self) -> Result<(), MachineError> {
+        self.bus.drain_ninep_completions()?;
+        self.bus.update_device_irqs();
+        Ok(())
     }
 
     /// Completes one generic browser 9p transport request.

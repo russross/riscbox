@@ -3,6 +3,8 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use riscbox::machine::{BootImages, Machine, MachineConfig};
+use riscbox::ninep::{FileRead, Filesystem, Limits, SourceId};
+use riscbox::ninep_backend::{RustFilesystem, RustNineP};
 use riscbox::virtio_devices::{BlockBackend, DeviceError};
 
 struct ImageBlock {
@@ -56,6 +58,18 @@ fn alpine_reaches_login_and_shuts_down() {
         )
         .expect("block device");
     let console = machine.add_console_device(80, 25).expect("console device");
+    let mut filesystem = Filesystem::new(Limits::default(), 100);
+    filesystem.write_file("host", b"seeded").expect("host file");
+    filesystem
+        .add_lazy_file("lazy", 5, SourceId(7))
+        .expect("lazy file");
+    let share = RustFilesystem::new(filesystem);
+    machine
+        .add_ninep_device(
+            Box::new(RustNineP::new(share.clone()).expect("Rust session")),
+            b"shared",
+        )
+        .expect("9p device");
     machine
         .load_boot(BootImages {
             firmware: Some(&firmware),
@@ -73,6 +87,14 @@ fn alpine_reaches_login_and_shuts_down() {
         machine.present_guest_clocks(ticks, ticks * 100);
         for _ in 0..15 {
             let _ = machine.run_cpu(200_000);
+            // Source completion runs between CPU activations, just as browser
+            // promises resume only after WASM releases its exclusive run borrow.
+            while let Some(ticket) = share.next_load() {
+                share
+                    .with_filesystem(|fs| fs.complete_load(ticket, b"async".to_vec()))
+                    .expect("source completion");
+                machine.poll_ninep().expect("9p completion drain");
+            }
         }
         let output = machine.take_console_output();
         trace_guest_output(&output);
@@ -91,13 +113,31 @@ fn alpine_reaches_login_and_shuts_down() {
         }
         if logged_in && !shutdown_sent && text.contains(":~#") {
             machine
-                .virtio_console_receive(console, b"poweroff -f\r")
+                .virtio_console_receive(console, concat!(
+                    "mkdir -p /mnt/share; mount -t 9p -o trans=virtio,version=9p2000.L,access=client shared /mnt/share",
+                    " && [ \"$(cat /mnt/share/host)\" = seeded ] && [ \"$(cat /mnt/share/lazy)\" = async ]",
+                    " && printf written > /mnt/share/guest && ln /mnt/share/guest /mnt/share/link",
+                    " && mv /mnt/share/link /mnt/share/renamed && chmod 640 /mnt/share/guest",
+                    " && mkdir /mnt/share/dir && ln -s guest /mnt/share/symlink",
+                    " && [ \"$(cat /mnt/share/symlink)\" = written ] && rm /mnt/share/symlink",
+                    " && rmdir /mnt/share/dir && ls /mnt/share >/dev/null && sync && echo RUST9P_OK; poweroff -f\r",
+                ).as_bytes())
                 .expect("shutdown input");
             shutdown_sent = true;
         }
         if machine.finish_status() != riscbox::platform::FinishStatus::Running {
             assert!(logged_in, "guest shut down before login\n{text}");
             assert!(shutdown_sent, "guest shut down before command\n{text}");
+            assert!(
+                text.lines().any(|line| line.trim() == "RUST9P_OK"),
+                "Linux 9p operations failed\n{text}"
+            );
+            assert_eq!(
+                share
+                    .with_filesystem(|fs| fs.read_file("guest"))
+                    .expect("guest file"),
+                FileRead::Resident(b"written".to_vec())
+            );
             return;
         }
     }

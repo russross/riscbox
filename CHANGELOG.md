@@ -4,6 +4,16 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Connected Rust 9p sessions to VirtIO and the browser runtime's internal
+    filesystem registry. Resident requests complete within the notifying CPU
+    run; external loads use explicit tickets dispatched between activations.
+    Completion draining orders flush retirement before `Rflush` and polls
+    shared endpoints after mutations. Registered trees remain available before
+    boot and across VM reset, shutdown, destroy, and recreation. Added real-ring
+    CPU probes on native and Node/Chrome WASM targets, plus an Alpine mount,
+    file-operation, lazy-load, and shutdown acceptance test. Public browser
+    filesystem registration remains scheduled for the raw ABI migration.
+
 *   Added a standalone Rust 9P2000.L endpoint with the supported operation
     matrix, explicit lazy-load submissions and completion queues, filesystem
     identity/generation checks, and separate namespace/device/session resets.

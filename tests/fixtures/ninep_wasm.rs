@@ -1,12 +1,30 @@
 //! Standalone raw-WASM namespace probe, with no WASI or JavaScript imports.
 
-#[path = "../../src/ninep.rs"]
-pub mod ninep;
-#[path = "../../src/ninep_protocol.rs"]
-pub mod ninep_protocol;
+pub use riscbox::{ninep, ninep_protocol};
+
+mod ninep_transport;
 
 use ninep::{ChangeKind, FileRead, Filesystem, Limits, LoadStart, SeedMetadata, SourceId};
 use ninep_protocol::{Completion, NinePSession, Outcome, RequestId, Submission};
+use std::sync::atomic::{AtomicU32, Ordering};
+
+static PANIC_LINE: AtomicU32 = AtomicU32::new(0);
+
+#[unsafe(no_mangle)]
+pub extern "C" fn panic_line() -> u32 {
+    PANIC_LINE.load(Ordering::Relaxed)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn transport_regression() -> u32 {
+    std::panic::set_hook(Box::new(|panic| {
+        if let Some(location) = panic.location() {
+            PANIC_LINE.store(location.line(), Ordering::Relaxed);
+        }
+    }));
+    ninep_transport::regression();
+    1
+}
 
 // Exporting a real operation prevents dead-code elimination from concealing
 // unsupported standard-library calls in the production WASM target.

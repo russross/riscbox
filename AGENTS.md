@@ -63,8 +63,9 @@ Repository map and terminology
     go under `build/js/p9/`.
 *   `src/ninep.rs` and `src/ninep/` own the standalone Rust namespace;
     `src/ninep_protocol.rs` and `src/ninep_protocol/` own its 9P2000.L session.
-    They are tested on native and raw WASM targets but are not yet attached to
-    production browser VMs. The session profile and calling contract are in
+    `src/ninep_backend.rs` connects registered Rust trees to VirtIO and the
+    browser runtime. Registration is currently an internal Rust API; production
+    browser applications still use the TypeScript server. The calling contract is in
     `src/ninep_protocol/README.md`; migration coordination is in `DEV.md`.
 *   `images/` contains reproducible Makefile-driven image definitions and deployment tooling.
     Generated downloads, images, boot assets, and distributions are not source.
@@ -175,8 +176,9 @@ conservative of the P99-skewed rate and the rate implied by that previous
 quantum's observed cycle throughput. Timing diagnostics report interval
 Mcycles/s mean and standard deviation for runnable quanta.
 Timer writes exit the C loop so Rust can size the next CPU run to the earliest ACLINT,
-supervisor, or RTC deadline. C also exits after MMIO requests for 9p or HTTP
-block work; Rust releases the exclusive CPU-run borrow before JavaScript
+supervisor, or RTC deadline. C also exits after MMIO requests that queue external
+9p or HTTP block work; Rust resident 9p requests finish within the notifying CPU
+run. Rust releases the exclusive CPU-run borrow before JavaScript
 dispatches actions. JavaScript resumes the same quantum after resident 9p
 replies and wakes a WFI sleeping guest on later completions. JavaScript measures
 the complete quantum with a monotonic clock and supplies its elapsed time to
@@ -223,10 +225,13 @@ Timing and execution lexicon
     the last presented guest time ahead of host epoch time; the next quantum
     carries that lead into its guest-time window.
 
-VirtIO 9p is a generic concurrent asynchronous transport. Rust validates
-descriptors and message envelopes but does not implement filesystem semantics.
-Each configured `{ server, tag }` endpoint gets an independent asynchronous
-session from the host registry. The supplied TypeScript server provides shared
+VirtIO 9p supports concurrent pending requests and resident synchronous replies.
+Rust validates descriptors and message envelopes; its registered filesystem
+backend owns protocol semantics and drains earlier retirements before `Rflush`.
+Each configured `{ server, tag }` endpoint gets an independent session. Internal
+Rust runtime registrations take ownership before boot and retain namespace state
+across VM lifetimes; unregistered keys still use the browser host registry.
+The supplied TypeScript server provides shared
 inode state, independent sessions, hard links, stable directory cookies,
 quotas, byte-range locks, explicit application results, and optional lazy seed
 loading. Do not restore the removed `file`, `socket`, or `js9p` configuration
@@ -289,7 +294,7 @@ Validation
 ----------
 
 *   `make test-unit` runs Rust, Python tool, JavaScript adapter/server tests,
-    and an executable raw-WASM 9p namespace/protocol regression probe in Node.
+    and an executable raw-WASM 9p namespace/protocol/transport and CPU probe in Node.
 *   `make test` adds real WASM/Chrome network integration and 9p server tests
     for development.
 *   `make check` adds strict Clippy and Python type checks. The GitHub release

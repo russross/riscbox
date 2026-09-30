@@ -351,6 +351,16 @@ definitions can continue distributing ext4. The image Makefiles show
 the exact call order. Keep downloads and generated files
 under `build/`; the final ignored output belongs in `dist/`.
 
+Risclet buffers editor changes and writes them to the shared filesystem when
+the editor loses focus, a file or example is selected, the VM is used, or thirty
+seconds have passed since the first unflushed edit. Later edits do not postpone
+that deadline. Failed writes retain the editor text and retry; switching waits
+for a successful flush. If the filesystem changes a file with unflushed edits,
+the demo asks whether to discard the editor version. Keeping it replaces the
+filesystem version on the next flush. Example files and edits are session-local
+and do not persist across a page reload. Instruction images refresh when their
+shared files change, and terminal pastes queue until the VM accepts their bytes.
+
 The distribution builder splits the disk into HTTP-loadable blocks, compresses
 the next-stage payload with `gzip -9`, and gives boot and disk assets
 content-derived names. The `.gz` payload name uses the uncompressed payload's

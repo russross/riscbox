@@ -11,6 +11,7 @@ import { Compartment, EditorSelection, EditorState } from "@codemirror/state";
 import { EditorView, keymap, ViewUpdate } from "@codemirror/view";
 import { FitAddon, init as initializeGhostty, Terminal } from "ghostty-web";
 import { basicSetup } from "codemirror";
+import { TerminalInputQueue } from "./terminal_input";
 import { Filesystem, createHttpsSeedPlugin, type FilesystemRuntime, type HttpsSeedFile, type P9Change } from "../../../js/p9";
 
 interface ExampleDescription {
@@ -49,7 +50,7 @@ interface ResolvedVmConfig {
 interface RiscboxRuntime extends FilesystemRuntime {
     readonly started: boolean;
     startResolved(config: ResolvedVmConfig, memoryMiB: number): number;
-    consoleInput(bytes: Uint8Array): void;
+    consoleInput(bytes: Uint8Array): number;
     consoleResize(columns: number, rows: number): void;
     boot(): Promise<void>;
     reset(): Promise<void>;
@@ -114,6 +115,15 @@ let currentPath: string | null = null;
 let editor: EditorView;
 let programmaticEditorUpdate = false;
 let vmController: VmController;
+
+// Revisions distinguish the submitted text from edits made while a write finishes.
+let editorRevision = 0;
+let flushedRevision = 0;
+let editorTimer: number | undefined;
+let editorWrites = Promise.resolve();
+let conflictPath: string | null = null;
+let instructionPaths = new Set([DOC_PATH]);
+const EDITOR_FLUSH_DELAY_MS = 30_000;
 
 let viewGeneration = 0;
 let openGeneration = 0;
@@ -254,6 +264,9 @@ function resetEditor(content: string, canEdit: boolean, filename: string): void 
 }
 
 function clearEditor(): void {
+    cancelEditorTimer();
+    flushedRevision = editorRevision;
+    conflictPath = null;
     currentPath = null;
     resetEditor("", false, "");
 }
@@ -262,6 +275,7 @@ async function openFile(path: string): Promise<void> {
     const example = currentExample;
     const view = viewGeneration;
     const request = ++openGeneration;
+    const revision = editorRevision;
     if (example === null) {
         return;
     }
@@ -269,13 +283,15 @@ async function openFile(path: string): Promise<void> {
     try {
         content = await example.filesystem.readFile(path);
     } catch (error: unknown) {
-        if (view !== viewGeneration || request !== openGeneration) return;
+        if (view !== viewGeneration || request !== openGeneration || revision !== editorRevision) return;
         clearEditor();
         void renderFileTree().catch(reportUiError);
         reportUiError(error);
         return;
     }
-    if (view !== viewGeneration || request !== openGeneration || example !== currentExample) return;
+    if (view !== viewGeneration || request !== openGeneration || example !== currentExample
+        || revision !== editorRevision || editorIsDirty()) return;
+    conflictPath = null;
     currentPath = path;
     if (isBinaryFile(content)) {
         resetEditor("This file appears to be a binary file and cannot be displayed in the editor.", false, path);
@@ -286,11 +302,48 @@ async function openFile(path: string): Promise<void> {
     editor.focus();
 }
 
-async function syncEditor(): Promise<void> {
-    if (currentExample === null || currentPath === null || editor.state.readOnly) {
-        return;
-    }
-    await currentExample.filesystem.writeFile(currentPath, fileContentFromEditor(), EDITOR_ORIGIN);
+function editorIsDirty(): boolean {
+    return editorRevision !== flushedRevision;
+}
+
+function cancelEditorTimer(): void {
+    if (editorTimer !== undefined) window.clearTimeout(editorTimer);
+    editorTimer = undefined;
+}
+
+// The first unflushed edit sets a bounded deadline, even during continuous typing.
+function scheduleEditorFlush(): void {
+    if (editorTimer !== undefined || !editorIsDirty()) return;
+    editorTimer = window.setTimeout(() => {
+        editorTimer = undefined;
+        void syncEditor().catch(reportUiError);
+    }, EDITOR_FLUSH_DELAY_MS);
+}
+
+function syncEditor(): Promise<void> {
+    cancelEditorTimer();
+    const operation = editorWrites.then(async () => {
+        const example = currentExample;
+        const path = currentPath;
+        if (example === null || path === null || editor.state.readOnly || !editorIsDirty()) return;
+        const revision = editorRevision;
+        const content = fileContentFromEditor();
+        try {
+            await example.filesystem.writeFile(path, content, EDITOR_ORIGIN);
+        } catch (error: unknown) {
+            scheduleEditorFlush();
+            throw error;
+        }
+        // Only the acknowledged snapshot is clean; newer edits retain their deadline.
+        if (example === currentExample && path === currentPath) {
+            flushedRevision = Math.max(flushedRevision, revision);
+            conflictPath = null;
+            if (editorIsDirty()) scheduleEditorFlush();
+            else cancelEditorTimer();
+        }
+    });
+    editorWrites = operation.catch(() => undefined);
+    return operation;
 }
 
 function buildFileTree(paths: readonly string[]): Record<string, FileTreeNode> {
@@ -352,7 +405,7 @@ async function renderFileTree(): Promise<void> {
     const pane = requiredElement("file-tree-pane");
     const paths = example === null ? [] : await example.filesystem.listFiles();
     if (view !== viewGeneration || request !== treeGeneration || example !== currentExample) return;
-    if (currentPath !== null && !paths.includes(currentPath)) {
+    if (currentPath !== null && !paths.includes(currentPath) && !editorIsDirty()) {
         clearEditor();
     }
     const root = document.createElement("ul");
@@ -381,7 +434,7 @@ function imageMimeType(path: string): string | null {
     }
 }
 
-async function renderInstructions(filesystem: Filesystem): Promise<string> {
+async function renderInstructions(filesystem: Filesystem, dependencies: Set<string>): Promise<string> {
     if (!(await filesystem.listFiles()).includes(DOC_PATH)) {
         return "";
     }
@@ -394,6 +447,7 @@ async function renderInstructions(filesystem: Filesystem): Promise<string> {
             const url = new URL(event.node.destination, documentUrl);
             if (url.origin === documentUrl.origin) {
                 const path = decodeURIComponent(url.pathname.replace(/^\//, ""));
+                dependencies.add(path);
                 const content = await filesystem.readFile(path);
                 const mimeType = imageMimeType(path);
                 if (mimeType === null) {
@@ -418,7 +472,7 @@ function selectTab(name: "instructions" | "vm"): void {
     }
     if (selected === "vm") {
         vmController.fit();
-        vmController.bootIfInactive();
+        void syncEditor().then(() => vmController.bootIfInactive()).catch(reportUiError);
     }
 }
 
@@ -429,13 +483,16 @@ async function updateInstructions(): Promise<void> {
     const button = requiredButton("instructions-tab-button");
     const content = requiredElement("instructions-tab-content");
     let rendered: string;
+    const dependencies = new Set([DOC_PATH]);
     try {
-        rendered = example === null ? "" : await renderInstructions(example.filesystem);
+        rendered = example === null ? "" : await renderInstructions(example.filesystem, dependencies);
     } catch (error: unknown) {
         if (view !== viewGeneration || request !== instructionsGeneration) return;
+        instructionPaths = dependencies;
         throw error;
     }
     if (view !== viewGeneration || request !== instructionsGeneration || example !== currentExample) return;
+    instructionPaths = dependencies;
     button.hidden = rendered === "";
     content.innerHTML = rendered;
     if (rendered === "" && content.classList.contains("active")) {
@@ -456,22 +513,37 @@ async function handleFilesystemChange(example: ExampleState, change: P9Change): 
     }
     // Directory renames move every displayed child path. Alias events also
     // invalidate an open editor even when the guest wrote through another link.
-    if (change.kind === "rename" && change.oldPath !== undefined && currentPath !== null
-        && (currentPath === change.oldPath || currentPath.startsWith(`${change.oldPath}/`))) {
+    const followsRename = change.kind === "rename" && change.oldPath !== undefined && currentPath !== null
+        && (currentPath === change.oldPath || currentPath.startsWith(`${change.oldPath}/`));
+    if (followsRename && change.oldPath !== undefined && currentPath !== null) {
         currentPath = change.path + currentPath.slice(change.oldPath.length);
     }
     if (change.kind !== "write") {
         void renderFileTree().catch(reportUiError);
     }
-    if (changeAffectsPath(change, DOC_PATH)) {
+    if ([...instructionPaths].some(path => changeAffectsPath(change, path))) {
         void updateInstructions().catch(reportUiError);
     }
     if (currentPath !== null && !(change.source === "host" && change.origin === EDITOR_ORIGIN)
         && changeAffectsPath(change, currentPath)) {
+        // Structural notifications preserve a dirty buffer at its renamed path.
+        // Content replacement requires an explicit decision before discarding it.
+        if (editorIsDirty()) {
+            if (followsRename || change.kind === "metadata" || change.kind === "loaded") return;
+            if (conflictPath === currentPath) return;
+            if (!window.confirm("The filesystem changed this file while you have unflushed edits. Discard your edits and use the filesystem version? Keeping your edits will replace the filesystem version on the next flush.")) {
+                conflictPath = currentPath;
+                return;
+            }
+            cancelEditorTimer();
+            flushedRevision = editorRevision;
+            conflictPath = null;
+        }
         const view = viewGeneration;
         const path = currentPath;
         const paths = await example.filesystem.listFiles();
         if (view !== viewGeneration || example !== currentExample || currentPath !== path) return;
+        if (editorIsDirty()) return;
         if (paths.includes(currentPath)) {
             await openFile(currentPath);
         } else {
@@ -487,7 +559,12 @@ class VmController {
     private runtime: RiscboxRuntime | undefined;
     private target: ExampleState | undefined;
     private generation = 0;
+    private inputGeneration = 0;
     private state: "ready" | "loading" | "running" | "halted" | "failed" = "ready";
+    private readonly input = new TerminalInputQueue(bytes => {
+        if (this.state !== "running" || this.runtime === undefined) return 0;
+        return this.runtime.consoleInput(bytes);
+    });
 
     constructor(host: HTMLElement, bootButton: HTMLButtonElement) {
         this.bootButton = bootButton;
@@ -503,19 +580,23 @@ class VmController {
         this.terminal.open(host);
         this.fitAddon.fit();
         this.terminal.onData((text: string): void => {
-            this.runtime?.consoleInput(encoder.encode(text));
+            if (this.state !== "running") return;
+            const generation = this.inputGeneration;
+            void syncEditor().then(() => {
+                if (generation === this.inputGeneration && this.state === "running") {
+                    this.input.enqueue(encoder.encode(text));
+                }
+            }).catch(reportUiError);
         });
         this.terminal.onResize(({ cols, rows }): void => {
             this.runtime?.consoleResize(cols, rows);
         });
         this.bootButton.addEventListener("click", (): void => {
-            if (this.state === "ready") {
-                void this.boot();
-            } else if (this.state === "halted") {
-                void this.bootRetained();
-            } else {
-                void this.reboot();
-            }
+            void syncEditor().then(async () => {
+                if (this.state === "ready") await this.boot();
+                else if (this.state === "halted") await this.bootRetained();
+                else await this.reboot();
+            }).catch(reportUiError);
         });
         new ResizeObserver((): void => this.fit()).observe(host);
         this.updateControls();
@@ -548,6 +629,7 @@ class VmController {
 
     private async stop(): Promise<void> {
         this.generation += 1;
+        this.clearInput();
         const runtime = this.runtime;
         this.state = "ready";
         if (runtime) {
@@ -558,6 +640,7 @@ class VmController {
     }
 
     private resetTerminal(): void {
+        this.clearInput();
         this.terminal.reset();
         this.terminal.scrollToBottom();
         this.terminal.write(SHOW_CURSOR);
@@ -565,6 +648,9 @@ class VmController {
 
     private async reboot(): Promise<void> {
         if (this.state === "running" && this.runtime) {
+            this.state = "loading";
+            this.clearInput();
+            this.updateControls();
             try {
                 await this.runtime.reset();
             } catch (error: unknown) {
@@ -582,6 +668,8 @@ class VmController {
             this.fail("VM is unavailable");
             return;
         }
+        this.state = "loading";
+        this.updateControls();
         try {
             await this.runtime.boot();
         } catch (error: unknown) {
@@ -628,6 +716,7 @@ class VmController {
             consoleReset: (): void => this.resetTerminal(),
             onVmStarted: (): void => this.markRunning(),
             onVmHalted: (): void => {
+                this.clearInput();
                 this.state = "halted";
                 this.updateControls();
                 requiredElement("status").textContent = `Halted · ${this.target?.description.title ?? "VM"}`;
@@ -648,7 +737,14 @@ class VmController {
         this.terminal.focus();
     }
 
+    // Retire input waiting for an editor flush as well as already queued bytes.
+    private clearInput(): void {
+        this.inputGeneration += 1;
+        this.input.clear();
+    }
+
     private fail(message: string): void {
+        this.clearInput();
         this.state = "failed";
         this.terminal.writeln(`\r\n${message}`);
         requiredElement("status").textContent = `VM failed · ${message}`;
@@ -764,8 +860,9 @@ async function initialize(): Promise<void> {
                 ]),
                 EditorView.domEventHandlers({ blur: (): void => { void syncEditor().catch(reportUiError); } }),
                 EditorView.updateListener.of((update: ViewUpdate): void => {
-                    if (update.docChanged && !programmaticEditorUpdate) {
-                        void syncEditor().catch(reportUiError);
+                    if (update.docChanged && !programmaticEditorUpdate && !editor.state.readOnly) {
+                        editorRevision += 1;
+                        scheduleEditorFlush();
                     }
                 }),
             ],

@@ -169,6 +169,13 @@ The Risclet host creates all example namespace handles in one runtime before
 boot. Deployed manifests declare file sizes, and HTTP bodies load only on reads.
 Editor operations and notifications use promises and numeric origin filtering.
 Example switching serializes VM teardown and binding and guards late UI reads.
+The editor buffers changes until blur, file/example selection, VM interaction,
+or a thirty-second deadline from the first unflushed edit. Writes acknowledge
+only their submitted revision; failures retain dirty text and retry. Conflicting
+filesystem changes require a discard decision before replacing dirty text.
+Instruction subscriptions track referenced images as well as the document.
+Terminal input batches copied bytes, retries partial FIFO acceptance, and
+retires queued and pending input on reset, halt, teardown, or runtime failure.
 
 Rust sizes each execution quantum from a measured emulated cycle rate and a
 target duration, twenty milliseconds by default. Each quantum locks its rate

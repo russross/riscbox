@@ -46,14 +46,147 @@ test("Risclet shares Rust files with its host UI across image and VM lifetimes",
             content.focus();
             doc.execCommand("selectAll");
             doc.execCommand("insertText", false, "editor update");
-            await wait(async () => decoder.decode(await workspace.readFile("reduction_steps.s")) === "editor update\\n", "editor promise writes through");
+            await delay(50);
+            check(decoder.decode(await workspace.readFile("reduction_steps.s")) === "host update\\n", "typing remains buffered");
+            doc.getElementById("instructions-tab-button").focus();
+            await wait(async () => decoder.decode(await workspace.readFile("reduction_steps.s")) === "editor update\\n", "blur flushes editor");
             check(events.some(change => change.origin === 1n && change.source === "host"), "editor origin");
+            const flushCount = events.filter(change => change.origin === 1n).length;
+            content.focus();
+            doc.getElementById("instructions-tab-button").focus();
+            await delay(50);
+            check(events.filter(change => change.origin === 1n).length === flushCount, "clean blur does not rewrite the file");
+
+            step = "failed editor flush";
+            const writeFile = workspace.writeFile.bind(workspace);
+            let rejectEditorWrite = true;
+            workspace.writeFile = async (path, bytes, origin) => {
+                if (origin === 1n && rejectEditorWrite) throw new Error("controlled editor write failure");
+                return writeFile(path, bytes, origin);
+            };
+            content.focus();
+            doc.execCommand("selectAll");
+            doc.execCommand("insertText", false, "retained edit");
+            doc.querySelector('.file[data-path="Makefile"] .item-content-wrapper').click();
+            await wait(() => doc.getElementById("status").textContent.includes("controlled editor write failure"), "write error visible");
+            check(content.textContent.includes("retained edit"), "failed switch retains editor text");
+            check(doc.querySelector('.selected[data-path="reduction_steps.s"]'), "failed switch retains selection");
+            rejectEditorWrite = false;
+            doc.querySelector('.file[data-path="Makefile"] .item-content-wrapper').click();
+            await wait(() => doc.querySelector('.selected[data-path="Makefile"]'), "retry allows switching");
+            check(decoder.decode(await workspace.readFile("reduction_steps.s")) === "retained edit\\n", "retry flushes retained text");
+            workspace.writeFile = writeFile;
+            doc.querySelector('.file[data-path="reduction_steps.s"] .item-content-wrapper').click();
+            await wait(() => doc.querySelector('.selected[data-path="reduction_steps.s"]'), "editable file reselected");
+
+            step = "editor conflict";
+            let conflicts = 0;
+            app.confirm = () => { conflicts += 1; return false; };
+            content.focus();
+            doc.execCommand("selectAll");
+            doc.execCommand("insertText", false, "keep editor");
+            await workspace.writeFile("reduction_steps.s", "external replacement\\n");
+            await wait(() => conflicts === 1, "external change asks before replacing dirty text");
+            check(content.textContent.includes("keep editor"), "declined conflict preserves text");
+            doc.getElementById("instructions-tab-button").focus();
+            await wait(async () => decoder.decode(await workspace.readFile("reduction_steps.s")) === "keep editor\\n", "retained editor wins on flush");
+            app.confirm = () => { conflicts += 1; return true; };
+            content.focus();
+            doc.execCommand("selectAll");
+            doc.execCommand("insertText", false, "discard editor");
+            await workspace.writeFile("reduction_steps.s", "accept external\\n");
+            await wait(() => content.textContent.includes("accept external"), "accepted conflict loads external text");
+            check(conflicts === 2, "one decision per conflict");
+            doc.getElementById("instructions-tab-button").focus();
+            await workspace.writeFile("reduction_steps.s", original);
+
+            step = "bounded editor deadline";
+            await wait(() => content.textContent.includes(".global"), "original editor restored");
+            content.focus();
+            doc.execCommand("selectAll");
+            doc.execCommand("insertText", false, "first deadline edit");
+            await delay(15_000);
+            doc.execCommand("insertText", false, " later edit");
+            await delay(16_000);
+            check(decoder.decode(await workspace.readFile("reduction_steps.s")).includes("later edit"), "later edits do not postpone the first deadline");
+            check(!decoder.decode(await workspace.readFile("reduction_steps.s")).includes(".global"), "deadline flushed edited content");
+            doc.getElementById("instructions-tab-button").focus();
+            await workspace.writeFile("reduction_steps.s", original);
+
+            step = "instruction image dependency";
+            const originalDoc = await workspace.readFile("doc/doc.md");
+            await workspace.writeFile("doc/picture.svg", '<svg xmlns="http://www.w3.org/2000/svg"><text>first</text></svg>');
+            await workspace.writeFile("doc/doc.md", "![picture](picture.svg)\\n");
+            await wait(() => doc.querySelector("#instructions-tab-content img"), "instruction image rendered");
+            const firstImage = doc.querySelector("#instructions-tab-content img").src;
+            await workspace.writeFile("doc/picture.svg", '<svg xmlns="http://www.w3.org/2000/svg"><text>second</text></svg>');
+            await wait(() => doc.querySelector("#instructions-tab-content img")?.src !== firstImage, "image-only change refreshes instructions");
+            await workspace.writeFile("doc/doc.md", originalDoc);
+            await workspace.remove("doc/picture.svg");
+
+            step = "edit during pending reload";
+            const readFile = workspace.readFile.bind(workspace);
+            let releaseRead;
+            let delayRead = true;
+            workspace.readFile = async path => {
+                const bytes = await readFile(path);
+                if (path === "reduction_steps.s" && delayRead) {
+                    delayRead = false;
+                    await new Promise(resolve => { releaseRead = resolve; });
+                }
+                return bytes;
+            };
+            await workspace.writeFile("reduction_steps.s", "delayed external\\n");
+            await wait(() => releaseRead !== undefined, "external reload pending");
+            content.focus();
+            doc.execCommand("selectAll");
+            doc.execCommand("insertText", false, "edit during read");
+            releaseRead();
+            await delay(50);
+            check(content.textContent.includes("edit during read"), "late read preserves newer edits");
+            workspace.readFile = readFile;
+            doc.getElementById("instructions-tab-button").focus();
+            await wait(async () => decoder.decode(await workspace.readFile("reduction_steps.s")) === "edit during read\\n", "newer edits flush");
+            await workspace.writeFile("reduction_steps.s", original);
+
+            step = "edits during pending write";
+            await wait(() => content.textContent.includes(".global"), "original content reloaded");
+            let releaseWrite;
+            let holdWrite = true;
+            workspace.writeFile = async (path, bytes, origin) => {
+                await writeFile(path, bytes, origin);
+                if (origin === 1n && holdWrite) {
+                    holdWrite = false;
+                    await new Promise(resolve => { releaseWrite = resolve; });
+                }
+            };
+            content.focus();
+            doc.execCommand("selectAll");
+            doc.execCommand("insertText", false, "submitted edit");
+            doc.getElementById("instructions-tab-button").focus();
+            await wait(() => releaseWrite !== undefined, "editor write acknowledgement pending");
+            content.focus();
+            doc.execCommand("selectAll");
+            doc.execCommand("insertText", false, "newer edit");
+            releaseWrite();
+            await delay(50);
+            check(decoder.decode(await workspace.readFile("reduction_steps.s")) === "submitted edit\\n", "acknowledgement covers only submitted text");
+            doc.getElementById("instructions-tab-button").focus();
+            await wait(async () => decoder.decode(await workspace.readFile("reduction_steps.s")) === "newer edit\\n", "newer revision remains dirty");
+            workspace.writeFile = writeFile;
             await workspace.writeFile("reduction_steps.s", original);
             await workspace.mkdir("moved");
+            await wait(() => content.textContent.includes(".global"), "rename source loaded");
+            content.focus();
+            doc.execCommand("selectAll");
+            doc.execCommand("insertText", false, "dirty renamed edit");
             await workspace.rename("reduction_steps.s", "moved/reduction_steps.s");
             await wait(() => doc.querySelector('.selected[data-path="moved/reduction_steps.s"]'), "editor follows file rename");
             await workspace.rename("moved", "renamed");
             await wait(() => doc.querySelector('.selected[data-path="renamed/reduction_steps.s"]'), "editor follows directory rename");
+            check(content.textContent.includes("dirty renamed edit"), "rename preserves dirty buffer");
+            doc.getElementById("instructions-tab-button").focus();
+            await wait(async () => decoder.decode(await workspace.readFile("renamed/reduction_steps.s")) === "dirty renamed edit\\n", "dirty buffer flushes to renamed path");
             await workspace.rename("renamed/reduction_steps.s", "reduction_steps.s");
             await workspace.remove("renamed");
             await wait(() => doc.querySelector('.selected[data-path="reduction_steps.s"]'), "editor follows restored path");
@@ -67,6 +200,30 @@ test("Risclet shares Rust files with its host UI across image and VM lifetimes",
             step = "guest mount and write";
             doc.getElementById("vm-tab-button").click();
             await wait(() => app.testConsole.includes("To test your code:") && app.testConsole.includes("$"), "guest login");
+
+            step = "terminal paste backpressure";
+            const consoleInput = runtime.consoleInput.bind(runtime);
+            const pastedBytes = [];
+            let blocked = true;
+            runtime.consoleInput = bytes => {
+                if (blocked) return 0;
+                const accepted = consoleInput(bytes.subarray(0, 127));
+                pastedBytes.push(...bytes.subarray(0, accepted));
+                return accepted;
+            };
+            const paste = "#" + " ".repeat(2200) + "\\necho PASTE_''DONE\\n";
+            const clipboard = new app.DataTransfer();
+            clipboard.setData("text/plain", paste);
+            doc.querySelector("#vm-terminal textarea").dispatchEvent(new app.ClipboardEvent("paste", { clipboardData: clipboard, bubbles: true, cancelable: true }));
+            await delay(50);
+            check(pastedBytes.length === 0, "full FIFO retains paste");
+            blocked = false;
+            await wait(() => pastedBytes.length >= encoder.encode(paste).length, "complete large paste accepted");
+            check(decoder.decode(Uint8Array.from(pastedBytes)).includes("echo PASTE_''DONE"), "paste order retained");
+            await wait(() => app.testConsole.includes("PASTE_DONE"), "pasted command executes");
+            runtime.consoleInput = consoleInput;
+
+            step = "guest mount and write";
             const lazySize = (await workspace.stat("lib/stepper")).size;
             runtime.consoleInput(encoder.encode("wc -c lib/stepper; echo SOURCE_''LOAD_DONE\\n"));
             await wait(() => app.testConsole.includes(String(lazySize)) && app.testConsole.includes("SOURCE_LOAD_DONE"), "guest HTTP-backed lazy read");
@@ -125,7 +282,7 @@ test("Risclet shares Rust files with its host UI across image and VM lifetimes",
             await fetch("/result?status=" + encodeURIComponent(step + ": " + error + "\\n" + (app?.testConsole ?? "")));
         }
         </script>`, directory, {
-            timeoutMs: 60_000,
+            timeoutMs: 90_000,
             onRequest(url) { requests.push(url.pathname); },
             async response(url) {
                 if (url.pathname === "/requests") return { status: 200, body: JSON.stringify(requests) };

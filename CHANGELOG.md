@@ -4,6 +4,14 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Buffered Risclet editor writes with a bounded thirty-second flush deadline,
+    revision acknowledgements, retained failed edits, automatic retry, and
+    conflict decisions before external changes replace dirty text. File and
+    example selection and VM interaction flush first; late reads preserve newer
+    edits. Instruction image changes refresh the rendered document. Terminal
+    input queues batches with partial-acceptance retries and retires input at VM
+    lifecycle boundaries; reboot controls disable during the restart.
+
 *   Completed the Rust 9p migration and added `make test-images` for reproducible
     deployed Risclet/Chrome and native Alpine acceptance. Coverage includes
     preboot host access, lazy HTTP success/failure, guest-created files, host

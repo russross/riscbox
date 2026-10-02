@@ -1,8 +1,8 @@
 ROOT := ../..
 BIN := ../bin
 WASM := $(ROOT)/target/wasm32-unknown-unknown/release/riscbox_wasm.wasm
-RISCLET_URL := https://github.com/russross/risclet/releases/download/v0.4.8/risclet-riscv64gc-unknown-linux-musl
-RISCLET_SHA256 := ede5c483810c3ed4137a95ee84e62cb0a04f75dcf396899f7f2dbf5fb41361fc
+RISCLET_URL := https://github.com/russross/risclet/releases/download/v0.4.9/risclet-riscv64gc-unknown-linux-musl
+RISCLET_SHA256 := 2acca2490477236a9bb68678c9ba4fc390e3820a980ad6c49a221c85e6d830cb
 JS_SOURCES := $(shell find $(ROOT)/js/block $(ROOT)/js/network $(ROOT)/js/p9 -name '*.ts' -type f)
 UI_SOURCES := $(shell find ui -type f ! -path 'ui/node_modules/*' ! -path 'ui/dist/*')
 EXAMPLES := $(shell find examples -type f)

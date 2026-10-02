@@ -9,9 +9,9 @@
     "skipLibCheck": true,
     "baseUrl": ".",
     "paths": {
-      "@riscbox/runtime": ["../../../js/riscbox.d.ts"],
-      "@riscbox/storage": ["../../../js/storage.ts"]
+      "@riscbox/runtime": ["../build/js/riscbox.d.ts"],
+      "@riscbox/storage": ["../build/js/riscbox.d.ts"]
     }
   },
-  "include": ["*.ts", "*.d.ts", "../../../client-core/*.d.ts"]
+  "include": ["*.ts", "tests/*.ts"]
 }

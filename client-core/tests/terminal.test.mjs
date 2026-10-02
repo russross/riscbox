@@ -1,8 +1,8 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
-import webpack from "../images/risclet/ui/node_modules/webpack/lib/index.js";
-import config from "../images/risclet/ui/webpack.config.mjs";
+import webpack from "webpack";
+import { clientCoreRules } from "../build/webpack.mjs";
 import { runChromePage } from "./chrome.mjs";
 
 // Chrome's screenshot API measures real physical pixels, including fractional scaling.
@@ -36,11 +36,15 @@ async function connectChrome(directory) {
 }
 
 test("Wterm renders clear screens and connected borders at fractional scaling", async () => {
-    const directory = await mkdtemp(join(import.meta.dirname, "../build/risclet-terminal-"));
+    const directory = await mkdtemp(join(import.meta.dirname, "../build/test-terminal-"));
     let chrome;
     try {
-        const compiler = webpack({ ...config, context: join(import.meta.dirname, "../images/risclet/ui"),
-            entry: "./terminal.test.ts", output: { path: directory, filename: "terminal.js", library: { name: "terminalTests", type: "window" } } });
+        const compiler = webpack({ mode: "development", context: join(import.meta.dirname, ".."),
+            entry: "./tests/terminal.ts", output: { path: directory, filename: "terminal.js", library: { name: "terminalTests", type: "window" } },
+            module: { rules: [...clientCoreRules(),
+                { test: /\.ts$/, use: { loader: "ts-loader", options: { transpileOnly: true } }, exclude: /node_modules/ },
+                { test: /\.css$/, use: ["style-loader", "css-loader"] }] },
+            resolve: { extensions: [".ts", ".js"] } });
         await new Promise((resolve, reject) => compiler.run((error, stats) => {
             compiler.close(() => {});
             if (error) reject(error);

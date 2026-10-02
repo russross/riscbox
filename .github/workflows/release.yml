@@ -79,7 +79,9 @@ jobs:
 
       - name: Install browser module compiler
         if: steps.version.outputs.build == 'true'
-        run: npm --prefix images/risclet/ui ci
+        run: |
+          npm --prefix images/risclet/ui ci
+          npm --prefix client-core ci
 
       - name: Build and validate
         if: steps.version.outputs.build == 'true'

@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import ts from "../images/risclet/ui/node_modules/typescript/lib/typescript.js";
+import ts from "typescript";
 
-const source = await readFile(new URL("../images/risclet/ui/terminal_input.ts", import.meta.url), "utf8");
+const source = await readFile(new URL("../terminal_input.ts", import.meta.url), "utf8");
 const { outputText } = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 } });
 const { TerminalInputQueue } = await import(`data:text/javascript;base64,${Buffer.from(outputText).toString("base64")}`);
 

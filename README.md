@@ -378,6 +378,13 @@ definitions can continue distributing ext4. The image Makefiles show
 the exact call order. Keep downloads and generated files
 under `build/`; the final ignored output belongs in `dist/`.
 
+Risclet compiles the shared editor, terminal, file views, snapshots, and VM
+lifecycle from [`client-core/`](client-core/README.md). The subtree can be copied
+into another client without distributing the demo application. Its guarded
+sync tool detects local changes, and the
+[exam migration guide](client-core/EXAM-MIGRATION.md) documents Codegrinder's
+server-save, clipboard, and lifecycle integration independently of Risclet.
+
 Risclet uses one VM and one resident share. It downloads complete example
 files before boot and caches their original bytes in the application.
 Selecting an example flushes the editor, requests orderly guest shutdown,

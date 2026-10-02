@@ -14,11 +14,12 @@ test-unit: js
 	uv run -q --script tests/test_splitimg.py
 	uv run -q --script tests/test_image_deployment.py
 	node --test js/network.test.mjs js/riscbox.test.cjs
-	node --test tests/risclet_input.test.mjs
+	node --test client-core/tests/input.test.mjs client-core/tests/sync.test.mjs client-core/tests/workspace.test.mjs
 	node --test tests/ninep_wasm.test.mjs
 	node --test tests/ninep_abi.test.mjs
 
 test: test-unit wasm
+	npm --prefix client-core test
 	node --test tests/network_browser.test.mjs
 	node --test tests/alpine_iso_browser.test.mjs
 	RISCBOX_TEST_BROWSER=1 node --test tests/ninep_wasm.test.mjs
@@ -35,7 +36,7 @@ test-images:
 	$(MAKE) -C images/xv6-profile
 	cargo test --release --test platform_acceptance alpine_reaches_login_and_shuts_down -- --ignored
 	node --test tests/risclet_browser.test.mjs
-	node --experimental-websocket --test tests/risclet_terminal.test.mjs
+	npm --prefix client-core test
 
 wasm: $(RUSTBOX_WASM)
 
@@ -50,6 +51,8 @@ build/js/.built: js/tsconfig.json $(JS_SOURCES) js/riscbox.js tools/build_adapte
 
 js-check:
 	images/risclet/ui/node_modules/.bin/tsc -p js/tsconfig.json --noEmit
+	npm --prefix client-core run check
+	npm --prefix images/risclet/ui run check
 
 $(RUSTBOX_WASM): Cargo.toml Cargo.lock build.rs riscbox-wasm/Cargo.toml $(RUST_SOURCES)
 	cargo build --release -p riscbox-wasm --target wasm32-unknown-unknown

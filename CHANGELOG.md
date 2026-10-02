@@ -4,6 +4,13 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Extracted shared browser client source into `client-core/` and migrated
+    Risclet to its editor, terminal, file views, snapshots, and VM session.
+    Added image replacement, final-snapshot persistence hooks, portable
+    browser/WASM tests, guarded subtree synchronization, and a self-contained
+    exam migration guide. Applications retain independent entry points,
+    navigation, persistence, policies, and distributions.
+
 *   Migrated Risclet from ghostty-web to pinned Wterm 0.5.4 with its Ghostty
     core, DOM rendering, connected box strokes, and live-screen history clipping.
     Added fractional-scale pixel, clear/reset, paste, idle, and resize checks.

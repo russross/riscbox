@@ -7,11 +7,11 @@ import test from "node:test";
 import { createRequire } from "node:module";
 import { abiRegression } from "./fixtures/ninep_abi.mjs";
 import { facadeRegression } from "./fixtures/ninep_facade.mjs";
-import { snapshotRegression } from "./fixtures/risclet_workspace.mjs";
+import { snapshotRegression } from "../client-core/tests/workspace.mjs";
 import ts from "../images/risclet/ui/node_modules/typescript/lib/typescript.js";
 import { runChromePage } from "./chrome.mjs";
 const { Riscbox } = createRequire(import.meta.url)("../build/js/riscbox.js");
-const workspaceSource = ts.transpileModule(await readFile(new URL("../images/risclet/ui/workspace.ts", import.meta.url), "utf8"),
+const workspaceSource = ts.transpileModule(await readFile(new URL("../client-core/workspace.ts", import.meta.url), "utf8"),
     { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 } }).outputText;
 const { snapshotWorkspace, restoreWorkspace } = await import(`data:text/javascript;base64,${Buffer.from(workspaceSource).toString("base64")}`);
 
@@ -51,7 +51,7 @@ test("deployed filesystem ABI owns bytes and handles through synchronous sharing
                 .replace("export async function abiRegression", "async function abiRegression");
             const facade = (await readFile(join(import.meta.dirname, "fixtures/ninep_facade.mjs"), "utf8"))
                 .replace("export async function facadeRegression", "async function facadeRegression");
-            const snapshots = (await readFile(join(import.meta.dirname, "fixtures/risclet_workspace.mjs"), "utf8"))
+            const snapshots = (await readFile(join(import.meta.dirname, "../client-core/tests/workspace.mjs"), "utf8"))
                 .replace("export async function snapshotRegression", "async function snapshotRegression");
             await runChromePage(`<!doctype html><body>pending<script src="/build/js/riscbox.js"></script><script type="module">
                 ${source}

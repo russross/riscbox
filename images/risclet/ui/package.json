@@ -8,15 +8,6 @@
     "check": "tsc --noEmit"
   },
   "dependencies": {
-    "@codemirror/lang-cpp": "^6.0.3",
-    "@codemirror/lang-markdown": "^6.5.2",
-    "@codemirror/lang-python": "^6.2.1",
-    "@codemirror/legacy-modes": "^6.5.4",
-    "codemirror": "^6.0.2",
-    "commonmark": "^0.31.2",
-    "@wterm/core": "0.5.4",
-    "@wterm/dom": "0.5.4",
-    "@wterm/ghostty": "0.5.4",
     "split.js": "^1.6.5"
   },
   "devDependencies": {

@@ -1,5 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { clientCoreModules, clientCoreRules } from "../../../client-core/build/webpack.mjs";
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 
@@ -12,8 +13,7 @@ export default {
     },
     module: {
         rules: [
-            { test: /@wterm\/dom\/dist\/wterm\.js$/, use: path.resolve(directory, "wterm-viewport-loader.cjs") },
-            { test: /@wterm\/dom\/dist\/renderer\.js$/, use: path.resolve(directory, "wterm-renderer-loader.cjs") },
+            ...clientCoreRules(),
             { test: /\.ts$/, use: "ts-loader", exclude: /node_modules/ },
             { test: /\.css$/i, use: ["style-loader", "css-loader"] },
         ],
@@ -21,6 +21,6 @@ export default {
     resolve: {
         extensions: [".ts", ".js"],
         extensionAlias: { ".js": [".ts", ".js"] },
-        modules: [path.resolve(directory, "node_modules"), "node_modules"],
+        modules: [clientCoreModules, path.resolve(directory, "node_modules"), "node_modules"],
     },
 };

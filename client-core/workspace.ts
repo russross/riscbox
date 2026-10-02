@@ -1,16 +1,24 @@
-import type { FileAttributes, Filesystem } from "../../../js/storage";
+import type { FileAttributes, Filesystem, P9Change } from "@riscbox/storage";
+
+// Alias and directory events can affect paths that differ from the event path.
+export function changeAffectsPath(change: P9Change, path: string): boolean {
+    if (change.kind === "reset" || change.kind === "rescan") return true;
+    const names = [change.path, ...change.aliases];
+    if (change.oldPath !== undefined) names.push(change.oldPath);
+    return names.some(name => path === name || path.startsWith(`${name}/`));
+}
 
 interface SnapshotEntry { readonly path: string; readonly attributes: FileAttributes; }
-type Entry =
+export type WorkspaceEntry =
     | (SnapshotEntry & { readonly kind: "directory" })
     | (SnapshotEntry & { readonly kind: "file"; readonly bytes: Uint8Array })
     | (SnapshotEntry & { readonly kind: "symlink"; readonly target: string })
     | (SnapshotEntry & { readonly kind: "link"; readonly target: string });
-export interface WorkspaceSnapshot { readonly entries: readonly Entry[]; }
+export interface WorkspaceSnapshot { readonly entries: readonly WorkspaceEntry[]; }
 
 // A powered-off namespace is stable while copied bytes and links are captured.
 export function snapshotWorkspace(filesystem: Filesystem): WorkspaceSnapshot {
-    const entries: Entry[] = [];
+    const entries: WorkspaceEntry[] = [];
     const pathsByInode = new Map<bigint, string>();
     const visit = (path: string): void => {
         const attributes = filesystem.stat(path);

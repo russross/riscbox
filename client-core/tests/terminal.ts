@@ -1,4 +1,4 @@
-import { TerminalView } from "./terminal";
+import { TerminalView } from "../terminal";
 
 function check(condition: boolean, message: string): void { if (!condition) throw new Error(message); }
 async function paint(): Promise<void> {
@@ -151,4 +151,25 @@ export async function run(): Promise<void> {
     await paint();
     check(resized > before, "container resize did not update dimensions");
     terminal.destroy();
+
+    // Read-only output shares selection/rendering but never forwards guest input.
+    const outputHost = document.createElement("div");
+    outputHost.style.cssText = "width:600px;height:180px";
+    document.body.append(outputHost);
+    let outputInput = "";
+    const output = new TerminalView(outputHost, { onData: text => { outputInput += text; } },
+        { readOnly: true, label: "Grading output" });
+    await output.ready;
+    output.write("grade result\r\n");
+    await paint();
+    check((await output.readText()).includes("grade result"), "read-only output did not render");
+    check(outputHost.querySelector("textarea")?.readOnly === true, "read-only output exposes an editable input");
+    output.paste("forbidden");
+    check(outputInput === "", "read-only output forwarded paste input");
+    await output.selectAll();
+    check(output.hasSelection(), "read-only output cannot be selected");
+    output.clear();
+    await paint();
+    check(!output.hasSelection() && !(await output.readText()).includes("grade result"), "output reset retained selection or text");
+    output.destroy();
 }

@@ -157,9 +157,9 @@
                 if (!entry || typeof entry !== "object" || Array.isArray(entry))
                     throw new TypeError(`${name} must be an object`);
                 resolved[name] = prefix === "drive"
-                    ? (entry.provider === undefined
+                    ? (entry.capacity_sectors === undefined && entry.bytes === undefined && entry.provider === undefined
                         ? { ...entry, file: resolveConfigPath(entry.file, baseUrl) }
-                        : resolveHostDrive(entry))
+                        : resolveArrayDrive(entry))
                     : entry;
             }
         }
@@ -176,21 +176,23 @@
         return slash < 0 ? value : baseUrl.slice(0, slash + 1) + value;
     }
 
-    function resolveHostDrive(entry) {
-        if (!Number.isInteger(entry.provider) || entry.provider <= 0 ||
-            entry.provider > 0x7fff_ffff || entry.file !== undefined)
-            throw new TypeError("host drive needs one positive numeric provider ID");
-        const capacity = entry.capacity_sectors;
+    function resolveArrayDrive(entry) {
+        if (entry.provider !== undefined) throw new TypeError("block providers were removed");
+        const bytes = entry.bytes;
+        if (bytes !== undefined && (!(bytes instanceof Uint8Array) || bytes.length === 0 || bytes.length % 512 !== 0))
+            throw new TypeError("array drives need a whole-sector Uint8Array");
+        const capacity = entry.capacity_sectors ?? (bytes ? BigInt(bytes.length / 512) : undefined);
         if (typeof capacity === "number" && !Number.isSafeInteger(capacity) ||
-            !["number", "bigint", "string"].includes(typeof capacity))
-            throw new TypeError("host drive capacity must be a safe integer or integer string");
-        return { ...entry, capacity_sectors: String(capacity) };
+            !["number", "bigint", "string"].includes(typeof capacity) || entry.file !== undefined)
+            throw new TypeError("array drive needs sector capacity or initial bytes");
+        if (bytes && BigInt(capacity) !== BigInt(bytes.length / 512)) throw new RangeError("array capacity does not match bytes");
+        return { capacity_sectors: String(capacity), ...(bytes === undefined ? {} : { bytes }) };
     }
 
     class Riscbox {
         constructor(exports, options = {}) {
             if (Object.hasOwn(options, "p9Servers"))
-                throw new TypeError("p9Servers was removed; bind a Rust Filesystem before startup");
+                throw new TypeError("p9Servers was removed; configure named shares and populate them after preparation");
             if (!(exports.memory instanceof WebAssembly.Memory))
                 throw new TypeError("Riscbox WASM must export memory");
             if (typeof exports.riscbox_configure_quantum !== "function" ||
@@ -230,7 +232,9 @@
             this.wakeupChannel = null;
             this.started = false;
             this.pendingControls = [];
-            this.blockGenerations = new Map();
+            this.disks = new Map();
+            this.diskCount = 0;
+            this.preparation = null;
             this.httpGeneration = 0;
         }
 
@@ -314,42 +318,60 @@
             }
         }
 
-        start(configUrl, ramMiB, commandLine = "", width = 0,
-              height = 0, hasNetwork = false) {
-            this.configUrl = configUrl;
-            const result = this.withBytes(configUrl, (urlPtr, urlLen) =>
-                this.withBytes(commandLine, (commandPtr, commandLen) =>
-                    this.exports.riscbox_start(
-                        urlPtr, urlLen, ramMiB, commandPtr, commandLen,
-                        width, height, hasNetwork ? 1 : 0,
-                    )));
-            this.drainActions();
-            return result;
+        async start(configUrl, ramMiB, commandLine = "", width = 0, height = 0, hasNetwork = false) {
+            return this.startFromUrl(configUrl, ramMiB, commandLine, width, height, hasNetwork);
         }
 
-        startResolved(config, ramMiB = 0, width = 0, height = 0, hasNetwork = false) {
+        async startResolved(config, ramMiB = 0, width = 0, height = 0, hasNetwork = false) {
+            await this.prepareResolved(config, ramMiB, width, height, hasNetwork);
+            await this.boot();
+        }
+
+        prepareResolved(config, ramMiB = 0, width = 0, height = 0, hasNetwork = false) {
+            if (this.preparation) throw new Error("VM preparation is already active");
             const resolved = resolveConfig(config, null);
-            const attached = new Set();
+            const initial = [];
+            let diskCount = 0;
             for (let index = 0; index < 4; index++) {
                 const drive = resolved[`drive${index}`];
-                if (!drive || drive.provider === undefined) continue;
-                const provider = this.options.blockProviders?.get(drive.provider);
-                if (!provider || typeof provider.read !== "function" ||
-                    typeof provider.write !== "function" ||
-                    typeof provider.reset !== "function" || typeof provider.close !== "function")
-                    throw new TypeError(`block provider ${drive.provider} is not registered`);
-                if (attached.has(drive.provider) || this.blockGenerations.has(drive.provider))
-                    throw new TypeError(`block provider ${drive.provider} is attached twice`);
-                attached.add(drive.provider);
+                if (!drive) break;
+                diskCount++;
+                if (drive.bytes !== undefined) {
+                    initial.push([index, drive.bytes.slice()]);
+                    delete drive.bytes;
+                }
             }
-            const result = this.withBytes(JSON.stringify(resolved), (ptr, length) =>
-                this.exports.riscbox_start_resolved(
-                    ptr, length, ramMiB, width, height, hasNetwork ? 1 : 0,
-                ));
-            if (result !== 0) throw new Error("Riscbox rejected resolved configuration");
-            for (const provider of attached) this.blockGenerations.set(provider, 1);
-            this.drainActions();
-            return result;
+            return new Promise((resolve, reject) => {
+                this.preparation = { resolve, reject, initial, diskCount };
+                try {
+                    const result = this.withBytes(JSON.stringify(resolved), (ptr, length) =>
+                        this.exports.riscbox_prepare_resolved(ptr, length, ramMiB, width, height, hasNetwork ? 1 : 0));
+                    if (result !== 0) throw new Error("Riscbox rejected resolved configuration");
+                    this.drainActions();
+                } catch (error) { this.failPreparation(error); }
+            });
+        }
+
+        async prepareFromUrl(configUrl, ramMiB = 0, commandLine = "", width = 0, height = 0, hasNetwork = false) {
+            const generation = this.httpGeneration;
+            const resolved = await Riscbox.loadResolvedConfig(configUrl, commandLine, this.options.fetch ?? globalThis.fetch);
+            if (generation !== this.httpGeneration) throw new Error("VM preparation was cancelled");
+            this.configUrl = configUrl;
+            await this.prepareResolved(resolved, ramMiB, width, height, hasNetwork);
+        }
+
+        filesystem(name) { return root.RiscboxStorage.Filesystem.open(this, name); }
+
+        block(index) {
+            if (!Number.isInteger(index) || index < 0 || index >= this.diskCount) throw new RangeError("unknown disk index");
+            if (!this.disks.has(index)) this.disks.set(index, new root.RiscboxStorage.BlockDisk(this, index));
+            return this.disks.get(index);
+        }
+
+        failPreparation(error) {
+            const preparation = this.preparation;
+            this.preparation = null;
+            preparation?.reject(error);
         }
 
         static async loadResolvedConfig(configUrl, commandLine = "", fetchRequest = globalThis.fetch) {
@@ -364,11 +386,8 @@
 
         async startFromUrl(configUrl, ramMiB = 0, commandLine = "", width = 0,
                            height = 0, hasNetwork = false) {
-            const resolved = await Riscbox.loadResolvedConfig(
-                configUrl, commandLine, this.options.fetch ?? globalThis.fetch,
-            );
-            this.configUrl = configUrl;
-            return this.startResolved(resolved, ramMiB, width, height, hasNetwork);
+            await this.prepareFromUrl(configUrl, ramMiB, commandLine, width, height, hasNetwork);
+            await this.boot();
         }
 
         control(name) {
@@ -378,15 +397,25 @@
                         const command = this.exports[`riscbox_${name}`];
                         if (typeof command !== "function" || command() !== 0)
                             throw new Error(`Riscbox could not ${name} the VM`);
-                        this.drainActions();
                         if (name === "reset" || name === "request_shutdown" ||
                             name === "request_reboot") this.scheduleWakeup(0);
+                        if (name === "cold_reset") {
+                            this.httpGeneration++;
+                            this.options.consoleReset?.();
+                            this.options.framebufferClear?.();
+                            this.serviceStorage();
+                        }
                         if (name === "destroy") {
+                            this.failPreparation(new Error("VM preparation was cancelled"));
+                            for (const filesystem of this.filesystems.values()) filesystem.invalidate();
+                            for (const disk of this.disks.values()) disk.invalidate();
+                            this.filesystems.clear(); this.disks.clear(); this.diskCount = 0;
                             this.httpGeneration++;
                             this.started = false;
                             this.cancelWakeup();
                             this.options.onVmDestroyed?.();
                         }
+                        this.drainActions();
                         resolve();
                     } catch (error) {
                         reject(error);
@@ -399,6 +428,7 @@
 
         halt() { return this.control("halt"); }
         reset() { return this.control("reset"); }
+        coldReset() { return this.control("cold_reset"); }
         boot() { return this.control("reset"); }
         destroy() { return this.control("destroy"); }
         requestShutdown() { return this.control("request_shutdown"); }
@@ -579,16 +609,29 @@
         drainActions() {
             if (!this.exports.riscbox_next_action)
                 return;
+            let serviced = false;
             for (;;) {
                 const kind = this.exports.riscbox_next_action();
                 if (kind === 0) {
-                    this.serviceFilesystems();
-                    return;
+                    if (serviced) return;
+                    if (!this.serviceStorage()) return;
+                    serviced = true;
+                    continue;
                 }
+                serviced = false;
                 const value = this.exports.riscbox_action_value();
                 const ptr = this.exports.riscbox_action_data_address();
                 const len = this.exports.riscbox_action_data_length();
-                if (kind === 1) {
+                if (kind === 15) {
+                    const preparation = this.preparation;
+                    if (!preparation) throw new Error("unexpected prepared platform");
+                    try {
+                        this.diskCount = preparation.diskCount;
+                        for (const [index, bytes] of preparation.initial) this.block(index).write(0n, bytes);
+                        this.preparation = null;
+                        preparation.resolve();
+                    } catch (error) { this.failPreparation(error); }
+                } else if (kind === 1) {
                     const generation = this.httpGeneration;
                     const url = decoder.decode(this.bytes(ptr, len));
                     const fetchRequest = this.options.fetch ?? globalThis.fetch;
@@ -597,14 +640,24 @@
                     const hashedPath = /(?:^|\/)[^/?#]*-[0-9a-f]{8,64}(?:\.|\/|[?#]|$)/i.test(url);
                     const cache = url === this.configUrl ? "no-store"
                         : hashedPath ? "force-cache" : "default";
-                    Promise.resolve(fetchRequest(url, { cache })).then(async (response) => {
-                        const data = new Uint8Array(await response.arrayBuffer());
+                    const disk = this.exports.riscbox_action_disk();
+                    let completed = false;
+                    const load = async () => {
+                        if (disk !== 0 && this.options.fetchBlock) {
+                            const data = await this.options.fetchBlock({ disk: disk - 1, url, cache });
+                            if (!(data instanceof Uint8Array)) throw new TypeError("fetchBlock must return Uint8Array");
+                            return { data, status: 200 };
+                        }
+                        const response = await fetchRequest(url, { cache });
+                        return { data: new Uint8Array(await response.arrayBuffer()), status: response.status ?? 200 };
+                    };
+                    load().then(({ data, status }) => {
                         if (generation !== this.httpGeneration) return;
-                        const status = response.status ?? 200;
                         this.withBytes(data, (dataPtr, dataLen) => {
                             const result = this.exports.riscbox_http_complete(
                                 value, status, dataPtr, dataLen,
                             );
+                            completed = true;
                             if (result !== 0)
                                 throw new Error(`Riscbox rejected HTTP response ${value}`);
                         });
@@ -612,7 +665,15 @@
                         if (this.started)
                             this.scheduleWakeup(0);
                     }).catch((error) => {
-                        if (generation === this.httpGeneration) this.options.onError?.(error);
+                        if (generation !== this.httpGeneration) return;
+                        if (disk !== 0 && !completed) {
+                            const result = this.exports.riscbox_http_complete(value, 500, 0, 0);
+                            this.drainActions();
+                            if (this.started) this.scheduleWakeup(0);
+                            if (result === 0) return;
+                        }
+                        this.failPreparation(error);
+                        this.options.onError?.(error);
                     });
                 } else if (kind === 2) {
                     this.started = true;
@@ -652,58 +713,11 @@
                     this.options.consoleReset?.();
                     this.options.framebufferClear?.();
                     this.options.onVmReset?.(cause);
-                } else if (kind === 12) {
-                    const providerId = this.exports.riscbox_action_endpoint();
-                    const generation = this.exports.riscbox_action_generation();
-                    const requestId = this.exports.riscbox_action_request_id();
-                    const length = this.exports.riscbox_action_reply_capacity();
-                    const sector = (BigInt(this.exports.riscbox_action_sector_high()) << 32n) |
-                        BigInt(this.exports.riscbox_action_sector_low());
-                    const provider = this.options.blockProviders?.get(providerId);
-                    if (!provider || this.blockGenerations.get(providerId) !== generation)
-                        throw new Error(`block request targets inactive provider ${providerId}`);
-                    const write = value === 1;
-                    const bytes = write ? this.bytes(ptr, len) : undefined;
-                    let attemptedCompletion = false;
-                    Promise.resolve().then(() => write
-                        ? provider.write(sector, bytes)
-                        : provider.read(sector, length)).then((result) => {
-                        if (this.blockGenerations.get(providerId) !== generation) return;
-                        if (write && result !== undefined || !write &&
-                            (!(result instanceof Uint8Array) || result.length !== length))
-                            throw new TypeError(`block provider ${providerId} returned an invalid result`);
-                        attemptedCompletion = true;
-                        this.completeBlock(providerId, generation, requestId,
-                            0, write ? new Uint8Array() : result);
-                    }).catch((error) => {
-                        if (this.blockGenerations.get(providerId) !== generation) return;
-                        if (!attemptedCompletion)
-                            this.completeBlock(providerId, generation, requestId, 1);
-                        this.options.onError?.(error);
-                    });
-                } else if (kind === 13) {
-                    const providerId = this.exports.riscbox_action_endpoint();
-                    const generation = this.exports.riscbox_action_generation();
-                    this.blockGenerations.set(providerId, generation);
-                    this.options.blockProviders?.get(providerId)?.reset();
-                } else if (kind === 14) {
-                    const providerId = this.exports.riscbox_action_endpoint();
-                    this.blockGenerations.delete(providerId);
-                    this.options.blockProviders?.get(providerId)?.close();
+                    if (cause === "host-boot") this.options.onVmStarted?.();
                 } else {
                     throw new Error(`unknown Riscbox host action ${kind}`);
                 }
             }
-        }
-
-        completeBlock(provider, generation, requestId, status, bytes = new Uint8Array()) {
-            this.withBytes(bytes, (ptr, length) => {
-                if (this.exports.riscbox_block_complete(
-                    provider, generation, requestId, status, ptr, length,
-                ) !== 0) throw new Error(`Riscbox rejected block reply ${requestId}`);
-            });
-            this.drainActions();
-            if (this.started) this.scheduleWakeup(0);
         }
 
         reportFilesystemError(error) {
@@ -711,33 +725,20 @@
             else console.error(error);
         }
 
-        // Namespace work is polled only between WASM activations. Source dispatch
-        // copies its ticket before another allocation and starts plugin promises later.
-        serviceFilesystems() {
-            if (this.servicingFilesystems || !this.exports.riscbox_fs_next_load) return;
+        // Events and disk completions are serviced after WASM releases its borrows.
+        serviceStorage() {
+            if (this.servicingFilesystems) return false;
             this.servicingFilesystems = true;
+            let polled = false;
             try {
-                for (;;) {
-                    const handle = this.exports.riscbox_fs_next_load();
-                    if (handle === 0) {
-                        if (this.exports.riscbox_fs_status() < 0)
-                            throw new Error("Riscbox could not poll filesystem sources");
-                        break;
-                    }
-                    const ticket = this.bytes(this.exports.riscbox_fs_data_address(),
-                        this.exports.riscbox_fs_data_length());
-                    const filesystem = this.filesystems.get(handle);
-                    if (!filesystem) throw new Error(`Filesystem handle ${handle} has no source owner`);
-                    filesystem.dispatch(ticket);
-                }
                 for (const filesystem of this.filesystems.values()) filesystem.poll();
-            } finally {
-                this.servicingFilesystems = false;
-            }
+                for (const disk of this.disks.values()) polled = disk.poll() || polled;
+            } finally { this.servicingFilesystems = false; }
+            return polled;
         }
 
         filesystemChanged() {
-            this.serviceFilesystems();
+            this.serviceStorage();
             if (this.started && !this.quantumRunning) this.scheduleWakeup(0);
         }
 
@@ -771,16 +772,9 @@
             return this.exports.riscbox_network_carrier(up ? 1 : 0);
         }
 
-        ccall(name, returnType, argumentTypes, args = []) {
-            if (name !== "vm_start")
-                throw new Error(`unsupported compatibility call: ${name}`);
-            if (returnType !== null || argumentTypes.length !== 6 || args.length !== 6)
-                throw new TypeError("vm_start compatibility signature mismatch");
-            return this.start(...args);
-        }
     }
 
     root.Riscbox = Riscbox;
     if (typeof module === "object" && module.exports)
-        module.exports = { Riscbox };
+        module.exports = { Riscbox, ...root.RiscboxStorage };
 }(globalThis));

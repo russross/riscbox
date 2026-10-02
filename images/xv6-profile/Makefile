@@ -2,7 +2,7 @@ ROOT := ../..
 BIN := ../bin
 WASM := $(ROOT)/target/wasm32-unknown-unknown/release/riscbox_wasm.wasm
 WEB_SOURCES := $(shell find web -type f)
-JS_SOURCES := $(shell find $(ROOT)/js/block $(ROOT)/js/network $(ROOT)/js/p9 -name '*.ts' -type f)
+JS_SOURCES := $(shell find $(ROOT)/js/network -name '*.ts' -type f) $(ROOT)/js/storage.ts $(ROOT)/js/riscbox.d.ts
 
 all:
 	$(MAKE) -C $(ROOT) wasm js kernel opensbi
@@ -16,7 +16,7 @@ build/rootfs.ext4: setup.sh $(BIN)/create-alpine-ext4 $(BIN)/run-image-setup $(B
 build/rootfs.erofs: build/rootfs.ext4 $(BIN)/create-erofs-from-ext4
 	$(BIN)/create-erofs-from-ext4 $< $@
 
-dist/riscbox.cfg: Makefile build/rootfs.erofs riscbox.cfg $(WEB_SOURCES) $(JS_SOURCES) $(ROOT)/js/riscbox.js $(ROOT)/js/p9/README.md $(ROOT)/build/js/.built $(WASM) $(ROOT)/kernel/.asset-name $(ROOT)/opensbi/.asset-name $(BIN)/build-distribution $(ROOT)/tools/splitimg.py $(ROOT)/tools/image_deployment.py ../DEPLOYMENT.md ../web/index.html
+dist/riscbox.cfg: Makefile build/rootfs.erofs riscbox.cfg $(WEB_SOURCES) $(JS_SOURCES) $(ROOT)/js/riscbox.js $(ROOT)/js/storage.ts $(ROOT)/build/js/.built $(WASM) $(ROOT)/kernel/.asset-name $(ROOT)/opensbi/.asset-name $(BIN)/build-distribution $(ROOT)/tools/splitimg.py $(ROOT)/tools/image_deployment.py ../DEPLOYMENT.md ../web/index.html
 	$(BIN)/build-distribution . build/rootfs.ext4 --erofs
 
 profile: all

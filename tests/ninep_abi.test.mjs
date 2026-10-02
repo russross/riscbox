@@ -8,10 +8,9 @@ import { createRequire } from "node:module";
 import { abiRegression } from "./fixtures/ninep_abi.mjs";
 import { facadeRegression } from "./fixtures/ninep_facade.mjs";
 import { runChromePage } from "./chrome.mjs";
-import { Filesystem, SeedBuilder } from "../build/js/p9/index.js";
-const { Riscbox } = createRequire(import.meta.url)("../js/riscbox.js");
+const { Riscbox } = createRequire(import.meta.url)("../build/js/riscbox.js");
 
-test("deployed filesystem ABI owns bytes and handles through async and VM lifetimes", async () => {
+test("deployed filesystem ABI owns bytes and handles through synchronous sharing and VM lifetimes", async () => {
     const directory = await mkdtemp(join(tmpdir(), "riscbox-ninep-abi-"));
     try {
         const target = join(directory, "target");
@@ -36,7 +35,7 @@ test("deployed filesystem ABI owns bytes and handles through async and VM lifeti
         } } });
         assert.equal(await abiRegression(instance.exports, firmware), 1);
         const runtime = new Riscbox(instance.exports, { onError: error => { throw error; } });
-        try { assert.equal(await facadeRegression(Filesystem, SeedBuilder, runtime, firmware), 1); }
+        try { assert.equal(await facadeRegression(runtime, firmware), 1); }
         finally { runtime.cancelWakeup(); }
 
         if (process.env.RISCBOX_TEST_BROWSER === "1") {
@@ -44,8 +43,7 @@ test("deployed filesystem ABI owns bytes and handles through async and VM lifeti
                 .replace("export async function abiRegression", "async function abiRegression");
             const facade = (await readFile(join(import.meta.dirname, "fixtures/ninep_facade.mjs"), "utf8"))
                 .replace("export async function facadeRegression", "async function facadeRegression");
-            await runChromePage(`<!doctype html><body>pending<script src="/js/riscbox.js"></script><script type="module">
-                import { Filesystem, SeedBuilder } from "/build/js/p9/index.js";
+            await runChromePage(`<!doctype html><body>pending<script src="/build/js/riscbox.js"></script><script type="module">
                 ${source}
                 ${facade}
                 try {
@@ -57,7 +55,7 @@ test("deployed filesystem ABI owns bytes and handles through async and VM lifeti
                     const firmware = Uint8Array.from(atob("${Buffer.from(firmware).toString("base64")}"), value => value.charCodeAt(0));
                     await abiRegression(instance.exports, firmware);
                     const runtime = new Riscbox(instance.exports, { onError: error => { throw error; } });
-                    await facadeRegression(Filesystem, SeedBuilder, runtime, firmware);
+                    await facadeRegression(runtime, firmware);
                     await fetch("/result?status=pass");
                 } catch (error) { await fetch("/result?status=" + encodeURIComponent(String(error))); }
             </script>`, directory);

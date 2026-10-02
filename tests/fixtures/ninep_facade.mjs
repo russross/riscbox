@@ -1,119 +1,116 @@
-export async function facadeRegression(Filesystem, SeedBuilder, runtime, firmware) {
-    const check = (condition, message) => { if (!condition) throw new Error(message); };
-    const decoder = new TextDecoder();
-    const filesystem = await Filesystem.create(runtime);
-    const changes = [];
-    const unsubscribe = await filesystem.subscribe(change => {
-        changes.push(change);
-        // Listener reentry must happen after the servicing loop and WASM call.
-        check(!runtime.servicingFilesystems, "listener reentry boundary");
-    });
-    await filesystem.mkdir("dir");
-    const input = new TextEncoder().encode("content");
-    await filesystem.writeFile("dir/file", input, 9007199254740993n);
-    input.fill(0);
-    check(decoder.decode(await filesystem.readFile("dir/file")) === "content", "host bytes owned");
-    await filesystem.link("dir/file", "alias");
-    check((await filesystem.stat("alias")).linkCount === 2, "hardlink identity");
-    await filesystem.rename("alias", "moved");
-    await filesystem.symlink("link", "dir/file");
-    check(await filesystem.readlink("link") === "dir/file", "symlink target");
-    check((await filesystem.listDirectory()).map(entry => entry.name).sort().join(",") === "dir,link,moved", "directory listing");
-    check((await filesystem.listFiles()).includes("moved"), "file listing");
-    check(changes.some(change => change.origin === 9007199254740993n && change.kind === "create"), "origin width");
+// The deployed facade shares resident bytes and enforces platform lifetimes.
+function checkFacade(condition, message) { if (!condition) throw Error(message); }
+async function rejects(operation, message) {
+    try { await operation(); } catch { return; }
+    throw Error(message);
+}
+function bytesEqual(actual, expected, message) {
+    checkFacade(actual.length === expected.length && actual.every((byte, index) => byte === expected[index]), message);
+}
+const delay = () => new Promise(resolve => setTimeout(resolve, 0));
 
-    let resolveLoad;
-    let loads = 0;
-    const entries = new SeedBuilder().addFile("lazy", 3, "opaque", { inodeKey: "body" }).addHardLink("alias", "body").finish();
-    const loader = { load(key, signal) {
-        check(key === "opaque" && signal instanceof AbortSignal, "plugin key and signal");
-        loads++;
-        return new Promise(resolve => { resolveLoad = resolve; });
-    } };
-    await filesystem.installSeed({ entries, loader });
-    check(loads === 0, "no preload");
-    const first = filesystem.readFile("lazy");
-    const second = filesystem.readFile("alias");
-    await Promise.resolve();
-    check(loads === 1, "joined source");
-    await filesystem.remove("lazy");
-    await filesystem.writeFile("lazy", "replacement");
-    resolveLoad(new TextEncoder().encode("old"));
-    check(decoder.decode(await first) === "old" && decoder.decode(await second) === "old", "host inode pinned");
-    check(decoder.decode(await filesystem.readFile("lazy")) === "replacement", "late source respects replacement");
-
-    await filesystem.installSeed({ entries, loader });
-    const superseded = filesystem.readFile("lazy");
-    await Promise.resolve();
-    await filesystem.writeFile("lazy", "host");
-    check(decoder.decode(await superseded) === "host", "host write wins load");
-    resolveLoad(new TextEncoder().encode("old"));
-    await new Promise(resolve => setTimeout(resolve, 0));
-    check(decoder.decode(await filesystem.readFile("lazy")) === "host", "old source ignored");
-
-    for (const bad of [() => Promise.reject(new Error("denied")), async () => new Uint8Array(4)]) {
-        await filesystem.installSeed({ entries, loader: { load: bad } });
-        try { await filesystem.readFile("lazy"); throw new Error("failure accepted"); }
-        catch (error) { check(error.errno === 5, "source error mapping"); }
-        await filesystem.retrySource("lazy");
+export async function facadeRegression(runtime, firmware) {
+    const config = { version: 1, machine: "riscv64", memory_size: 32, bios: "firmware.bin", console: "uart",
+        fs0: { server: "share", tag: "shared" } };
+    let transcript = "";
+    runtime.options.consoleWrite = text => { transcript += text; };
+    runtime.options.fetch = async () => new Response(firmware);
+    await runtime.prepareResolved(config);
+    const share = runtime.filesystem("share");
+    const events = [];
+    const unsubscribe = share.subscribe(event => events.push(event));
+    share.writeFile("file", "initial");
+    share.writeFile("file", "old", 0x0123456789abcdefn);
+    checkFacade(!(share.readFile("file") instanceof Promise), "resident API is synchronous");
+    await delay();
+    checkFacade(events.some(event => event.kind === "write" && event.origin === 0x0123456789abcdefn), "origin notification");
+    await runtime.boot();
+    runtime.cancelWakeup();
+    await rejects(() => share.clear(), "running share clear must fail");
+    for (let run = 0; run < 20 && !transcript.includes("ABI GUEST PASS"); run++) {
+        await runtime.runQuantum(); runtime.cancelWakeup();
     }
-    await filesystem.installSeed({ entries, loader });
-    const stale = filesystem.readFile("lazy");
-    const staleResult = stale.then(() => false, error => error.errno === 116);
-    await Promise.resolve();
-    await filesystem.reset();
-    check(await staleResult, "namespace reset invalidates host read");
-    resolveLoad(new TextEncoder().encode("old"));
-
-    // Guest source completion wakes a WFI quantum through the public adapter.
-    await filesystem.installSeed({ entries, loader: { async load() {
-        loads++;
-        await new Promise(resolve => setTimeout(resolve, 5));
-        return new TextEncoder().encode("old");
-    } } });
-    await filesystem.bind("workspace");
-    let output = "";
-    runtime.options.consoleWrite = text => { output += text; };
-    runtime.options.fetch = async () => ({ status: 200, arrayBuffer: async () => firmware.buffer.slice(firmware.byteOffset, firmware.byteOffset + firmware.byteLength) });
-    const config = { version: 1, machine: "riscv64", memory_size: 32, bios: "https://host/fw.bin", console: "uart",
-        fs0: { server: "workspace", tag: "first" }, fs1: { server: "workspace", tag: "second" } };
-    const other = await Filesystem.create(runtime);
-    await other.bind("workspace");
-    await filesystem.bind("workspace");
-    await other.close();
-    // Cancelling startup retires its pending response before a new VM can start.
-    const fetchFirmware = runtime.options.fetch;
-    let lateFirmware;
-    runtime.options.fetch = () => new Promise(resolve => { lateFirmware = resolve; });
-    runtime.startResolved(config);
-    await runtime.destroy();
-    lateFirmware(await fetchFirmware());
-    await new Promise(resolve => setTimeout(resolve, 0));
-    check(!runtime.started, "cancelled startup stays inactive");
-    runtime.options.fetch = fetchFirmware;
-    runtime.startResolved(config);
-    for (let attempt = 0; attempt < 100 && !output.includes("ABI GUEST PASS"); attempt++) await new Promise(resolve => setTimeout(resolve, 5));
-    check(output.includes("ABI GUEST PASS") && !output.includes("ABI GUEST FAIL"), "guest async adapter reply");
-    try { await filesystem.close(); throw new Error("attached close accepted"); }
-    catch (error) { check(error.errno === 16, "attached close rejected"); }
-    await filesystem.writeFile("retained", "yes");
-    await filesystem.installSeed({ entries, loader });
-    const retainedRead = filesystem.readFile("lazy");
-    await Promise.resolve();
-    await runtime.reset();
-    resolveLoad(new TextEncoder().encode("old"));
-    check(decoder.decode(await retainedRead) === "old", "VM reset retains host source work");
-    check((await filesystem.listFiles()).includes("lazy"), "VM reset retains namespace");
-    await filesystem.reset();
-    await filesystem.writeFile("after-reset", "yes");
+    checkFacade(transcript.includes("ABI GUEST PASS"), "guest reads the synchronous host file");
+    share.writeFile("host", "while running");
+    checkFacade(new TextDecoder().decode(share.readFile("host")) === "while running", "concurrent host sharing");
+    await runtime.reset(); runtime.cancelWakeup();
+    checkFacade(new TextDecoder().decode(share.readFile("host")) === "while running", "reboot retains tree");
     await runtime.halt();
+    share.clear();
+    checkFacade(share.listFiles().length === 0, "clear after halt");
+    unsubscribe();
     await runtime.destroy();
-    check(decoder.decode(await filesystem.readFile("after-reset")) === "yes", "destroy retains host access");
-    runtime.startResolved(config);
-    await new Promise(resolve => setTimeout(resolve, 10));
-    await runtime.halt(); await runtime.destroy();
-    await unsubscribe(); await filesystem.close();
-    try { await filesystem.readFile("after-reset"); throw new Error("closed access accepted"); }
-    catch (error) { check(error.errno === 9, "closed error"); }
+    await rejects(() => share.readFile("file"), "destroy invalidates facade");
+
+    // Array input and exported reads are copies; writes belong entirely to Rust.
+    const original = new Uint8Array(2048).fill(2);
+    runtime.options.fetch = async url => new Response(url.endsWith("blk.txt")
+        ? "{block_size:1,n_block:4}" : Uint8Array.from([0x73, 0, 0x50, 0x10]));
+    let loads = 0;
+    let complete;
+    runtime.options.fetchBlock = async () => { loads++; return new Promise(resolve => { complete = resolve; }); };
+    await runtime.prepareResolved({ ...config, drive0: { bytes: original }, drive1: { file: "disk/blk.txt" } });
+    const array = runtime.block(0);
+    const http = runtime.block(1);
+    await rejects(() => runtime.prepareResolved(config), "second preparation cannot replace a live platform");
+    checkFacade(runtime.block(1) === http, "failed preparation preserves disk identities");
+    original.fill(8);
+    checkFacade(array.capacitySectors === 4n, "array capacity");
+    bytesEqual(array.read(0n, 512), new Uint8Array(512).fill(2), "input copied into Rust");
+    const copy = array.read(0n, 512); copy.fill(7);
+    checkFacade(array.read(0n, 512)[0] === 2, "read returns a copy");
+    array.write(1n, copy);
+    checkFacade(array.read(1n, 512)[0] === 7, "array write-through");
+    await rejects(() => array.read(4n, 512), "capacity checked");
+    http.write(1n, new Uint8Array(512).fill(9));
+    checkFacade(http.read(1n, 512)[0] === 9 && loads === 0, "unfetched writes and reads stay synchronous");
+    const first = http.read(0n, 1024);
+    const second = http.read(0n, 512);
+    checkFacade(first instanceof Promise && second instanceof Promise, "cache misses are asynchronous");
+    await delay();
+    checkFacade(loads === 1, "duplicate misses share one fetch");
+    await rejects(() => runtime.boot(), "pending host reads prevent boot");
+    http.write(0n, new Uint8Array(512).fill(6));
+    complete(new Uint8Array(1024).fill(3));
+    const combined = await first;
+    checkFacade(combined[0] === 6 && combined[512] === 9, "late base completion preserves writes");
+    checkFacade((await second)[0] === 6, "joined read completes");
+    await delay();
+    http.discardChanges();
+    checkFacade(http.read(0n, 1024)[0] === 3 && loads === 1, "discard retains immutable cache");
+    await runtime.boot(); runtime.cancelWakeup();
+    await rejects(() => array.read(0n, 512), "running disk reads blocked");
+    await rejects(() => array.write(0n, copy), "running disk writes blocked");
+    await runtime.halt();
+    checkFacade(array.read(1n, 512)[0] === 7, "array survives forced halt");
+
+    // Retired host reads reject promptly; their late network responses are ignored.
+    const pending = http.read(2n, 512);
+    const cancelled = rejects(() => pending, "discard must retire reads");
+    await delay();
+    const obsolete = complete;
+    http.discardChanges();
+    await cancelled;
+    obsolete(new Uint8Array(1024).fill(4));
+    await delay();
+    runtime.options.fetchBlock = async () => { throw Error("backing unavailable"); };
+    await rejects(() => http.read(2n, 512), "backing errors reject host reads");
+    runtime.options.fetchBlock = async () => new Uint8Array(511);
+    await rejects(() => http.read(2n, 512), "incorrect response lengths reject host reads");
+    runtime.options.fetchBlock = async () => new Uint8Array(1024).fill(5);
+    checkFacade((await http.read(2n, 512))[0] === 5, "failed chunks can retry");
+    runtime.options.fetchBlock = () => new Promise(resolve => { complete = resolve; });
+    const overwritten = http.read(6n, 512);
+    http.write(6n, new Uint8Array(512).fill(8));
+    checkFacade((await Promise.race([overwritten, new Promise((_, reject) => setTimeout(() => reject(Error("resident write did not settle reader")), 1000))]))[0] === 8,
+        "writes satisfy waiting reads without fetching base bytes");
+    complete(new Uint8Array(1024).fill(5));
+    await delay();
+    checkFacade(http.read(6n, 512)[0] === 8, "late base cannot replace write-satisfied data");
+    await runtime.coldReset();
+    checkFacade(array.read(1n, 512)[0] === 7, "cold reset leaves storage policy explicit");
+    await runtime.destroy();
+    await rejects(() => array.read(0n, 512), "destroy invalidates disk facades");
+    await rejects(() => share.listFiles(), "old share cannot bind to replacement VM");
     return 1;
 }

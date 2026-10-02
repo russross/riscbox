@@ -4,6 +4,23 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Consolidated platform storage in Rust. HTTP disks use a bounded clean cache
+    and sparse sector overlays; synchronous writes never fetch missing chunks.
+    VM-owned array disks write through directly. Powered-off host reads return
+    resident copies or promises for HTTP misses; all writes are synchronous.
+    Added preparation without boot, explicit HTTP overlay discard, and cold
+    reset while retaining bytes. VirtIO remains independent of the store.
+
+*   Made 9p entirely resident and synchronous. Configured named shares are
+    automatic; host and guest use the same tree. Removed source loaders, seed
+    plugins, standalone handle binding, and TypeScript block providers. The
+    single deployable adapter includes storage facades and declarations.
+    Destroy invalidates every share/disk; reboot preserves their contents.
+
+*   Risclet uses one VM and share across examples. Application downloads cache
+    complete originals. Switching or Reset clears edits, RAM, and disk changes;
+    Reboot requests an orderly guest reboot with retained state.
+
 *   Enabled RISC-V ISO boot through U-Boot EFI scanning, FAT, and El Torito
     boot images. Linux now includes its EFI stub, compressed initramfs loading,
     FAT/VFAT, ISO9660 with Rock Ridge/Joliet, loop devices, and SquashFS with

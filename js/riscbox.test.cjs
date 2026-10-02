@@ -1,7 +1,7 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 
-const { Riscbox } = require("./riscbox.js");
+const { Riscbox } = require("../build/js/riscbox.js");
 
 function fakeModule() {
     const memory = new WebAssembly.Memory({ initial: 1 });
@@ -35,7 +35,7 @@ function fakeModule() {
         riscbox_action_data_length() { return 0; },
     };
     for (const name of [
-        "start", "start_resolved", "console_input", "console_resize", "key_event", "pointer_event",
+        "start", "start_resolved", "prepare_resolved", "reset", "console_input", "console_resize", "key_event", "pointer_event",
         "wheel_event", "network_input", "network_carrier",
     ]) {
         exports[`riscbox_${name}`] = (...args) => {
@@ -43,101 +43,12 @@ function fakeModule() {
             return 0;
         };
     }
+    let prepared = false;
+    exports.riscbox_prepare_resolved = (...args) => { calls.push(["prepare_resolved", ...args]); prepared = true; return 0; };
+    exports.riscbox_next_action = () => { if (prepared) { prepared = false; return 15; } return 0; };
+    exports.riscbox_action_disk = () => 0;
     return { exports, calls };
 }
-
-test("host block requests copy replies and retire promises on reset", async () => {
-    const fake = fakeModule();
-    const completed = [];
-    let resolveRead;
-    const calls = [];
-    const provider = {
-        read(sector, length) {
-            calls.push(["read", sector, length]);
-            return new Promise((resolve) => { resolveRead = resolve; });
-        },
-        write(sector, bytes) { calls.push(["write", sector, bytes]); },
-        reset() { calls.push(["reset"]); },
-        close() { calls.push(["close"]); },
-    };
-    const runtime = new Riscbox(fake.exports, { blockProviders: new Map([[7, provider]]) });
-    assert.throws(() => runtime.startResolved({ version: 1, machine: "riscv64", memory_size: 32,
-        drive0: { provider: 7, capacity_sectors: Number.MAX_SAFE_INTEGER + 1 } }),
-    /safe integer/);
-    runtime.startResolved({ version: 1, machine: "riscv64", memory_size: 32,
-        drive0: { provider: 7, capacity_sectors: 16 } });
-    let action = 12;
-    fake.exports.riscbox_next_action = () => { const current = action; action = 0; return current; };
-    fake.exports.riscbox_action_value = () => 0;
-    fake.exports.riscbox_action_endpoint = () => 7;
-    fake.exports.riscbox_action_generation = () => action === 0 ? 1 : 2;
-    fake.exports.riscbox_action_request_id = () => 4;
-    fake.exports.riscbox_action_reply_capacity = () => 512;
-    fake.exports.riscbox_action_sector_low = () => 5;
-    fake.exports.riscbox_action_sector_high = () => 1;
-    fake.exports.riscbox_block_complete = (...args) => {
-        completed.push([args.slice(0, 4), runtime.bytes(args[4], args[5])]);
-        return 0;
-    };
-    runtime.drainActions();
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.deepEqual(calls[0], ["read", 0x1_0000_0005n, 512]);
-    action = 13;
-    fake.exports.riscbox_action_generation = () => 2;
-    runtime.drainActions();
-    resolveRead(new Uint8Array(512));
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(completed.length, 0);
-    action = 12;
-    runtime.drainActions();
-    await new Promise((resolve) => setImmediate(resolve));
-    resolveRead(new Uint8Array(512).fill(0x5a));
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.equal(completed.length, 1);
-    assert.deepEqual(completed[0][0], [7, 2, 4, 0]);
-    assert.deepEqual(completed[0][1], new Uint8Array(512).fill(0x5a));
-    action = 14;
-    runtime.drainActions();
-    assert.deepEqual(calls.filter((call) => call[0] === "reset" || call[0] === "close"), [["reset"], ["close"]]);
-});
-
-test("host write errors complete with guest I/O status", async () => {
-    const fake = fakeModule();
-    const completions = [];
-    const errors = [];
-    const payload = new Uint8Array(fake.exports.memory.buffer, 32, 512);
-    payload.fill(0x6c);
-    const runtime = new Riscbox(fake.exports, {
-        blockProviders: new Map([[1, {
-            read() { return new Uint8Array(512); },
-            write(sector, bytes) {
-                assert.equal(sector, 9n);
-                assert.deepEqual(bytes, new Uint8Array(512).fill(0x6c));
-                throw new Error("storage failed");
-            },
-            reset() {}, close() {},
-        }]]),
-        onError: (error) => errors.push(error.message),
-    });
-    runtime.startResolved({ version: 1, machine: "riscv64", memory_size: 32,
-        drive0: { provider: 1, capacity_sectors: 16 } });
-    let action = 12;
-    fake.exports.riscbox_next_action = () => { const current = action; action = 0; return current; };
-    fake.exports.riscbox_action_value = () => 1;
-    fake.exports.riscbox_action_endpoint = () => 1;
-    fake.exports.riscbox_action_generation = () => 1;
-    fake.exports.riscbox_action_request_id = () => 2;
-    fake.exports.riscbox_action_reply_capacity = () => 512;
-    fake.exports.riscbox_action_sector_low = () => 9;
-    fake.exports.riscbox_action_sector_high = () => 0;
-    fake.exports.riscbox_action_data_address = () => 32;
-    fake.exports.riscbox_action_data_length = () => 512;
-    fake.exports.riscbox_block_complete = (...args) => { completions.push(args); return 0; };
-    runtime.drainActions();
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.deepEqual(completions, [[1, 1, 2, 1, 0, 0]]);
-    assert.deepEqual(errors, ["storage failed"]);
-});
 
 test("configuration URL resolves defaults and assets before the WASM call", async () => {
     const fake = fakeModule();
@@ -153,7 +64,7 @@ test("configuration URL resolves defaults and assets before the WASM call", asyn
     });
     await runtime.startFromUrl("https://host/vm/riscbox.cfg", 256, "quiet");
     assert.deepEqual(fetched, [["https://host/vm/riscbox.cfg", "no-store"]]);
-    const call = fake.calls.find((entry) => entry[0] === "start_resolved");
+    const call = fake.calls.find((entry) => entry[0] === "prepare_resolved");
     const config = JSON.parse(new TextDecoder().decode(runtime.bytes(call[1], call[2])));
     assert.equal(call[3], 256);
     assert.equal(config.bios, "https://host/vm/fw.bin");
@@ -161,31 +72,7 @@ test("configuration URL resolves defaults and assets before the WASM call", asyn
     assert.equal(config.cmdline, " quiet");
     assert.equal(config.uart_output, false);
     assert.equal(config.rtc_local_time, false);
-    assert.throws(() => runtime.startResolved({ version: 1 }), /machine must be string/);
-});
-
-test("resolved configuration can replace an HTTP manifest with a host provider", async () => {
-    const fake = fakeModule();
-    const config = await Riscbox.loadResolvedConfig(
-        "https://host/profile/riscbox.cfg", "",
-        async (_url, options) => {
-            assert.deepEqual(options, { cache: "no-store" });
-            return { status: 200, arrayBuffer: async () => Buffer.from(
-                '{version:1,machine:"riscv64",memory_size:256,bios:"fw.bin",' +
-                'drive0:{file:"drive-abcd1234/blk.txt"}}',
-            ) };
-        },
-    );
-    assert.equal(config.drive0.file, "https://host/profile/drive-abcd1234/blk.txt");
-    config.drive0 = { provider: 1, capacity_sectors: "1048576" };
-    const provider = { read() {}, write() {}, reset() {}, close() {} };
-    const runtime = new Riscbox(fake.exports, { blockProviders: new Map([[1, provider]]) });
-    runtime.startResolved(config, 512);
-    const call = fake.calls.find((entry) => entry[0] === "start_resolved");
-    const resolved = JSON.parse(new TextDecoder().decode(runtime.bytes(call[1], call[2])));
-    assert.deepEqual(resolved.drive0, { provider: 1, capacity_sectors: "1048576" });
-    assert.equal(resolved.bios, "https://host/profile/fw.bin");
-    assert.equal(call[3], 512);
+    await assert.rejects(runtime.startResolved({ version: 1 }), /machine must be string/);
 });
 
 test("adapter copies host input into WASM memory and releases it", () => {
@@ -498,21 +385,6 @@ test("host service starts HTTP work before the unused quantum budget resumes", a
     });
     await runtime.runQuantum();
     assert.equal(runs, 2);
-});
-
-test("vm_start compatibility call marshals current strings and scalar options", () => {
-    const fake = fakeModule();
-    const runtime = new Riscbox(fake.exports);
-    runtime.ccall(
-        "vm_start", null,
-        ["string", "number", "string", "number", "number", "number"],
-        ["https://host/vm.cfg", 256, "quiet", 640, 480, 1],
-    );
-    const call = fake.calls.find((entry) => entry[0] === "start");
-    assert.deepEqual(call.slice(3, 4), [256]);
-    assert.deepEqual(call.slice(-3), [640, 480, 1]);
-    assert.equal(new TextDecoder().decode(runtime.bytes(call[1], call[2])), "https://host/vm.cfg");
-    assert.equal(new TextDecoder().decode(runtime.bytes(call[4], call[5])), "quiet");
 });
 
 test("input events use stable scalar exports", () => {

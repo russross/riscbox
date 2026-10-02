@@ -1,12 +1,11 @@
-//! A synchronous 9P2000.L endpoint with explicit pending-load completions.
+//! A synchronous 9P2000.L endpoint over a resident in-memory namespace.
 
-use std::borrow::Cow;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::BTreeMap;
 use std::mem::take;
 
 use crate::ninep::{
-    AttributeUpdate, ByteRangeLock, ChangeSource, FileBody, FileTime, Filesystem, FilesystemError,
-    FilesystemIdentity, Inode, InodeId, InodeKind, LoadStart, LoadTicket, LockKind, TimeUpdate,
+    AttributeUpdate, ByteRangeLock, ChangeSource, FileTime, Filesystem, FilesystemError,
+    FilesystemIdentity, Inode, InodeId, InodeKind, LockKind, TimeUpdate,
 };
 
 #[path = "ninep_protocol/wire.rs"]
@@ -14,7 +13,6 @@ mod wire;
 use wire::{Attributes, Creation, Lock, Reader, Request, Writer};
 
 const MAX_MESSAGE_SIZE: usize = 64 * 1024;
-const MAX_PENDING: usize = 1024;
 const MAX_FIDS: usize = 65_536;
 const NOTAG: u16 = u16::MAX;
 const NOFID: u32 = u32::MAX;
@@ -32,38 +30,14 @@ const EPROTO: u32 = 71;
 const EOPNOTSUPP: u32 = 95;
 const ESTALE: u32 = 116;
 
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub struct RequestId(pub u64);
-
 /// These are host/transport errors that cannot safely be encoded as a reply.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProtocolError {
     Malformed,
     ReplyTooSmall,
-    DuplicateTag,
-    DuplicateRequestId,
     WrongFilesystem,
     Closed,
     Invariant,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum Outcome {
-    Reply(Vec<u8>),
-    Suppressed,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct Completion {
-    pub request: RequestId,
-    pub outcome: Outcome,
-}
-
-/// Earlier completions must be drained before publishing an immediate reply.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum Submission {
-    Immediate(Vec<u8>),
-    Pending(LoadStart),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -125,8 +99,8 @@ struct Fid {
     open: Option<OpenFlags>,
 }
 
-// Pending operations pin an inode rather than retaining the caller's fid number.
-// Write bytes are borrowed for resident work and owned only across a load.
+// File operations resolve their fid to a stable inode before changing data.
+// Write bytes are borrowed until the synchronous reply is constructed.
 enum IoOperation<'a> {
     Read {
         inode: InodeId,
@@ -137,7 +111,7 @@ enum IoOperation<'a> {
     Write {
         inode: InodeId,
         offset: u64,
-        data: Cow<'a, [u8]>,
+        data: &'a [u8],
         append: bool,
     },
     Attributes {
@@ -146,70 +120,12 @@ enum IoOperation<'a> {
     },
 }
 
-impl IoOperation<'_> {
-    const fn inode(&self) -> InodeId {
-        match self {
-            Self::Read { inode, .. }
-            | Self::Write { inode, .. }
-            | Self::Attributes { inode, .. } => *inode,
-        }
-    }
-    fn into_owned(self) -> IoOperation<'static> {
-        match self {
-            Self::Read {
-                inode,
-                offset,
-                count,
-                no_atime,
-            } => IoOperation::Read {
-                inode,
-                offset,
-                count,
-                no_atime,
-            },
-            Self::Write {
-                inode,
-                offset,
-                data,
-                append,
-            } => IoOperation::Write {
-                inode,
-                offset,
-                data: Cow::Owned(data.into_owned()),
-                append,
-            },
-            Self::Attributes { inode, update } => IoOperation::Attributes { inode, update },
-        }
-    }
-}
-
-struct PendingIo {
-    operation: IoOperation<'static>,
-    load: LoadTicket,
-}
-struct Pending {
-    request: RequestId,
-    kind: u8,
-    capacity: usize,
-    io: PendingIo,
-}
-struct QueuedCompletion {
-    tag: u16,
-    completion: Completion,
-}
-enum Execution {
-    Done,
-    Pending(PendingIo, LoadStart),
-}
-
 /// A session is bound to one namespace identity; its protocol state is independent.
 pub struct NinePSession {
     identity: FilesystemIdentity,
     generation: u64,
     session: u64,
     fids: BTreeMap<u32, Fid>,
-    pending: BTreeMap<u16, Pending>,
-    completions: VecDeque<QueuedCompletion>,
     msize: usize,
     negotiated: bool,
     closed: bool,
@@ -224,8 +140,6 @@ impl NinePSession {
             generation: filesystem.generation(),
             session: filesystem.allocate_session()?,
             fids: BTreeMap::new(),
-            pending: BTreeMap::new(),
-            completions: VecDeque::new(),
             msize: MAX_MESSAGE_SIZE,
             negotiated: false,
             closed: false,
@@ -243,9 +157,6 @@ impl NinePSession {
             FilesystemError::NoSpace => ENOSPC,
             FilesystemError::InvalidPath => EINVAL,
             FilesystemError::NameTooLong => 36,
-            FilesystemError::LoadFailed
-            | FilesystemError::StaleLoad
-            | FilesystemError::NeedsLoad => EIO,
         }
     }
 
@@ -270,29 +181,10 @@ impl NinePSession {
     fn sync_generation(&mut self, fs: &Filesystem) -> Result<(), ProtocolError> {
         self.check_identity(fs)?;
         if self.generation != fs.generation() {
-            for (tag, pending) in take(&mut self.pending) {
-                self.queue_completion(
-                    tag,
-                    pending.request,
-                    Outcome::Reply(Self::error(tag, ESTALE, pending.capacity)?),
-                );
-            }
             self.fids.clear();
             self.generation = fs.generation();
         }
         Ok(())
-    }
-
-    /// Takes a completion of an earlier request, in publication order.
-    pub fn next_completion(&mut self) -> Option<Completion> {
-        self.completions.pop_front().map(|queued| queued.completion)
-    }
-
-    fn queue_completion(&mut self, tag: u16, request: RequestId, outcome: Outcome) {
-        self.completions.push_back(QueuedCompletion {
-            tag,
-            completion: Completion { request, outcome },
-        });
     }
 
     fn release_fids(&mut self, fs: &mut Filesystem) -> Result<(), ProtocolError> {
@@ -304,31 +196,16 @@ impl NinePSession {
         Ok(())
     }
 
-    fn suppress(&mut self, fs: &mut Filesystem, tag: u16) -> Result<(), ProtocolError> {
-        if let Some(pending) = self.pending.remove(&tag) {
-            fs.release_fid(pending.io.operation.inode())
-                .map_err(|_| ProtocolError::Invariant)?;
-            self.queue_completion(tag, pending.request, Outcome::Suppressed);
-        }
-        Ok(())
-    }
-
     /// Retires device state without publishing to queues that the driver reset.
     /// # Errors
     /// Rejects a different filesystem or inconsistent retained references.
     pub fn reset(&mut self, fs: &mut Filesystem) -> Result<(), ProtocolError> {
         self.check_identity(fs)?;
         if self.generation == fs.generation() {
-            for (_, pending) in take(&mut self.pending) {
-                fs.release_fid(pending.io.operation.inode())
-                    .map_err(|_| ProtocolError::Invariant)?;
-            }
             self.release_fids(fs)?;
         } else {
-            self.pending.clear();
             self.fids.clear();
         }
-        self.completions.clear();
         self.generation = fs.generation();
         self.msize = MAX_MESSAGE_SIZE;
         self.negotiated = false;
@@ -350,17 +227,16 @@ impl NinePSession {
         Ok(())
     }
 
-    /// Validates and executes a request within this activation, or retains its I/O.
+    /// Validates and executes one request within this activation.
     /// # Errors
-    /// Reports invalid envelopes without tags, duplicate identities, wrong
+    /// Reports invalid envelopes without tags, wrong
     /// namespaces, closed endpoints, or a reply buffer too small for an error.
     pub fn submit(
         &mut self,
         fs: &mut Filesystem,
-        id: RequestId,
         bytes: &[u8],
         capacity: usize,
-    ) -> Result<Submission, ProtocolError> {
+    ) -> Result<Vec<u8>, ProtocolError> {
         self.sync_generation(fs)?;
         let mut header = Reader::new(bytes);
         let declared = usize::try_from(header.u32().map_err(|_| ProtocolError::Malformed)?)
@@ -372,16 +248,6 @@ impl NinePSession {
         } else {
             self.msize
         });
-        if self.pending.contains_key(&tag)
-            || self.completions.iter().any(|queued| queued.tag == tag)
-        {
-            return Err(ProtocolError::DuplicateTag);
-        }
-        if self.pending.values().any(|p| p.request == id)
-            || self.completions.iter().any(|c| c.completion.request == id)
-        {
-            return Err(ProtocolError::DuplicateRequestId);
-        }
         if declared != bytes.len()
             || declared
                 > if kind == 100 {
@@ -393,7 +259,7 @@ impl NinePSession {
             if kind == 108 {
                 return Err(ProtocolError::Malformed);
             }
-            return Ok(Submission::Immediate(Self::error(tag, EPROTO, capacity)?));
+            return Self::error(tag, EPROTO, capacity);
         }
         let request = match Request::parse(kind, &bytes[7..]) {
             Ok(request) => request,
@@ -401,86 +267,31 @@ impl NinePSession {
                 if kind == 108 {
                     return Err(ProtocolError::Malformed);
                 }
-                return Ok(Submission::Immediate(Self::error(tag, errno, capacity)?));
+                return Self::error(tag, errno, capacity);
             }
         };
         if (tag == NOTAG && kind != 100) || (!self.negotiated && kind != 100 && kind != 108) {
             if kind == 108 {
                 return Err(ProtocolError::Malformed);
             }
-            return Ok(Submission::Immediate(Self::error(tag, EPROTO, capacity)?));
+            return Self::error(tag, EPROTO, capacity);
         }
         if capacity < request.minimum_reply() {
-            return Ok(Submission::Immediate(Self::error(tag, ENOSPC, capacity)?));
+            return Self::error(tag, ENOSPC, capacity);
         }
         let mut reply = Writer::new(kind.wrapping_add(1), tag, capacity)
             .map_err(|_| ProtocolError::ReplyTooSmall)?;
-        if let Request::Flush { old_tag } = request {
-            self.suppress(fs, old_tag)?;
-            return Ok(Submission::Immediate(reply.finish()));
+        if let Request::Flush = request {
+            return Ok(reply.finish());
         }
         let source = fs.mutation_source();
         fs.set_mutation_source(ChangeSource::Guest);
         let result = self.execute(fs, request, tag, capacity, &mut reply);
         fs.set_mutation_source(source);
         match result {
-            Ok(Execution::Done) => Ok(Submission::Immediate(reply.finish())),
-            Ok(Execution::Pending(io, load)) => {
-                self.pending.insert(
-                    tag,
-                    Pending {
-                        request: id,
-                        kind,
-                        capacity,
-                        io,
-                    },
-                );
-                Ok(Submission::Pending(load))
-            }
-            Err(errno) => Ok(Submission::Immediate(Self::error(tag, errno, capacity)?)),
+            Ok(()) => Ok(reply.finish()),
+            Err(errno) => Self::error(tag, errno, capacity),
         }
-    }
-
-    // Completion polling occurs after a loader result or host mutation, never
-    // from inside a JavaScript callback while the Rust namespace is borrowed.
-    /// # Errors
-    /// Rejects a different namespace, closed session, or broken inode lifetime.
-    pub fn poll(&mut self, fs: &mut Filesystem) -> Result<(), ProtocolError> {
-        self.sync_generation(fs)?;
-        let ready: Vec<_> = self
-            .pending
-            .iter()
-            .filter_map(
-                |(tag, pending)| match fs.file_body(pending.io.operation.inode()) {
-                    Ok(FileBody::Loading { load, .. }) if *load == pending.io.load.id => None,
-                    _ => Some(*tag),
-                },
-            )
-            .collect();
-        for tag in ready {
-            let pending = self.pending.remove(&tag).ok_or(ProtocolError::Invariant)?;
-            let source = fs.mutation_source();
-            fs.set_mutation_source(ChangeSource::Guest);
-            let mut reply = Writer::new(pending.kind + 1, tag, pending.capacity)
-                .map_err(|_| ProtocolError::ReplyTooSmall)?;
-            let result = if matches!(
-                fs.file_body(pending.io.operation.inode()),
-                Ok(FileBody::Resident(_))
-            ) {
-                Self::finish_io(fs, &pending.io.operation, &mut reply)
-            } else {
-                Err(EIO)
-            };
-            fs.set_mutation_source(source);
-            fs.release_fid(pending.io.operation.inode())
-                .map_err(|_| ProtocolError::Invariant)?;
-            let bytes = match result {
-                Ok(()) => reply.finish(),
-                Err(errno) => Self::error(tag, errno, pending.capacity)?,
-            };
-            self.queue_completion(tag, pending.request, Outcome::Reply(bytes));
-        }
-        Ok(())
     }
 
     fn fid(&self, number: u32) -> Result<Fid, u32> {
@@ -527,7 +338,7 @@ impl NinePSession {
         tag: u16,
         capacity: usize,
         reply: &mut Writer,
-    ) -> Result<Execution, u32> {
+    ) -> Result<(), u32> {
         match request {
             Request::Version { size, version } => self.version(fs, tag, size, version, reply)?,
             Request::Attach { fid, afid, uid } => {
@@ -559,9 +370,9 @@ impl NinePSession {
                 if !flags.readable() {
                     return Err(EBADF);
                 }
-                return self.start_io(
+                return Self::finish_io(
                     fs,
-                    IoOperation::Read {
+                    &IoOperation::Read {
                         inode: fid.inode,
                         offset,
                         count: usize::try_from(count)
@@ -569,7 +380,6 @@ impl NinePSession {
                             .min(capacity - 11),
                         no_atime: flags.no_atime(),
                     },
-                    capacity,
                     reply,
                 );
             }
@@ -578,27 +388,21 @@ impl NinePSession {
                 if !flags.writable() {
                     return Err(EBADF);
                 }
-                return self.start_io(
+                return Self::finish_io(
                     fs,
-                    IoOperation::Write {
+                    &IoOperation::Write {
                         inode: fid.inode,
                         offset,
-                        data: Cow::Borrowed(data),
+                        data,
                         append: flags.append(),
                     },
-                    capacity,
                     reply,
                 );
             }
             Request::Setattr { fid, attributes } => {
                 let inode = self.fid(fid)?.inode;
                 let update = Self::attributes(attributes)?;
-                return self.start_io(
-                    fs,
-                    IoOperation::Attributes { inode, update },
-                    capacity,
-                    reply,
-                );
+                return Self::finish_io(fs, &IoOperation::Attributes { inode, update }, reply);
             }
             Request::Clunk { fid } => {
                 let inode = self.fid(fid)?.inode;
@@ -607,7 +411,7 @@ impl NinePSession {
             }
             other => self.filesystem_operation(fs, &other, reply)?,
         }
-        Ok(Execution::Done)
+        Ok(())
     }
 
     fn version(
@@ -633,10 +437,6 @@ impl NinePSession {
         } else {
             "unknown"
         })?;
-        let tags: Vec<_> = self.pending.keys().copied().collect();
-        for tag in tags {
-            self.suppress(fs, tag).map_err(|_| EIO)?;
-        }
         self.release_fids(fs).map_err(|_| EIO)?;
         self.msize = size;
         self.negotiated = version == "9P2000.L";
@@ -817,75 +617,6 @@ impl NinePSession {
             mtime: time(0x20, 0x100, raw.mtime, raw.mtime_ns)?,
             change_ctime: raw.mask & 0x40 != 0,
         })
-    }
-
-    fn requires_load(fs: &Filesystem, operation: &IoOperation<'_>) -> Result<bool, u32> {
-        let inode = operation.inode();
-        match operation {
-            IoOperation::Read { offset, count, .. } => {
-                let body = fs.file_body(inode).map_err(Self::errno)?;
-                if *count == 0 || *offset >= u64::try_from(body.len()).expect("bounded length") {
-                    return Ok(false);
-                }
-            }
-            IoOperation::Write {
-                offset,
-                data,
-                append,
-                ..
-            } => {
-                fs.validate_write(inode, *offset, data.len(), *append)
-                    .map_err(Self::errno)?;
-                if data.is_empty() {
-                    return Ok(false);
-                }
-            }
-            IoOperation::Attributes { update, .. } => {
-                let Some(size) = update.size else {
-                    return Ok(false);
-                };
-                let size = fs.validate_resize(inode, size).map_err(Self::errno)?;
-                if size == 0 || size == fs.file_body(inode).map_err(Self::errno)?.len() {
-                    return Ok(false);
-                }
-            }
-        }
-        Ok(matches!(
-            fs.file_body(inode).map_err(Self::errno)?,
-            FileBody::Unloaded { .. } | FileBody::Loading { .. }
-        ))
-    }
-
-    fn start_io(
-        &self,
-        fs: &mut Filesystem,
-        operation: IoOperation<'_>,
-        capacity: usize,
-        reply: &mut Writer,
-    ) -> Result<Execution, u32> {
-        if !Self::requires_load(fs, &operation)? {
-            Self::finish_io(fs, &operation, reply)?;
-            return Ok(Execution::Done);
-        }
-        if capacity < 11 || self.pending.len() + self.completions.len() >= MAX_PENDING {
-            return Err(ENOSPC);
-        }
-        let inode = operation.inode();
-        fs.retain_fid(inode).map_err(Self::errno)?;
-        let load = match fs.begin_load(inode) {
-            Ok(load) => load,
-            Err(error) => {
-                fs.release_fid(inode).map_err(Self::errno)?;
-                return Err(Self::errno(error));
-            }
-        };
-        Ok(Execution::Pending(
-            PendingIo {
-                operation: operation.into_owned(),
-                load: load.ticket(),
-            },
-            load,
-        ))
     }
 
     fn finish_io(

@@ -19,7 +19,7 @@ The supported machine is deliberately narrow:
     SiFive test finisher, simple framebuffer, and VirtIO MMIO block, 9p,
     network, entropy, keyboard, and tablet devices.
 *   Browser delivery through raw WebAssembly, a handwritten JavaScript adapter,
-    HTTP-backed disks, and Rust 9P2000.L filesystems with host source plugins.
+    HTTP-backed disks, and resident Rust 9P2000.L filesystems shared with the host.
 
 The optional TypeScript network adapter carries one Ethernet frame per binary
 WebSocket message to a host-selected origin endpoint. Browser network devices
@@ -54,21 +54,17 @@ Repository map and terminology
     archive excludes guest images and image build scripts.
 *   `js/riscbox.js` is the dependency-free browser adapter for the raw ABI.
 *   `js/network/` is the typed WebSocket Ethernet frontend and protocol.
-*   `js/block/` defines the host block provider interface and supplies
-    TypeScript split-HTTP and host-array providers. The browser adapter
-    dispatches their requests through the raw WASM ABI; Rust retains VirtIO
-    descriptor validation and device ordering.
-*   `js/p9/` is the promise-based TypeScript facade for Rust filesystem handles
-    and optional on-demand seed plugins. Generated JavaScript and declarations
-    go under `build/js/p9/`.
+*   `js/storage.ts` supplies synchronous filesystem and copied disk facades.
+    `tools/build_adapter.mjs` combines it with `js/riscbox.js` into the single
+    deployable `build/js/riscbox.js` and declaration file. `src/block_storage.rs`
+    unifies Rust-owned array and split HTTP stores; `src/browser_storage.rs`
+    owns HTTP requests, bounded clean cache, and sparse sector overlays.
 *   `src/ninep.rs` and `src/ninep/` own the standalone Rust namespace;
     `src/ninep_protocol.rs` and `src/ninep_protocol/` own its 9P2000.L session.
-    `src/ninep_backend.rs` connects registered Rust trees to VirtIO and the
-    browser runtime. `src/browser_abi/ninep.rs` exposes raw filesystem handles,
-    copied host-operation packets, source tickets, and change events; its ABI
-    guide is `src/browser_abi/ninep/README.md`. The promise facade uses this ABI; Rust owns production protocol semantics. The
-    protocol contract is in
-    `src/ninep_protocol/README.md`; migration coordination is in `DEV.md`.
+    `src/ninep_backend.rs` connects VM-owned trees to VirtIO. The raw copied
+    storage APIs live in `src/browser_abi/ninep.rs` and `block.rs`; their guide
+    is `src/browser_abi/ninep/README.md`. The protocol contract is in
+    `src/ninep_protocol/README.md`; active coordination belongs in `DEV.md`.
 *   `images/` contains reproducible Makefile-driven image definitions and deployment tooling.
     Generated downloads, images, boot assets, and distributions are not source.
 *   `kernel/` owns the canonical custom Linux kernel consumed by image builds.
@@ -86,8 +82,8 @@ Repository map and terminology
 In this repository, "native" means a Rust test or image-preparation execution
 environment. It does not imply a supported native emulator. "Browser runtime"
 means the Rust machine, raw WASM ABI, and JavaScript adapter together. A "9p
-server" implements protocol sessions; a "seed plugin" only supplies an initial
-namespace and lazy regular-file bodies to the provided in-memory server.
+server" implements protocol sessions over a wholly resident namespace.
+Applications populate their named shares through the synchronous host API.
 
 Current contract
 ----------------
@@ -125,7 +121,7 @@ ISO9660 tree and loads the media's kernel and initramfs. Alpine standard
 3.24.2 riscv64 boots through login and shutdown in the actual browser runtime.
 The custom Linux Image includes its EFI stub, compressed initramfs loading,
 FAT/VFAT, ISO9660 with Rock Ridge/Joliet, loop devices, and SquashFS with
-zlib/XZ/Zstandard. ISO media uses existing split HTTP or host block providers.
+zlib/XZ/Zstandard. ISO media uses existing split HTTP or VM-owned array disks.
 Decompressed output is bounded by the boot layout. Image
 deployments gzip firmware and the next-stage payload while naming them from
 their uncompressed hashes. HTTP
@@ -137,21 +133,23 @@ host object. Rust validates the resolved configuration and still constructs
 the machine. The legacy `start` path and native Rust parser remain available.
 HTTP block stores start with a 16 MiB in-memory cache limit that grows to
 cover a single request when needed.
-The parallel TypeScript HTTP provider reads the same split-image format and
-retains its own bounded clean cache and session CoW clusters. The original
-Rust HTTP store remains supported while performance and memory behavior are
-compared. The TypeScript array provider writes through to the caller's exact
-whole-sector `Uint8Array` view and retains it across VM resets. Host image
-export requires guest filesystem synchronization or orderly shutdown.
-The xv6 profile browser page resolves its deployed config, opens the HTTP
-manifest through the TypeScript provider, and attaches it as a host drive.
-Resolved `driveN` entries may attach a host block provider by numeric ID and
-512-byte sector capacity. HTTP and host drives occupy guest slots in the
-configured order. The host provider owns its bytes and handles asynchronous
-read/write requests; Rust validates ranges and reply lengths and returns
-provider failures as guest I/O errors. Generations retire late replies after
-device or VM reset. Provider `reset` retains data, while VM destroy calls
-`close`. The Rust HTTP cache and CoW path remain available in parallel.
+Rust owns every disk and share in the VM. `prepareResolved` and `prepareFromUrl`
+load and construct the platform without booting; startup helpers prepare then
+boot. Resolved drives select HTTP manifests, copied host `Uint8Array` bytes, or
+zeroed `capacity_sectors` arrays. HTTP and array disks occupy configured order.
+Array writes update Rust bytes directly. HTTP writes use 4 KiB overlays with
+per-sector dirty masks and never fetch unwritten sectors. Reads are synchronous
+when resident and request/completion based when HTTP chunks are missing. The
+optional `fetchBlock` hook replaces immutable chunk transport only; Rust retains
+cache, validation, deduplication, errors, ordering, and lifetime ownership.
+
+Host disk access requires poweroff, including preboot and forced halt. Host reads
+return copied bytes or promises for HTTP misses; writes are synchronous. Boot
+rejects pending host reads. Reboot retains bytes and CoW. Powered-off
+`discardChanges()` removes HTTP overlays while retaining cache; `coldReset()`
+retires reads/fetches, clears guest RAM, and reloads boot images while preserving
+stores. Destroy frees all storage and invalidates every facade; a runtime may
+prepare another VM. Export consistency requires orderly guest shutdown.
 
 The host can deliver soft shutdown and reboot input events, force an immediate
 halt or reset, boot a halted machine, and destroy a halted machine. The prepared
@@ -160,11 +158,11 @@ orderly userspace actions. Guest poweroff halts without teardown; guest reboot
 uses the QEMU `virt` syscon reset value. In-place reset restarts the C CPU,
 reloads boot images, and clears platform and VirtIO interface state while
 retaining host backends, 9p servers, HTTP clean cache and CoW data, and guest
-RAM mappings. Pending 9p work is retired by generation; pending HTTP requests
+RAM mappings. Resident 9p replies complete synchronously; pending HTTP requests
 are retired without reusing request IDs. Console and framebuffer host callbacks
 receive reset notifications. Destroy releases the machine and 9p sessions.
 Destroy also cancels config/asset startup, retires its pending HTTP response,
-and permits reuse of the runtime and independent filesystem handles. Browser
+and permits reuse of the runtime after invalidating its storage handles. Browser
 HTTP completions and errors are guarded by the VM lifecycle generation.
 
 The Risclet demo loads the custom Linux kernel directly through OpenSBI. Its
@@ -173,11 +171,13 @@ the writable overlay layers for `/var` and `/home`. The device tree model
 identifies the platform as `riscbox`; QEMU names remain in functional board
 bindings and build targets. Linux uses UART early and the VirtIO console for
 login.
-The Risclet host creates all example namespace handles in one runtime before
-boot. Deployed manifests declare file sizes, and HTTP bodies load only on reads.
-Editor operations and notifications use promises and numeric origin filtering.
-Example switching serializes VM teardown and binding and guards late UI reads.
-The editor buffers changes until blur, file/example selection, VM interaction,
+Risclet uses one VM and one share across examples. It downloads complete file
+bodies before boot and caches original bytes in the application. Switching or
+Reset halts, cold-resets, discards the HTTP overlay, clears and repopulates the
+share, and boots. Reboot requests an orderly guest reboot retaining edits and
+storage. Filesystem operations and subscriptions are synchronous with numeric
+origin filtering; notifications run after Rust borrows end.
+The editor buffers changes until blur, file selection, VM interaction,
 or a thirty-second deadline from the first unflushed edit. Writes acknowledge
 only their submitted revision; failures retain dirty text and retry. Conflicting
 filesystem changes require a discard decision before replacing dirty text.
@@ -200,11 +200,10 @@ conservative of the P99-skewed rate and the rate implied by that previous
 quantum's observed cycle throughput. Timing diagnostics report interval
 Mcycles/s mean and standard deviation for runnable quanta.
 Timer writes exit the C loop so Rust can size the next CPU run to the earliest ACLINT,
-supervisor, or RTC deadline. C also exits after MMIO requests that queue external
-9p or HTTP block work; Rust resident 9p requests finish within the notifying CPU
-run. Rust releases the exclusive CPU-run borrow before JavaScript
-dispatches actions. JavaScript resumes the same quantum after resident 9p
-replies and wakes a WFI sleeping guest on later completions. JavaScript measures
+supervisor, or RTC deadline. C also exits after MMIO requests that queue HTTP block work; resident 9p requests finish within
+the notifying CPU run. Rust releases the exclusive CPU-run borrow before JavaScript
+dispatches actions. JavaScript resumes the same quantum after HTTP dispatch and wakes a WFI
+sleeping guest on later completions. JavaScript measures
 the complete quantum with a monotonic clock and supplies its elapsed time to
 Rust for calibration. WFI sleeping guests wake at the next timer deadline or
 a 100-millisecond fallback; asynchronous completions can replace that wakeup.
@@ -230,7 +229,7 @@ Timing and execution lexicon
 *   An **execution quantum** is one logical bounded unit of guest work. It can
     contain several synchronous JS-to-WASM activations and several **CPU runs**
     (individual C interpreter calls). A **host-service boundary** returns an
-    active quantum to JavaScript for queued device actions and source requests.
+    active quantum to JavaScript for queued device actions and HTTP requests.
 *   The **quantum target duration** is the configured nominal host-time interval
     plus any carried guest-clock lead; it determines the **quantum cycle budget**.
     A **CPU-run cycle limit** is
@@ -249,25 +248,14 @@ Timing and execution lexicon
     the last presented guest time ahead of host epoch time; the next quantum
     carries that lead into its guest-time window.
 
-VirtIO 9p supports concurrent pending requests and resident synchronous replies.
-Rust validates descriptors and message envelopes; its registered filesystem
-backend owns protocol semantics and drains earlier retirements before `Rflush`.
-Each configured `{ server, tag }` endpoint gets an independent session. Raw
-filesystem handles exist before boot and retain namespace state across VM
-lifetimes. Bind keys before startup; a VM lifetime guard rejects a second live
-VM over one handle while allowing several endpoints in the attached VM. Halt,
-shutdown, and reset retain the guard; destroy releases it. Unregistered keys reject VM startup. Host reads pin their inode
-through asynchronous loading, independent of rename, unlink, and path reuse.
-Source and host-operation completions run between CPU activations and poll
-guest sessions after releasing namespace borrows. Namespace reset reports
-`ESTALE` for pending host reads; obsolete source completions are ignored.
-The TypeScript facade supplies promises, copied packets, source dispatch, and
-change subscriptions; Rust owns inode state, sessions, locking, and replies.
-Source polling is separate from the generic host-action queue. The adapter
-polls it after host calls and every CPU boundary, then wakes the guest after
-completion. Filesystem handles belong to their runtime's WASM instance.
-Do not restore the removed `file`, `socket`, or `js9p` configuration
-forms.
+VirtIO 9p completes resident requests synchronously within the CPU run. Rust
+validates descriptors and envelopes; protocol sessions own fids and locks.
+Preparation creates one tree per configured server name and an independent
+session per tag. Host access works before boot, while running, and after halt.
+Whole-tree `clear()` requires poweroff. Reset closes protocol state and retains
+bytes; destroy releases every tree. The adapter uses copied packets and change
+events, with no source loader, independent creation/binding, or promise-based
+filesystem interface. Do not restore removed `file`, `socket`, or `js9p` forms.
 
 Architecture rules
 ------------------
@@ -335,9 +323,9 @@ Validation
     full-guest tests.
 *   `make test-images` rebuilds Risclet, Alpine, and xv6 profile distributions,
     runs native Alpine acceptance, and exercises the deployed Risclet UI and
-    guest in Chrome. It covers host/editor/guest changes, lazy HTTP failures,
-    notifications, reboot/shutdown, namespace reset with VM remount, and switching
-    during asynchronous reads. Browser tests use temporary profiles and normal
+    guest in Chrome. It covers synchronous host/editor/guest changes, application
+    download failure/retry, notifications, retained reboot, clean reset, shutdown,
+    and switching during example downloads. Browser tests use temporary profiles and normal
     event-loop timing; they use headed Chrome when a display is available.
 *   `make wasm` builds the deployed Rust WebAssembly artifact.
 *   `RISCBOX_ALPINE_ISO=/path/to/alpine-standard-riscv64.iso cargo test --release

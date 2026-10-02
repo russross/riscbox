@@ -3,7 +3,7 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use riscbox::machine::{BootImages, Machine, MachineConfig};
-use riscbox::ninep::{FileRead, Filesystem, Limits, SourceId};
+use riscbox::ninep::{Filesystem, Limits};
 use riscbox::ninep_backend::{RustFilesystem, RustNineP};
 use riscbox::virtio_devices::{BlockBackend, DeviceError};
 
@@ -142,8 +142,8 @@ fn alpine_reaches_login_and_shuts_down() {
     let mut filesystem = Filesystem::new(Limits::default(), 100);
     filesystem.write_file("host", b"seeded").expect("host file");
     filesystem
-        .add_lazy_file("lazy", 5, SourceId(7))
-        .expect("lazy file");
+        .write_file("resident", b"ready")
+        .expect("resident file");
     let share = RustFilesystem::new(filesystem);
     machine
         .add_ninep_device(
@@ -168,14 +168,6 @@ fn alpine_reaches_login_and_shuts_down() {
         machine.present_guest_clocks(ticks, ticks * 100);
         for _ in 0..15 {
             let _ = machine.run_cpu(200_000);
-            // Source completion runs between CPU activations, just as browser
-            // promises resume only after WASM releases its exclusive run borrow.
-            while let Some(ticket) = share.next_load() {
-                share
-                    .with_filesystem(|fs| fs.complete_load(ticket, b"async".to_vec()))
-                    .expect("source completion");
-                machine.poll_ninep().expect("9p completion drain");
-            }
         }
         let output = machine.take_console_output();
         trace_guest_output(&output);
@@ -196,7 +188,7 @@ fn alpine_reaches_login_and_shuts_down() {
             machine
                 .virtio_console_receive(console, concat!(
                     "mkdir -p /mnt/share; mount -t 9p -o trans=virtio,version=9p2000.L,access=client shared /mnt/share",
-                    " && [ \"$(cat /mnt/share/host)\" = seeded ] && [ \"$(cat /mnt/share/lazy)\" = async ]",
+                    " && [ \"$(cat /mnt/share/host)\" = seeded ] && [ \"$(cat /mnt/share/resident)\" = ready ]",
                     " && printf written > /mnt/share/guest && ln /mnt/share/guest /mnt/share/link",
                     " && mv /mnt/share/link /mnt/share/renamed && chmod 640 /mnt/share/guest",
                     " && mkdir /mnt/share/dir && ln -s guest /mnt/share/symlink",
@@ -217,7 +209,7 @@ fn alpine_reaches_login_and_shuts_down() {
                 share
                     .with_filesystem(|fs| fs.read_file("guest"))
                     .expect("guest file"),
-                FileRead::Resident(b"written".to_vec())
+                b"written".to_vec()
             );
             return;
         }

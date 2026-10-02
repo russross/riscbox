@@ -1,6 +1,6 @@
 //! Dependency-free parsing of Riscbox configuration files.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 
@@ -351,8 +351,7 @@ pub enum DriveConfig {
         file: String,
         device: Option<String>,
     },
-    Host {
-        provider: u32,
+    Array {
         capacity_sectors: u64,
     },
 }
@@ -455,20 +454,9 @@ impl VmConfig {
         }
         if self.drives.iter().any(|drive| match drive {
             DriveConfig::Http { file, .. } => file.is_empty(),
-            DriveConfig::Host {
-                provider,
-                capacity_sectors,
-            } => *provider == 0 || *capacity_sectors == 0,
+            DriveConfig::Array { capacity_sectors } => *capacity_sectors == 0,
         }) {
             return Err(ConfigError("invalid resolved drive".into()));
-        }
-        let mut providers = BTreeSet::new();
-        for drive in &self.drives {
-            if let DriveConfig::Host { provider, .. } = drive
-                && !providers.insert(*provider)
-            {
-                return Err(ConfigError("block provider attached twice".into()));
-            }
         }
         if self.display.as_ref().is_some_and(|display| {
             display.device != "simplefb" || display.width <= 0 || display.height <= 0
@@ -516,13 +504,11 @@ impl VmConfig {
                 break;
             };
             let entry = require_object(value, &name)?;
-            drives.push(if let Some(provider) = entry.get("provider") {
-                let id = provider
-                    .as_integer()
-                    .ok_or_else(|| ConfigError(format!("{name} provider must be an integer")))?;
-                let provider = u32::try_from(id)
-                    .map_err(|_| ConfigError(format!("{name} provider must be positive")))?;
-                if provider == 0 || entry.contains_key("file") {
+            if entry.contains_key("provider") {
+                return Err(ConfigError(format!("{name} provider API was removed")));
+            }
+            drives.push(if entry.contains_key("capacity_sectors") {
+                if entry.contains_key("file") {
                     return Err(ConfigError(format!("{name} must select one source")));
                 }
                 let capacity_sectors = optional_address(entry, "capacity_sectors")?
@@ -532,10 +518,7 @@ impl VmConfig {
                         "{name} capacity_sectors must be positive"
                     )));
                 }
-                DriveConfig::Host {
-                    provider,
-                    capacity_sectors,
-                }
+                DriveConfig::Array { capacity_sectors }
             } else {
                 DriveConfig::Http {
                     file: required_string(entry, "file")?.to_owned(),

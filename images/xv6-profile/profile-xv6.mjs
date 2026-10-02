@@ -99,7 +99,7 @@ class LocalXMLHttpRequest {
 }
 
 async function runRiscbox() {
-    const adapter = fileURLToPath(new URL("../../js/riscbox.js", import.meta.url));
+    const adapter = fileURLToPath(new URL("../../build/js/riscbox.js", import.meta.url));
     const { Riscbox } = require(adapter);
     const wasm = await readFile(runtimeArgument);
     const runtime = await Riscbox.instantiate(wasm, {
@@ -108,7 +108,7 @@ async function runRiscbox() {
         consoleWrite,
         onError: (error) => finish(1, String(error)),
     });
-    if (runtime.start(configUrl, 256) !== 0) finish(1, "Riscbox rejected the configuration");
+    await runtime.startFromUrl(configUrl, 256);
 }
 
 function runTinyemu() {

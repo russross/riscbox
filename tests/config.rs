@@ -137,6 +137,28 @@ fn resolves_assets_relative_to_the_configuration() {
 }
 
 #[test]
+fn array_disk_capacity_preserves_full_width_and_rejects_ambiguous_sources() {
+    let source = "{version:1,machine:\"riscv64\",memory_size:128,drive0:{capacity_sectors:\"0x100000001\"},drive1:{file:\"disk/blk.txt\"}}";
+    let config = VmConfig::parse(source).unwrap();
+    assert_eq!(
+        config.drives[0],
+        DriveConfig::Array {
+            capacity_sectors: 0x1_0000_0001
+        }
+    );
+    assert!(matches!(config.drives[1], DriveConfig::Http { .. }));
+    for entry in [
+        "{capacity_sectors:0}",
+        "{capacity_sectors:-1}",
+        "{capacity_sectors:1,file:\"disk\"}",
+        "{provider:1,capacity_sectors:1}",
+    ] {
+        let source = format!("{{version:1,machine:\"riscv64\",memory_size:128,drive0:{entry}}}");
+        assert!(VmConfig::parse(&source).is_err(), "accepted {entry}");
+    }
+}
+
+#[test]
 fn resolved_config_requires_explicit_defaults_and_validates_devices() {
     let source = r#"{"version":1,"machine":"riscv64","memory_size":128,
         "console":"virtio","uart_output":false,"rtc_local_time":false,
@@ -150,33 +172,4 @@ fn resolved_config_requires_explicit_defaults_and_validates_devices() {
     );
     assert!(VmConfig::from_resolved(&source.replace("riscv64", "other")).is_err());
     assert!(VmConfig::from_resolved(&source.replace("https://host/disk/blk.txt", "")).is_err());
-}
-
-#[test]
-fn resolved_host_drives_keep_order_and_validate_capacity() {
-    let source = r#"{"version":1,"machine":"riscv64","memory_size":128,
-        "console":"virtio","uart_output":false,"rtc_local_time":false,"cmdline":"",
-        "drive0":{"provider":7,"capacity_sectors":"4294967296"},
-        "drive1":{"file":"https://host/disk/blk.txt"}}"#;
-    let config = VmConfig::from_resolved(source).expect("mixed drives");
-    assert_eq!(
-        config.drives[0],
-        DriveConfig::Host {
-            provider: 7,
-            capacity_sectors: 4_294_967_296
-        }
-    );
-    assert!(matches!(config.drives[1], DriveConfig::Http { .. }));
-    for bad in [
-        source.replace("\"4294967296\"", "\"0\""),
-        source.replace("\"4294967296\"", "\"nope\""),
-        source.replace("\"provider\":7", "\"provider\":0"),
-        source.replace("\"provider\":7", "\"provider\":7,\"file\":\"x\""),
-        source.replace(
-            "\"drive1\":{\"file\":\"https://host/disk/blk.txt\"}",
-            "\"drive1\":{\"provider\":7,\"capacity_sectors\":\"8\"}",
-        ),
-    ] {
-        assert!(VmConfig::from_resolved(&bad).is_err(), "accepted {bad}");
-    }
 }

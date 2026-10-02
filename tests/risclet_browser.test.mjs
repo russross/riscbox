@@ -24,17 +24,19 @@ test("Risclet shares Rust files with its host UI across image and VM lifetimes",
         let step = "initialize";
         let app;
         try {
-            await wait(() => frame.contentWindow.testRuntime && frame.contentDocument.getElementById("status")?.textContent.startsWith("Ready"), "UI ready");
+            await wait(() => frame.contentWindow.testRuntime && frame.contentDocument.getElementById("status")?.textContent.includes("Example file inputs/test.input: HTTP 403"), "UI ready");
             app = frame.contentWindow;
             const doc = app.document;
             const runtime = app.testRuntime;
+            doc.getElementById("vm-reset-button").click();
+            await wait(() => doc.getElementById("status").textContent.startsWith("Running") && doc.querySelector('.selected[data-path="reduction_steps.s"]'), "download retry and boot");
             const encoder = new app.TextEncoder();
             const decoder = new TextDecoder();
             const services = [...runtime.filesystems.values()];
-            check(services.length === 2, "both namespaces exist before boot");
+            check(services.length === 1, "one VM-owned namespace");
             let workspace;
             for (const filesystem of services) if ((await filesystem.listFiles()).includes("reduction_steps.s")) workspace = filesystem;
-            check(workspace !== undefined && !runtime.started, "preboot host access");
+            check(workspace !== undefined && runtime.started, "live host access");
             const original = await workspace.readFile("reduction_steps.s");
             check(original.length > 0, "initial HTTP source");
             const events = [];
@@ -60,7 +62,7 @@ test("Risclet shares Rust files with its host UI across image and VM lifetimes",
             step = "failed editor flush";
             const writeFile = workspace.writeFile.bind(workspace);
             let rejectEditorWrite = true;
-            workspace.writeFile = async (path, bytes, origin) => {
+            workspace.writeFile = (path, bytes, origin) => {
                 if (origin === 1n && rejectEditorWrite) throw new Error("controlled editor write failure");
                 return writeFile(path, bytes, origin);
             };
@@ -101,6 +103,7 @@ test("Risclet shares Rust files with its host UI across image and VM lifetimes",
             await workspace.writeFile("reduction_steps.s", original);
 
             step = "bounded editor deadline";
+            await runtime.halt();
             await wait(() => content.textContent.includes(".global"), "original editor restored");
             content.focus();
             doc.execCommand("selectAll");
@@ -108,11 +111,12 @@ test("Risclet shares Rust files with its host UI across image and VM lifetimes",
             await delay(15_000);
             doc.execCommand("insertText", false, " later edit");
             await delay(16_000);
-            check(decoder.decode(await workspace.readFile("reduction_steps.s")).includes("later edit"), "later edits do not postpone the first deadline");
+            check(decoder.decode(await workspace.readFile("reduction_steps.s")).includes("later edit"), "later edits do not postpone the first deadline: " + decoder.decode(workspace.readFile("reduction_steps.s")));
             check(!decoder.decode(await workspace.readFile("reduction_steps.s")).includes(".global"), "deadline flushed edited content");
             doc.getElementById("instructions-tab-button").focus();
             await workspace.writeFile("reduction_steps.s", original);
 
+            await runtime.boot();
             step = "instruction image dependency";
             const originalDoc = await workspace.readFile("doc/doc.md");
             await workspace.writeFile("doc/picture.svg", '<svg xmlns="http://www.w3.org/2000/svg"><text>first</text></svg>');
@@ -124,57 +128,8 @@ test("Risclet shares Rust files with its host UI across image and VM lifetimes",
             await workspace.writeFile("doc/doc.md", originalDoc);
             await workspace.remove("doc/picture.svg");
 
-            step = "edit during pending reload";
-            const readFile = workspace.readFile.bind(workspace);
-            let releaseRead;
-            let delayRead = true;
-            workspace.readFile = async path => {
-                const bytes = await readFile(path);
-                if (path === "reduction_steps.s" && delayRead) {
-                    delayRead = false;
-                    await new Promise(resolve => { releaseRead = resolve; });
-                }
-                return bytes;
-            };
-            await workspace.writeFile("reduction_steps.s", "delayed external\\n");
-            await wait(() => releaseRead !== undefined, "external reload pending");
-            content.focus();
-            doc.execCommand("selectAll");
-            doc.execCommand("insertText", false, "edit during read");
-            releaseRead();
-            await delay(50);
-            check(content.textContent.includes("edit during read"), "late read preserves newer edits");
-            workspace.readFile = readFile;
-            doc.getElementById("instructions-tab-button").focus();
-            await wait(async () => decoder.decode(await workspace.readFile("reduction_steps.s")) === "edit during read\\n", "newer edits flush");
-            await workspace.writeFile("reduction_steps.s", original);
-
-            step = "edits during pending write";
+            step = "dirty rename";
             await wait(() => content.textContent.includes(".global"), "original content reloaded");
-            let releaseWrite;
-            let holdWrite = true;
-            workspace.writeFile = async (path, bytes, origin) => {
-                await writeFile(path, bytes, origin);
-                if (origin === 1n && holdWrite) {
-                    holdWrite = false;
-                    await new Promise(resolve => { releaseWrite = resolve; });
-                }
-            };
-            content.focus();
-            doc.execCommand("selectAll");
-            doc.execCommand("insertText", false, "submitted edit");
-            doc.getElementById("instructions-tab-button").focus();
-            await wait(() => releaseWrite !== undefined, "editor write acknowledgement pending");
-            content.focus();
-            doc.execCommand("selectAll");
-            doc.execCommand("insertText", false, "newer edit");
-            releaseWrite();
-            await delay(50);
-            check(decoder.decode(await workspace.readFile("reduction_steps.s")) === "submitted edit\\n", "acknowledgement covers only submitted text");
-            doc.getElementById("instructions-tab-button").focus();
-            await wait(async () => decoder.decode(await workspace.readFile("reduction_steps.s")) === "newer edit\\n", "newer revision remains dirty");
-            workspace.writeFile = writeFile;
-            await workspace.writeFile("reduction_steps.s", original);
             await workspace.mkdir("moved");
             await wait(() => content.textContent.includes(".global"), "rename source loaded");
             content.focus();
@@ -190,12 +145,6 @@ test("Risclet shares Rust files with its host UI across image and VM lifetimes",
             await workspace.rename("renamed/reduction_steps.s", "reduction_steps.s");
             await workspace.remove("renamed");
             await wait(() => doc.querySelector('.selected[data-path="reduction_steps.s"]'), "editor follows restored path");
-
-            step = "HTTP failure";
-            try { await workspace.readFile("inputs/test.input"); throw new Error("HTTP failure accepted"); }
-            catch (error) { check(error.errno === 5, "HTTP failure maps to EIO"); }
-            await workspace.retrySource("inputs/test.input");
-            check((await workspace.readFile("inputs/test.input")).length > 0, "HTTP retry");
 
             step = "guest mount and write";
             doc.getElementById("vm-tab-button").click();
@@ -224,9 +173,9 @@ test("Risclet shares Rust files with its host UI across image and VM lifetimes",
             runtime.consoleInput = consoleInput;
 
             step = "guest mount and write";
-            const lazySize = (await workspace.stat("lib/stepper")).size;
+            const residentSize = (await workspace.stat("lib/stepper")).size;
             runtime.consoleInput(encoder.encode("wc -c lib/stepper; echo SOURCE_''LOAD_DONE\\n"));
-            await wait(() => app.testConsole.includes(String(lazySize)) && app.testConsole.includes("SOURCE_LOAD_DONE"), "guest HTTP-backed lazy read");
+            await wait(() => app.testConsole.includes(String(residentSize)) && app.testConsole.includes("SOURCE_LOAD_DONE"), "guest resident read");
             runtime.consoleInput(encoder.encode("printf 'guest new\\n' > guest-file\\n"));
             await wait(async () => (await workspace.listFiles()).includes("guest-file")
                 && decoder.decode(await workspace.readFile("guest-file")) === "guest new\\n", "guest creates a shared file");
@@ -243,37 +192,35 @@ test("Risclet shares Rust files with its host UI across image and VM lifetimes",
 
             step = "guest reboot";
             app.testConsole = "";
-            await runtime.requestReboot();
+            doc.getElementById("vm-boot-button").click();
             await wait(() => app.testConsole.includes("To test your code:") && app.testConsole.includes("$"), "guest reboot login");
             check(decoder.decode(await workspace.readFile("host-file")) === "host visible\\n", "reboot retains namespace");
 
-            step = "namespace reset and remount";
-            await workspace.reset();
-            await workspace.writeFile("reset-file", "reset visible\\n");
-            runtime.consoleInput(encoder.encode("cat /home/student/reset-file; echo STALE_''READ_DONE\\n"));
-            await wait(() => app.testConsole.includes("Bad file descriptor") && app.testConsole.includes("STALE_READ_DONE"), "old guest fids fail after namespace reset");
+            step = "clean reset";
+            let rejected = false;
+            try { workspace.clear(); } catch { rejected = true; }
+            check(rejected, "running namespace clear rejected");
             app.testConsole = "";
-            await runtime.reset();
-            await wait(() => app.testConsole.includes("To test your code:") && app.testConsole.includes("$"), "reset remount login");
-            runtime.consoleInput(encoder.encode("cat reset-file; echo RESET_''READ_DONE\\n"));
-            await wait(() => app.testConsole.includes("reset visible") && app.testConsole.includes("RESET_READ_DONE"), "namespace remount coherent");
+            doc.getElementById("vm-reset-button").click();
+            await wait(() => app.testConsole.includes("To test your code:") && app.testConsole.includes("$"), "reset login");
+            check(!workspace.listFiles().includes("host-file"), "reset clears custom files");
+            check(decoder.decode(workspace.readFile("reduction_steps.s")) === decoder.decode(original), "reset restores cached original");
+            check(runtime === app.testRuntime && runtime.filesystems.size === 1, "reset retains runtime and share");
 
             step = "shutdown";
             await runtime.requestShutdown();
             await wait(() => !runtime.started && doc.getElementById("status").textContent.startsWith("Halted"), "orderly shutdown");
-            check(decoder.decode(await workspace.readFile("reset-file")) === "reset visible\\n", "halted host access");
+            workspace.writeFile("discard-me", "discarded");
 
-            step = "switch during lazy read";
+            step = "switch during example download";
             const buttons = () => [...doc.querySelectorAll(".example-button")];
             buttons().find(button => button.textContent === "Insertion sort").click();
-            await wait(() => doc.querySelector('.file[data-path="sort.s"]'), "sort selected");
-            await wait(async () => (await (await fetch("/requests")).json()).some(path => path.endsWith("/examples/sort/sort.s")), "sort read pending");
+            await wait(async () => (await (await fetch("/requests")).json()).some(path => path.endsWith("/examples/sort/sort.s")), "sort download pending");
             buttons().find(button => button.textContent === "Binary reduction steps").click();
-            await wait(() => doc.querySelector('.file[data-path="reset-file"]'), "reduction reselected");
+            await wait(() => doc.querySelector('.selected[data-path="reduction_steps.s"]') && doc.getElementById("status").textContent.startsWith("Running"), "reduction reselected");
             await delay(500);
-            check(!doc.querySelector('.file[data-path="sort.s"]'), "late sort view ignored");
-            check(runtime === app.testRuntime && runtime.filesystems.size === 2, "one runtime retains handles");
-            check(decoder.decode(await workspace.readFile("reset-file")) === "reset visible\\n", "destroy and rebind retain namespace");
+            check(!workspace.listFiles().includes("sort.s") && !workspace.listFiles().includes("discard-me"), "switch clears previous files");
+            check(runtime === app.testRuntime && runtime.filesystems.size === 1, "switch retains runtime and share");
             await unsubscribe();
             if (runtime.started) await runtime.halt();
             await runtime.destroy();
@@ -307,7 +254,7 @@ test("Risclet shares Rust files with its host UI across image and VM lifetimes",
             },
         });
         assert.equal(failInput, false);
-        assert.equal(requests.filter(path => path.endsWith("/examples/reduction/lib/stepper")).length, 1);
+        assert.equal(requests.filter(path => path.endsWith("/examples/reduction/lib/stepper")).length, 2);
         // Unselected sort bodies are never requested during initial setup.
         const firstSort = requests.findIndex(path => path.includes("/examples/sort/"));
         const firstInput = requests.findIndex(path => path.includes("/examples/reduction/inputs/test.input"));

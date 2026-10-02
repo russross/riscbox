@@ -3,7 +3,7 @@ BIN := ../bin
 WASM := $(ROOT)/target/wasm32-unknown-unknown/release/riscbox_wasm.wasm
 RISCLET_URL := https://github.com/russross/risclet/releases/download/v0.4.9/risclet-riscv64gc-unknown-linux-musl
 RISCLET_SHA256 := 2acca2490477236a9bb68678c9ba4fc390e3820a980ad6c49a221c85e6d830cb
-JS_SOURCES := $(shell find $(ROOT)/js/block $(ROOT)/js/network $(ROOT)/js/p9 -name '*.ts' -type f)
+JS_SOURCES := $(shell find $(ROOT)/js/network -name '*.ts' -type f) $(ROOT)/js/storage.ts $(ROOT)/js/riscbox.d.ts
 UI_SOURCES := $(shell find ui -type f ! -path 'ui/node_modules/*' ! -path 'ui/dist/*')
 EXAMPLES := $(shell find examples -type f)
 WEB_SOURCES := $(shell find web -type f)
@@ -25,7 +25,7 @@ build/rootfs.ext4: build/risclet setup.sh $(BIN)/create-alpine-ext4 $(BIN)/run-i
 build/rootfs.erofs: build/rootfs.ext4 $(BIN)/create-erofs-from-ext4
 	$(BIN)/create-erofs-from-ext4 $< $@
 
-dist/riscbox.cfg: Makefile build/rootfs.erofs riscbox.cfg $(UI_SOURCES) $(EXAMPLES) $(WEB_SOURCES) $(JS_SOURCES) $(ROOT)/js/riscbox.js $(ROOT)/js/p9/README.md $(ROOT)/build/js/.built $(WASM) $(ROOT)/kernel/.asset-name $(ROOT)/opensbi/.asset-name $(BIN)/build-distribution $(ROOT)/tools/splitimg.py $(ROOT)/tools/image_deployment.py ../DEPLOYMENT.md ../web/index.html
+dist/riscbox.cfg: Makefile build/rootfs.erofs riscbox.cfg $(UI_SOURCES) $(EXAMPLES) $(WEB_SOURCES) $(JS_SOURCES) $(ROOT)/js/riscbox.js $(ROOT)/js/storage.ts $(ROOT)/build/js/.built $(WASM) $(ROOT)/kernel/.asset-name $(ROOT)/opensbi/.asset-name $(BIN)/build-distribution $(ROOT)/tools/splitimg.py $(ROOT)/tools/image_deployment.py ../DEPLOYMENT.md ../web/index.html
 	$(BIN)/build-distribution . build/rootfs.ext4 --erofs
 
 clean:

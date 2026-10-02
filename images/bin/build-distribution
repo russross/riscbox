@@ -66,16 +66,8 @@ gzip -9 -n -c "$BOOT_PAYLOAD" > "$stage_dir/$kernel_name"
 chmod 644 "$stage_dir/$kernel_name"
 gzip -9 -n -c "$OPENSBI" > "$stage_dir/$bios_name"
 chmod 644 "$stage_dir/$bios_name"
-install -m 644 "$ROOT_DIR/js/riscbox.js" "$stage_dir/riscbox.js"
-mkdir -p "$stage_dir/block"
-for block_module in "$ROOT_DIR/build/js/block/"*.js "$ROOT_DIR/build/js/block/"*.d.ts; do
-    install -m 644 "$block_module" "$stage_dir/block/$(basename "$block_module")"
-done
-mkdir -p "$stage_dir/p9"
-for p9_module in "$ROOT_DIR/build/js/p9/"*.js "$ROOT_DIR/build/js/p9/"*.d.ts; do
-    install -m 644 "$p9_module" "$stage_dir/p9/$(basename "$p9_module")"
-done
-install -m 644 "$ROOT_DIR/js/p9/README.md" "$stage_dir/p9/README.md"
+install -m 644 "$ROOT_DIR/build/js/riscbox.js" "$stage_dir/riscbox.js"
+install -m 644 "$ROOT_DIR/build/js/riscbox.d.ts" "$stage_dir/riscbox.d.ts"
 mkdir -p "$stage_dir/network"
 for network_module in "$ROOT_DIR/build/js/network/"*.js "$ROOT_DIR/build/js/network/"*.d.ts; do
     install -m 644 "$network_module" "$stage_dir/network/$(basename "$network_module")"

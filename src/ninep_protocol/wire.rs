@@ -171,9 +171,7 @@ pub(super) enum Request<'a> {
         afid: u32,
         uid: u32,
     },
-    Flush {
-        old_tag: u16,
-    },
+    Flush,
     Walk {
         fid: u32,
         new_fid: u32,
@@ -258,7 +256,6 @@ pub(super) enum Request<'a> {
 
 impl<'a> Request<'a> {
     // Borrowed strings and write bodies stay within the current activation.
-    // Only a pending inode operation copies the fields it must retain.
     pub(super) fn parse(kind: u8, bytes: &'a [u8]) -> Result<Self, u32> {
         let mut r = Reader::new(bytes);
         let result = match kind {
@@ -277,7 +274,10 @@ impl<'a> Request<'a> {
                     uid: r.u32()?,
                 }
             }
-            108 => Self::Flush { old_tag: r.u16()? },
+            108 => {
+                r.u16()?;
+                Self::Flush
+            }
             110 => {
                 let fid = r.u32()?;
                 let new_fid = r.u32()?;

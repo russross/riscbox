@@ -19,8 +19,7 @@ Files
     identifies source content and block size, so assets with different layouts have
     distinct URLs. Risclet and xv6 profile distribute single EROFS roots;
     Alpine distributes ext4.
-*   `p9/` contains the generated Rust filesystem promise facade modules and
-    declarations.
+*   `riscbox.d.ts` declares the unified runtime and storage APIs.
 
 Publishing
 ----------
@@ -111,41 +110,31 @@ limits, reconnect behavior, and production origin-service requirements.
 9p file sharing
 ---------------
 
-A filesystem names a bound Rust namespace and mount tag with `{ server, tag }`.
-The former `file`, `socket`, and `js9p` forms and JavaScript protocol-server
-registration are not supported. Create and bind the namespace before startup:
+Configure `fs0: { server: "workspace", tag: "shared" }`. Preparation creates
+its resident Rust namespace:
 
 ```js
-import { Filesystem, createHttpsSeedPlugin } from "./p9/index.js";
 const runtime = await Riscbox.instantiate(wasmBytes, options);
-const workspace = await Filesystem.create(runtime);
-await workspace.writeFile("hello.txt", "shared with the guest\n");
-await workspace.bind("workspace");
-await runtime.startFromUrl(configUrl);
-console.log(new TextDecoder().decode(await workspace.readFile("hello.txt")));
+await runtime.prepareFromUrl(configUrl);
+const workspace = runtime.filesystem("workspace");
+workspace.writeFile("hello.txt", "shared with the guest\n");
+await runtime.boot();
+console.log(new TextDecoder().decode(workspace.readFile("hello.txt")));
 ```
 
-Host operations always return promises and reject with `FilesystemError`
-carrying positive Linux errno. Filesystems remain usable before boot, while
-halted, and after VM destroy. Multiple endpoints in one VM may share a handle;
-multiple live VMs may not. Bind can replace a key only while the runtime is
-inactive. VM reset retains namespace data and retires protocol state.
-Filesystem reset replaces data while keeping device queues coherent; the guest
-may need to remount. Destroy can also cancel startup and ignores late boot
-responses, allowing the runtime to select another namespace.
-
-Large static trees use `SeedBuilder` and an arbitrary typed source loader, or
-`createHttpsSeedPlugin({ files: [{ path, size, source? }] }, baseUrl)`.
-`installSeed(plugin)` installs metadata without requesting bodies. Host and
-guest reads share on-demand loads; no preload mechanism exists. Source failures
-return `EIO`, and `retrySource(path)` allows a later read to retry. Hosts supply
-credentials and protocol handling in custom loader plugins. See the
-[facade guide](https://github.com/russross/riscbox/blob/main/js/p9/README.md)
-for subscriptions and source ownership.
+Host operations are synchronous before boot, during execution, and after
+poweroff. Applications fetch initial content themselves and populate through
+the regular API. Several tags may share one server name. Reboot retains bytes;
+`clear()` replaces the tree only while powered off. Destroy invalidates shares
+and disks. Change subscriptions return synchronous unsubscribe functions.
+The old creation/binding, source plugins, and block provider modules are removed.
 
 Mount using the configured tag:
 
     mount -t 9p -o trans=virtio,version=9p2000.L,cache=none shared /mnt/shared
+
+The unified `riscbox.js` and `riscbox.d.ts` contain both storage facades. For disk
+configuration and powered-off host access, see the root [API guide](../README.md).
 
 Browser integration
 -------------------

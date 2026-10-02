@@ -5,20 +5,17 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::rc::Rc;
 
+use crate::block_storage::{BlockDiskId, BlockStore};
 use crate::browser_input::{BrowserEvent, BrowserInputQueue};
 use crate::browser_storage::HttpBlockStore;
 use crate::config::{Console, DriveConfig, VmConfig, resolve_asset_path};
 use crate::entropy::{EntropyError, EntropySource, SharedEntropy};
-use crate::host_block::{
-    HostBlockGeneration, HostBlockOutcome, HostBlockProviderId, HostBlockRequest,
-    HostBlockRequestId, HostBlockStore,
-};
 use crate::machine::{
     BootAddresses, BootImages, FramebufferConfig, FramebufferUpdate, Machine, MachineConfig,
     MachineError,
 };
-use crate::ninep::{Filesystem, FilesystemError, LoadTicket};
-use crate::ninep_backend::{FilesystemAttachment, RustFilesystem, RustNineP};
+use crate::ninep::{Filesystem, FilesystemError, Limits};
+use crate::ninep_backend::{RustFilesystem, RustNineP};
 use crate::platform::FinishStatus;
 use crate::tinyemu_core::CpuRunExitReason;
 use crate::virtio_devices::{DeviceError, InputKind, NetworkBackend};
@@ -49,30 +46,19 @@ pub struct RuntimeStart {
 pub struct HttpRequest {
     pub id: u32,
     pub url: String,
+    pub disk: Option<BlockDiskId>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum HostAction {
     Request(HttpRequest),
     Started,
+    Prepared,
     Console(Vec<u8>),
     Network(Vec<u8>),
     Framebuffer(FramebufferUpdate),
-    HostBlock(HostBlockAction),
     Halted(LifecycleCause),
     Reset(LifecycleCause),
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum HostBlockAction {
-    Request(HostBlockRequest),
-    Reset {
-        provider: HostBlockProviderId,
-        generation: HostBlockGeneration,
-    },
-    Close {
-        provider: HostBlockProviderId,
-    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -384,8 +370,6 @@ struct Running {
     pointer_dimensions: Option<(u32, u32)>,
     network_output: Rc<RefCell<VecDeque<Vec<u8>>>>,
     block_slots: Vec<usize>,
-    host_blocks: BTreeMap<HostBlockProviderId, (usize, HostBlockGeneration)>,
-    _filesystem_attachments: Vec<FilesystemAttachment>,
     pending_http: BTreeMap<u32, PendingHttp>,
 }
 
@@ -464,6 +448,7 @@ pub struct BrowserRuntime {
     guest_clock_floor_ticks: u64,
     active_quantum: Option<ActiveQuantum>,
     last_quantum: QuantumStatistics,
+    auto_boot: bool,
 }
 
 impl Default for BrowserRuntime {
@@ -483,51 +468,84 @@ impl Default for BrowserRuntime {
             guest_clock_floor_ticks: 0,
             active_quantum: None,
             last_quantum: QuantumStatistics::default(),
+            auto_boot: true,
         }
     }
 }
 
 impl BrowserRuntime {
-    /// Registers a namespace before startup; configured endpoints use its key.
-    ///
+    /// Accesses a VM-owned disk while guest execution is powered off.
     /// # Errors
-    /// Returns an error for duplicate keys or a VM that has begun startup.
-    pub fn register_filesystem(
+    /// Rejects a running VM, missing disk, or invalid storage operation.
+    pub fn with_disk<T>(
         &mut self,
-        key: String,
-        filesystem: Filesystem,
-    ) -> Result<(), RuntimeError> {
-        self.register_filesystem_handle(key, RustFilesystem::new(filesystem))
-    }
-
-    /// Registers an independently owned filesystem handle before startup.
-    ///
-    /// # Errors
-    /// Returns an error for duplicate keys or a VM that has begun startup.
-    pub fn register_filesystem_handle(
-        &mut self,
-        key: String,
-        filesystem: RustFilesystem,
-    ) -> Result<(), RuntimeError> {
-        if !matches!(self.state, State::VmInactive) || self.filesystems.contains_key(&key) {
-            return Err(RuntimeError::InvalidConfig(
-                "filesystem registration requires an unused key before startup".into(),
+        id: BlockDiskId,
+        operation: impl FnOnce(&mut BlockStore) -> T,
+    ) -> Result<T, RuntimeError> {
+        let State::Halted(running) = &mut self.state else {
+            return Err(RuntimeError::Machine(
+                "disk host access requires powered off VM".into(),
             ));
+        };
+        let slot = *running
+            .block_slots
+            .get(id.0 as usize)
+            .ok_or_else(|| RuntimeError::InvalidConfig("unknown disk".into()))?;
+        let result = operation(running.machine.storage_mut(slot)?);
+        self.pump_http_requests()?;
+        Ok(result)
+    }
+
+    /// Discards HTTP overlays and retires outstanding responses for that disk.
+    /// # Errors
+    /// Rejects a running VM, array disk, or missing disk.
+    pub fn discard_disk_changes(&mut self, id: BlockDiskId) -> Result<(), RuntimeError> {
+        let State::Halted(running) = &mut self.state else {
+            return Err(RuntimeError::Machine(
+                "disk discard requires powered off VM".into(),
+            ));
+        };
+        let slot = *running
+            .block_slots
+            .get(id.0 as usize)
+            .ok_or_else(|| RuntimeError::InvalidConfig("unknown disk".into()))?;
+        running
+            .machine
+            .storage_mut(slot)?
+            .discard_changes()
+            .map_err(|error| RuntimeError::Machine(error.to_string()))?;
+        let retired: Vec<_> = running.pending_http.iter().filter_map(|(id, request)| {
+            matches!(request, PendingHttp::Block { slot: pending_slot, .. } if *pending_slot == slot).then_some(*id)
+        }).collect();
+        for request in retired {
+            running.pending_http.remove(&request);
+            self.retired_http.insert(request);
         }
-        self.filesystems.insert(key, filesystem);
         Ok(())
     }
 
-    /// Removes a binding after VM teardown without destroying its namespace.
-    ///
+    /// Resets execution and clears RAM without starting or changing storage.
     /// # Errors
-    /// Returns an error while VM resources or startup are active.
-    pub fn unregister_filesystem(&mut self, key: &str) -> Result<(), RuntimeError> {
-        if !matches!(self.state, State::VmInactive) {
-            return Err(RuntimeError::AlreadyStarted);
-        }
-        self.filesystems.remove(key);
+    /// Requires a powered-off VM and valid boot images.
+    pub fn cold_reset(&mut self) -> Result<(), RuntimeError> {
+        let State::Halted(running) = &mut self.state else {
+            return Err(RuntimeError::Machine(
+                "cold reset requires powered off VM".into(),
+            ));
+        };
+        self.retired_http.extend(running.pending_http.keys());
+        running.pending_http.clear();
+        running.machine.reset()?;
+        running.machine.clear_ram()?;
+        running
+            .machine
+            .load_boot_at(running.boot.images(), running.boot.addresses)?;
         Ok(())
+    }
+    /// Returns a share owned by the currently prepared VM platform.
+    #[must_use]
+    pub fn filesystem_handle(&self, name: &str) -> Option<RustFilesystem> {
+        self.filesystems.get(name).cloned()
     }
 
     /// Publishes host namespace changes after its borrow has ended.
@@ -555,20 +573,7 @@ impl BrowserRuntime {
             .get(key)
             .ok_or_else(|| RuntimeError::InvalidConfig("unknown filesystem".into()))?;
         let result = tree.with_filesystem(operation);
-        // Even a failed operation can settle a load as failed. Poll after the
-        // namespace borrow ends, and while the machine's CPU is not borrowed.
-        if let State::Running(running) | State::Halted(running) = &mut self.state {
-            running.machine.poll_ninep()?;
-        }
         result.map_err(RuntimeError::Filesystem)
-    }
-
-    /// Source work is dispatched by the host only after execution returns.
-    #[must_use]
-    pub fn next_ninep_load(&self) -> Option<(String, LoadTicket)> {
-        self.filesystems
-            .iter()
-            .find_map(|(key, tree)| tree.next_load().map(|ticket| (key.clone(), ticket)))
     }
 
     /// Configures the duration and optional counters before a quantum starts.
@@ -908,6 +913,7 @@ impl BrowserRuntime {
             return Err(RuntimeError::AlreadyStarted);
         }
         self.guest_clock_floor_ticks = 0;
+        self.auto_boot = true;
         self.cycle_rate_estimate = RateEstimate::default();
         self.previous_fast_quantum_rate = None;
         self.adaptive_skew = AdaptiveSkew::default();
@@ -929,6 +935,27 @@ impl BrowserRuntime {
         if !matches!(self.state, State::VmInactive) {
             return Err(RuntimeError::AlreadyStarted);
         }
+        self.guest_clock_floor_ticks = 0;
+        self.auto_boot = true;
+        self.cycle_rate_estimate = RateEstimate::default();
+        self.previous_fast_quantum_rate = None;
+        self.adaptive_skew = AdaptiveSkew::default();
+        self.last_quantum = QuantumStatistics::default();
+        self.begin_loading(start, config)
+    }
+
+    /// Loads a platform without executing any guest instructions.
+    /// # Errors
+    /// Rejects an active platform or invalid boot configuration.
+    pub fn prepare_resolved(
+        &mut self,
+        start: RuntimeStart,
+        config: VmConfig,
+    ) -> Result<(), RuntimeError> {
+        if !matches!(self.state, State::VmInactive) {
+            return Err(RuntimeError::AlreadyStarted);
+        }
+        self.auto_boot = false;
         self.guest_clock_floor_ticks = 0;
         self.cycle_rate_estimate = RateEstimate::default();
         self.previous_fast_quantum_rate = None;
@@ -982,7 +1009,9 @@ impl BrowserRuntime {
         if self.retired_http.remove(&id) {
             return Ok(());
         }
-        if !(200..300).contains(&status) {
+        if !(200..300).contains(&status)
+            && !matches!(self.state, State::Running(_) | State::Halted(_))
+        {
             return Err(RuntimeError::HttpStatus(status));
         }
         let halted = matches!(self.state, State::Halted(_));
@@ -994,15 +1023,6 @@ impl BrowserRuntime {
                 })?;
                 let mut config = VmConfig::parse(&source)
                     .map_err(|error| RuntimeError::InvalidConfig(error.to_string()))?;
-                if config
-                    .drives
-                    .iter()
-                    .any(|drive| matches!(drive, DriveConfig::Host { .. }))
-                {
-                    return Err(RuntimeError::InvalidConfig(
-                        "host block drives require resolved startup".into(),
-                    ));
-                }
                 if !start.command_line.is_empty() {
                     config.apply_command_line(&start.command_line);
                 }
@@ -1064,21 +1084,27 @@ impl BrowserRuntime {
                     };
                     return Err(RuntimeError::UnexpectedResponse(id));
                 };
-                match pending {
-                    PendingHttp::Block { slot, request } => running
-                        .machine
-                        .complete_http_block_request(slot, request, bytes)?,
-                }
+                let completion = match pending {
+                    PendingHttp::Block { slot, request } => {
+                        running.machine.complete_http_block_request(
+                            slot,
+                            request,
+                            if (200..300).contains(&status) {
+                                Ok(bytes)
+                            } else {
+                                Err(())
+                            },
+                            !halted,
+                        )
+                    }
+                };
                 self.state = if halted {
                     State::Halted(running)
                 } else {
                     State::Running(running)
                 };
-                if halted {
-                    Ok(())
-                } else {
-                    self.pump_http_requests()
-                }
+                completion?;
+                self.pump_http_requests()
             }
             other => {
                 self.state = other;
@@ -1170,6 +1196,10 @@ impl BrowserRuntime {
             else {
                 unreachable!();
             };
+            let mut running = running;
+            self.retired_http.extend(running.pending_http.keys());
+            running.pending_http.clear();
+            running.machine.retire_storage_work();
             self.state = State::Halted(running);
             let cause = if matches!(finish, FinishStatus::Failed(_)) {
                 LifecycleCause::GuestFailure
@@ -1234,6 +1264,10 @@ impl BrowserRuntime {
                 return Err(RuntimeError::Machine("VM is not running".into()));
             }
         };
+        let mut running = running;
+        self.retired_http.extend(running.pending_http.keys());
+        running.pending_http.clear();
+        running.machine.retire_storage_work();
         self.state = State::Halted(running);
         self.actions
             .push_back(HostAction::Halted(LifecycleCause::HostHalt));
@@ -1293,6 +1327,10 @@ impl BrowserRuntime {
         if self.active_quantum.is_some() {
             return Err(RuntimeError::Machine("quantum is active".into()));
         }
+        if matches!(self.state, State::Running(_)) {
+            return Err(RuntimeError::Machine("VM is not halted".into()));
+        }
+        self.filesystems.clear();
         let running = match core::mem::replace(&mut self.state, State::VmInactive) {
             State::Halted(running) => running,
             State::VmInactive => return Ok(()),
@@ -1306,18 +1344,6 @@ impl BrowserRuntime {
                     self.retired_http.insert(request_id);
                 }
                 self.actions.clear();
-                if let Some(config) = loading.config {
-                    self.actions
-                        .extend(config.drives.into_iter().filter_map(|drive| {
-                            if let DriveConfig::Host { provider, .. } = drive {
-                                Some(HostAction::HostBlock(HostBlockAction::Close {
-                                    provider: HostBlockProviderId(provider),
-                                }))
-                            } else {
-                                None
-                            }
-                        }));
-                }
                 return Ok(());
             }
             other @ State::Running(_) => {
@@ -1326,14 +1352,8 @@ impl BrowserRuntime {
             }
         };
         self.retired_http.extend(running.pending_http.keys());
+        self.filesystems.clear();
         self.actions.clear();
-        self.actions.extend(
-            running
-                .host_blocks
-                .keys()
-                .copied()
-                .map(|provider| HostAction::HostBlock(HostBlockAction::Close { provider })),
-        );
         Ok(())
     }
 
@@ -1355,7 +1375,6 @@ impl BrowserRuntime {
         running.network_output.borrow_mut().clear();
         self.state = State::Running(running);
         self.actions.push_back(HostAction::Reset(cause));
-        self.pump_host_block_actions()?;
         self.pump_http_requests()
     }
 
@@ -1365,6 +1384,7 @@ impl BrowserRuntime {
         self.actions.push_back(HostAction::Request(HttpRequest {
             id,
             url: url.to_owned(),
+            disk: None,
         }));
         id
     }
@@ -1385,6 +1405,14 @@ impl BrowserRuntime {
 
     fn finish_loading(&mut self, mut loading: Loading) -> Result<(), RuntimeError> {
         let config = loading.config.take().expect("loading state retains config");
+        let mut filesystems = BTreeMap::new();
+        for entry in &config.filesystems {
+            filesystems.entry(entry.server.clone()).or_insert_with(|| {
+                let mut filesystem = Filesystem::new(Limits::default(), 0);
+                filesystem.set_change_tracking(false);
+                RustFilesystem::new(filesystem)
+            });
+        }
         let ram_size = u64::from(loading.start.ram_mib)
             .checked_shl(20)
             .ok_or_else(|| RuntimeError::Machine("RAM size overflow".into()))?;
@@ -1403,50 +1431,26 @@ impl BrowserRuntime {
             .map(|(width, height)| FramebufferConfig { width, height });
         let mut machine = self.create_machine(ram_size, framebuffer)?;
         let mut block_slots = Vec::new();
-        let mut host_blocks = BTreeMap::new();
         for (index, manifest) in loading.drive_manifests.into_iter().enumerate() {
-            if let DriveConfig::Host {
-                provider,
-                capacity_sectors,
-            } = &config.drives[index]
-            {
-                let provider = HostBlockProviderId(*provider);
-                if host_blocks.contains_key(&provider) {
-                    return Err(RuntimeError::InvalidConfig(
-                        "duplicate block provider".into(),
-                    ));
+            let store = match &config.drives[index] {
+                DriveConfig::Array { capacity_sectors } => BlockStore::array(*capacity_sectors),
+                DriveConfig::Http { .. } => {
+                    let (url, bytes) = manifest.ok_or_else(|| {
+                        RuntimeError::InvalidConfig("missing drive manifest".into())
+                    })?;
+                    let source = String::from_utf8(bytes).map_err(|_| {
+                        RuntimeError::InvalidConfig("drive manifest is not UTF-8".into())
+                    })?;
+                    HttpBlockStore::from_manifest(&url, &source, 16 << 20).map(BlockStore::http)
                 }
-                let store = HostBlockStore::new(provider, *capacity_sectors);
-                let mut id = [0; 20];
-                let name = format!("riscbox-host-{index}");
-                id[..name.len()].copy_from_slice(name.as_bytes());
-                let slot = machine.add_host_block_device(store, id)?;
-                host_blocks.insert(provider, (slot, HostBlockGeneration(1)));
-            } else if let Some((url, bytes)) = manifest {
-                let source = String::from_utf8(bytes).map_err(|_| {
-                    RuntimeError::InvalidConfig("drive manifest is not UTF-8".into())
-                })?;
-                let store = HttpBlockStore::from_manifest(&url, &source, 16 << 20)
-                    .map_err(|error| RuntimeError::Machine(error.to_string()))?;
-                let mut id = [0; 20];
-                let name = format!("riscbox-http-{index}");
-                id[..name.len()].copy_from_slice(name.as_bytes());
-                block_slots.push(machine.add_http_block_device(store, id)?);
             }
+            .map_err(|error| RuntimeError::Machine(error.to_string()))?;
+            let mut id = [0; 20];
+            let name = format!("riscbox-disk-{index}");
+            id[..name.len()].copy_from_slice(name.as_bytes());
+            block_slots.push(machine.add_storage_block_device(store, id)?);
         }
-        // Claims are held by the VM rather than individual endpoints. Failed
-        // construction drops these claims and closes any sessions already added.
-        let mut trees: Vec<RustFilesystem> = Vec::new();
-        let mut filesystem_attachments = Vec::new();
-        for entry in &config.filesystems {
-            if let Some(tree) = self.filesystems.get(&entry.server)
-                && !trees.iter().any(|other| tree.same_tree(other))
-            {
-                filesystem_attachments.push(tree.attach().map_err(RuntimeError::Filesystem)?);
-                trees.push(tree.clone());
-            }
-        }
-        self.add_filesystems(&mut machine, &config)?;
+        Self::add_filesystems(&mut machine, &config, &filesystems)?;
         let console_slot = if config.console == Console::Virtio {
             Some(machine.add_console_device(80, 25)?)
         } else {
@@ -1487,7 +1491,8 @@ impl BrowserRuntime {
             },
         };
         machine.load_boot_at(boot.images(), boot.addresses)?;
-        self.state = State::Running(Box::new(Running {
+        self.filesystems = filesystems;
+        let running = Box::new(Running {
             machine,
             boot,
             console_slot,
@@ -1499,23 +1504,30 @@ impl BrowserRuntime {
             pointer_dimensions: dimensions,
             network_output,
             block_slots,
-            host_blocks,
-            _filesystem_attachments: filesystem_attachments,
             pending_http: BTreeMap::new(),
-        }));
-        self.actions.push_back(HostAction::Started);
+        });
+        self.state = if self.auto_boot {
+            State::Running(running)
+        } else {
+            State::Halted(running)
+        };
+        self.actions.push_back(if self.auto_boot {
+            HostAction::Started
+        } else {
+            HostAction::Prepared
+        });
         self.pump_http_requests()
     }
 
     fn add_filesystems(
-        &self,
         machine: &mut Machine,
         config: &VmConfig,
+        filesystems: &BTreeMap<String, RustFilesystem>,
     ) -> Result<(), RuntimeError> {
         for filesystem in &config.filesystems {
-            let tree = self.filesystems.get(&filesystem.server).ok_or_else(|| {
+            let tree = filesystems.get(&filesystem.server).ok_or_else(|| {
                 RuntimeError::InvalidConfig(format!(
-                    "9p filesystem is not bound: {}",
+                    "missing configured 9p filesystem: {}",
                     filesystem.server
                 ))
             })?;
@@ -1526,87 +1538,40 @@ impl BrowserRuntime {
     }
 
     fn pump_http_requests(&mut self) -> Result<(), RuntimeError> {
-        let State::Running(mut running) = core::mem::replace(&mut self.state, State::VmInactive)
-        else {
-            return Ok(());
-        };
-        for slot in running.block_slots.clone() {
-            while let Some(request) = running.machine.next_http_block_request(slot)? {
-                let id = self.allocate_request(&request.url);
-                running.pending_http.insert(
-                    id,
-                    PendingHttp::Block {
-                        slot,
-                        request: request.id,
-                    },
-                );
-            }
-        }
-        self.state = State::Running(running);
-        self.pump_host_block_actions()?;
-        Ok(())
-    }
-
-    fn pump_host_block_actions(&mut self) -> Result<(), RuntimeError> {
-        let State::Running(running) = &mut self.state else {
-            return Ok(());
-        };
-        for (provider, (slot, observed)) in &mut running.host_blocks {
-            let generation = running.machine.host_block_generation(*slot)?;
-            if generation != *observed {
-                *observed = generation;
-                self.actions
-                    .push_back(HostAction::HostBlock(HostBlockAction::Reset {
-                        provider: *provider,
-                        generation,
-                    }));
-            }
-            if let Some(request) = running.machine.next_host_block_request(*slot)? {
-                self.actions
-                    .push_back(HostAction::HostBlock(HostBlockAction::Request(request)));
-            }
-        }
-        Ok(())
-    }
-
-    /// Completes a host provider request, ignoring retired generations.
-    ///
-    /// # Errors
-    /// Returns an error for a wrong provider or unknown current request.
-    pub fn complete_host_block(
-        &mut self,
-        provider: HostBlockProviderId,
-        generation: HostBlockGeneration,
-        id: HostBlockRequestId,
-        result: HostBlockOutcome,
-    ) -> Result<(), RuntimeError> {
         let halted = self.is_halted();
         let mut running = match core::mem::replace(&mut self.state, State::VmInactive) {
             State::Running(running) | State::Halted(running) => running,
             other => {
                 self.state = other;
-                return Err(RuntimeError::Machine(
-                    "block completion without a VM".into(),
-                ));
+                return Ok(());
             }
         };
-        let outcome = match running.host_blocks.get(&provider) {
-            Some((slot, _)) => running
-                .machine
-                .complete_host_block_request(*slot, generation, id, result)
-                .map_err(Into::into),
-            None => Err(RuntimeError::InvalidConfig("unknown block provider".into())),
-        };
+        let result = (|| {
+            for (index, slot) in running.block_slots.clone().into_iter().enumerate() {
+                while let Some(request) = running.machine.next_http_block_request(slot)? {
+                    let id = self.allocate_request(&request.url);
+                    if let Some(HostAction::Request(action)) = self.actions.back_mut() {
+                        action.disk = Some(BlockDiskId(
+                            u32::try_from(index).expect("disk index fits u32"),
+                        ));
+                    }
+                    running.pending_http.insert(
+                        id,
+                        PendingHttp::Block {
+                            slot,
+                            request: request.id,
+                        },
+                    );
+                }
+            }
+            Ok(())
+        })();
         self.state = if halted {
             State::Halted(running)
         } else {
             State::Running(running)
         };
-        outcome?;
-        if !halted {
-            self.pump_http_requests()?;
-        }
-        Ok(())
+        result
     }
 }
 

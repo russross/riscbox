@@ -92,7 +92,7 @@ intentionally terminal-only.
 ### Non-CPU performance
 
 Measure HTTP block request latency, 9p request/reply copy volume, concurrent
-request latency, resident and logical 9p tree sizes, and peak lazy-load memory
+request latency, resident and logical 9p tree sizes, and disk cache memory
 only when those paths become a demonstrated bottleneck. Keep that work separate
 from the CPU interpreter optimization baseline.
 
@@ -107,24 +107,10 @@ size).
 Installation media can boot through the supplied U-Boot EFI path using existing
 split HTTP or host-array drives. Direct HTTP attachment of plain image assets
 and installer target-disk policies remain a separate storage milestone. Extend
-the resolved drive configuration and host block providers for
+the resolved drive configuration and VM-owned block stores for
 plain image assets or installation media. Select read-only, session CoW, or
 mutable behavior explicitly. Validate multiple attached drives, failed reads,
 and write behavior before documenting an installation-to-disk workflow.
-
-### HTTP block consolidation
-
-Keep the Rust and TypeScript HTTP paths in parallel. A single fresh-profile
-Alpine Chrome run per path reached login in about 0.72 seconds and fetched the
-same 10 blocks (5 MiB), while reported JS heap at login was about 6.1 MiB for
-Rust HTTP and 8.2 MiB for TypeScript HTTP. Before removing either path, repeat
-matched runs and compare Risclet login, xv6 profile compilation, and browser
-memory under controlled cache conditions. The earlier Rust-only baseline used
-warm cache for Risclet login (1.98 seconds, 21 responses), and separate runs
-for Alpine login (0.92 seconds, 10 responses) and xv6 compilation (99.77
-seconds, 159 responses). One TypeScript HTTP xv6 run completed with guest
-`time make` at 102.71 seconds. These results do not measure run-to-run
-variation.
 
 ### WASI integration
 

@@ -1,9 +1,7 @@
+use riscbox::block_storage::BlockStore;
 use riscbox::browser_storage::HttpBlockStore;
 use riscbox::entropy::{EntropyError, EntropySource};
 use riscbox::guest_memory::{AccessWidth, GuestAddress};
-use riscbox::host_block::{
-    HostBlockGeneration, HostBlockKind, HostBlockOutcome, HostBlockProviderId, HostBlockStore,
-};
 use riscbox::machine::{Machine, MachineConfig, VIRTIO_BASE};
 use riscbox::virtio_devices::{
     BlockBackend, DeviceError, InputKind, MAX_NETWORK_FRAME_SIZE, MAX_PENDING_NETWORK_FRAMES,
@@ -257,12 +255,89 @@ fn block_reads_writes_identification_and_unsupported_status() {
 }
 
 #[test]
+fn vm_owned_array_and_http_writes_finish_without_fetching_and_survive_reset() {
+    for store in [
+        BlockStore::array(8).unwrap(),
+        BlockStore::http(
+            HttpBlockStore::from_manifest("disk", "{block_size:4,n_block:1}", 4096).unwrap(),
+        ),
+    ] {
+        let mut machine = test_machine();
+        let slot = machine
+            .add_storage_block_device(store, *b"riscbox-disk-0000000")
+            .unwrap();
+        machine_configure(&mut machine, slot, 0);
+        let mut header = [0; 16];
+        header[..4].copy_from_slice(&1_u32.to_le_bytes());
+        header[8..].copy_from_slice(&3_u64.to_le_bytes());
+        machine_bytes(&mut machine, DATA, &header);
+        machine_bytes(&mut machine, DATA + 0x100, &[0x7a; 512]);
+        machine_descriptor(&mut machine, 0, DATA, 16, 1, 1);
+        machine_descriptor(&mut machine, 1, DATA + 0x100, 512, 1, 2);
+        machine_descriptor(&mut machine, 2, DATA + 0x300, 1, 2, 0);
+        machine_available(&mut machine, 0);
+        machine_kick(&mut machine, slot, 0);
+        assert_eq!(machine.read_ram(USED + 2, 2).unwrap(), &[1, 0]);
+        assert_eq!(machine.read_ram(DATA + 0x300, 1).unwrap(), &[0]);
+        assert!(machine.next_http_block_request(slot).unwrap().is_none());
+
+        // Interface reset retains store bytes, and a resident read is immediate.
+        machine_write(&mut machine, VIRTIO_BASE + 0x70, AccessWidth::Word, 0);
+        machine_configure(&mut machine, slot, 0);
+        header[..4].fill(0);
+        machine_bytes(&mut machine, DATA, &header);
+        machine_bytes(&mut machine, DATA + 0x100, &[0; 513]);
+        machine_descriptor(&mut machine, 0, DATA, 16, 1, 1);
+        machine_descriptor(&mut machine, 1, DATA + 0x100, 513, 2, 0);
+        machine_available(&mut machine, 0);
+        machine_kick(&mut machine, slot, 0);
+        assert_eq!(machine.read_ram(DATA + 0x100, 512).unwrap(), &[0x7a; 512]);
+        assert_eq!(machine.read_ram(DATA + 0x300, 1).unwrap(), &[0]);
+    }
+}
+
+#[test]
+fn failed_http_chunks_complete_guest_io_with_error_and_allow_a_new_fetch() {
+    for response in [Err(()), Ok(vec![0; 511])] {
+        let store =
+            HttpBlockStore::from_manifest("disk", "{block_size:1,n_block:1}", 1024).unwrap();
+        let mut machine = test_machine();
+        let slot = machine
+            .add_storage_block_device(BlockStore::http(store), *b"riscbox-http-0000000")
+            .unwrap();
+        machine_configure(&mut machine, slot, 0);
+        machine_bytes(&mut machine, DATA, &[0; 16]);
+        machine_descriptor(&mut machine, 0, DATA, 16, 1, 1);
+        machine_descriptor(&mut machine, 1, DATA + 0x100, 513, 2, 0);
+        machine_available(&mut machine, 0);
+        machine_kick(&mut machine, slot, 0);
+        let request = machine.next_http_block_request(slot).unwrap().unwrap();
+        machine
+            .complete_http_block_request(slot, request.id, response, true)
+            .unwrap();
+        assert_eq!(machine.read_ram(USED + 2, 2).unwrap(), &[1, 0]);
+        assert_eq!(machine.read_ram(DATA + 0x300, 1).unwrap(), &[1]);
+
+        machine_write(&mut machine, VIRTIO_BASE + 0x70, AccessWidth::Word, 0);
+        machine_configure(&mut machine, slot, 0);
+        machine_kick(&mut machine, slot, 0);
+        let retry = machine.next_http_block_request(slot).unwrap().unwrap();
+        assert_ne!(retry.id, request.id);
+        machine
+            .complete_http_block_request(slot, retry.id, Ok(vec![0x42; 1024]), true)
+            .unwrap();
+        assert_eq!(machine.read_ram(DATA + 0x300, 1).unwrap(), &[0]);
+        assert_eq!(machine.read_ram(DATA + 0x100, 512).unwrap(), &[0x42; 512]);
+    }
+}
+
+#[test]
 fn http_block_read_waits_for_completion_before_updating_the_used_ring() {
     let store = HttpBlockStore::from_manifest("images/disk.json", "{block_size:1,n_block:1}", 1024)
         .expect("valid manifest");
     let mut machine = test_machine();
     let slot = machine
-        .add_http_block_device(store, *b"riscbox-http-0000000")
+        .add_storage_block_device(BlockStore::http(store), *b"riscbox-http-0000000")
         .expect("HTTP block slot");
     machine_configure(&mut machine, slot, 0);
     machine_bytes(&mut machine, DATA, &[0; 16]);
@@ -282,7 +357,7 @@ fn http_block_read_waits_for_completion_before_updating_the_used_ring() {
 
     machine_write(&mut machine, VIRTIO_BASE + 0x70, AccessWidth::Word, 0);
     machine
-        .complete_http_block_request(slot, request.id, vec![0x6d; 1024])
+        .complete_http_block_request(slot, request.id, Ok(vec![0x6d; 1024]), true)
         .expect("discarded request stays idle");
     assert_eq!(
         u16::from_le_bytes(machine.read_ram(USED + 2, 2).unwrap().try_into().unwrap()),
@@ -296,7 +371,7 @@ fn http_block_read_waits_for_completion_before_updating_the_used_ring() {
         .expect("replacement HTTP request");
     assert_ne!(replacement.id, request.id);
     machine
-        .complete_http_block_request(slot, replacement.id, vec![0x6d; 1024])
+        .complete_http_block_request(slot, replacement.id, Ok(vec![0x6d; 1024]), true)
         .expect("replacement response");
     assert_eq!(
         u16::from_le_bytes(machine.read_ram(USED + 2, 2).unwrap().try_into().unwrap()),
@@ -304,94 +379,6 @@ fn http_block_read_waits_for_completion_before_updating_the_used_ring() {
     );
     assert_eq!(machine.read_ram(DATA + 0x100, 512).unwrap(), &[0x6d; 512]);
     assert_eq!(machine.read_ram(DATA + 0x300, 1).unwrap(), &[0]);
-}
-
-#[test]
-fn host_block_completes_reads_and_retires_late_replies() {
-    let mut machine = test_machine();
-    let slot = machine
-        .add_host_block_device(HostBlockStore::new(HostBlockProviderId(7), 8), [0; 20])
-        .expect("host block");
-    machine_configure(&mut machine, slot, 0);
-    machine_bytes(&mut machine, DATA, &[0; 16]);
-    machine_descriptor(&mut machine, 0, DATA, 16, 1, 1);
-    machine_descriptor(&mut machine, 1, DATA + 0x100, 513, 2, 0);
-    machine_available(&mut machine, 0);
-    machine_kick(&mut machine, slot, 0);
-    let request = machine
-        .next_host_block_request(slot)
-        .unwrap()
-        .expect("host request");
-    assert_eq!(
-        (
-            request.provider,
-            request.kind,
-            request.sector,
-            request.length
-        ),
-        (HostBlockProviderId(7), HostBlockKind::Read, 0, 512)
-    );
-    assert_eq!(
-        machine_read(&mut machine, USED + 2, AccessWidth::HalfWord),
-        0
-    );
-    machine
-        .complete_host_block_request(
-            slot,
-            request.generation,
-            request.id,
-            HostBlockOutcome::Success(vec![0x71; 512]),
-        )
-        .expect("read reply");
-    assert_eq!(
-        machine_read(&mut machine, USED + 2, AccessWidth::HalfWord),
-        1
-    );
-    assert_eq!(machine.read_ram(DATA + 0x100, 512).unwrap(), &[0x71; 512]);
-    machine_write(&mut machine, VIRTIO_BASE + 0x70, AccessWidth::Word, 0);
-    assert_eq!(
-        machine.host_block_generation(slot).unwrap(),
-        HostBlockGeneration(2)
-    );
-    machine
-        .complete_host_block_request(
-            slot,
-            request.generation,
-            request.id,
-            HostBlockOutcome::Success(vec![1; 512]),
-        )
-        .expect("late reply ignored");
-}
-
-#[test]
-fn malformed_host_read_completes_with_guest_io_error() {
-    let mut machine = test_machine();
-    let slot = machine
-        .add_host_block_device(HostBlockStore::new(HostBlockProviderId(2), 8), [0; 20])
-        .expect("host block");
-    machine_configure(&mut machine, slot, 0);
-    machine_bytes(&mut machine, DATA, &[0; 16]);
-    machine_descriptor(&mut machine, 0, DATA, 16, 1, 1);
-    machine_descriptor(&mut machine, 1, DATA + 0x100, 513, 2, 0);
-    machine_available(&mut machine, 0);
-    machine_kick(&mut machine, slot, 0);
-    let request = machine
-        .next_host_block_request(slot)
-        .unwrap()
-        .expect("request");
-    machine
-        .complete_host_block_request(
-            slot,
-            request.generation,
-            request.id,
-            HostBlockOutcome::Success(vec![0; 511]),
-        )
-        .expect("malformed reply becomes I/O error");
-    assert_eq!(
-        machine_read(&mut machine, USED + 2, AccessWidth::HalfWord),
-        1
-    );
-    assert_eq!(machine.read_ram(DATA + 0x300, 1).unwrap(), &[1]);
 }
 
 #[test]

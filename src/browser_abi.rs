@@ -4,14 +4,12 @@ use std::cell::RefCell;
 
 use crate::browser_input::{BrowserInputQueue, NetworkInputResult};
 use crate::browser_runtime::{
-    BrowserRuntime, EntropyCallback, HostAction, HostBlockAction, QuantumOutcome, QuantumStart,
-    RuntimeStart,
+    BrowserRuntime, EntropyCallback, HostAction, QuantumOutcome, QuantumStart, RuntimeStart,
 };
 use crate::config::VmConfig;
-use crate::host_block::{
-    HostBlockGeneration, HostBlockKind, HostBlockOutcome, HostBlockProviderId, HostBlockRequestId,
-};
 
+#[path = "browser_abi/block.rs"]
+pub mod block;
 #[path = "browser_abi/ninep.rs"]
 pub mod ninep;
 
@@ -33,6 +31,7 @@ struct AbiState {
     runtime: BrowserRuntime,
     action: Option<HostAction>,
     filesystems: ninep::FilesystemAbi,
+    blocks: block::BlockAbi,
 }
 
 thread_local! {
@@ -126,6 +125,46 @@ pub extern "C" fn riscbox_start_resolved(
     height: u32,
     has_network: u32,
 ) -> i32 {
+    start_resolved(
+        config_address,
+        config_length,
+        ram_mib,
+        width,
+        height,
+        has_network,
+        false,
+    )
+}
+
+#[must_use]
+pub extern "C" fn riscbox_prepare_resolved(
+    config_address: u32,
+    config_length: u32,
+    ram_mib: u32,
+    width: u32,
+    height: u32,
+    has_network: u32,
+) -> i32 {
+    start_resolved(
+        config_address,
+        config_length,
+        ram_mib,
+        width,
+        height,
+        has_network,
+        true,
+    )
+}
+
+fn start_resolved(
+    config_address: u32,
+    config_length: u32,
+    ram_mib: u32,
+    width: u32,
+    height: u32,
+    has_network: u32,
+    prepare: bool,
+) -> i32 {
     STATE.with_borrow_mut(|state| {
         let Some(source) = allocated_string(state, config_address, config_length) else {
             return -1;
@@ -141,20 +180,20 @@ pub extern "C" fn riscbox_start_resolved(
         if memory == 0 {
             return -1;
         }
-        state
-            .runtime
-            .start_resolved(
-                RuntimeStart {
-                    config_url: String::new(),
-                    ram_mib: memory,
-                    command_line: String::new(),
-                    width,
-                    height,
-                    has_network: has_network != 0,
-                },
-                config,
-            )
-            .map_or(-1, |()| 0)
+        let start = RuntimeStart {
+            config_url: String::new(),
+            ram_mib: memory,
+            command_line: String::new(),
+            width,
+            height,
+            has_network: has_network != 0,
+        };
+        if prepare {
+            state.runtime.prepare_resolved(start, config)
+        } else {
+            state.runtime.start_resolved(start, config)
+        }
+        .map_or(-1, |()| 0)
     })
 }
 
@@ -166,6 +205,9 @@ pub extern "C" fn riscbox_halt() -> i32 {
 #[must_use]
 pub extern "C" fn riscbox_reset() -> i32 {
     STATE.with_borrow_mut(|state| {
+        if state.blocks.has_pending() {
+            return -1;
+        }
         if state.runtime.reset().is_err() {
             return -1;
         }
@@ -180,6 +222,20 @@ pub extern "C" fn riscbox_destroy() -> i32 {
         if state.runtime.destroy().is_err() {
             return -1;
         }
+        state.filesystems.destroy();
+        state.blocks.retire(None);
+        state.input_queue = BrowserInputQueue::default();
+        0
+    })
+}
+
+#[must_use]
+pub extern "C" fn riscbox_cold_reset() -> i32 {
+    STATE.with_borrow_mut(|state| {
+        if state.runtime.cold_reset().is_err() {
+            return -1;
+        }
+        state.blocks.retire(None);
         state.input_queue = BrowserInputQueue::default();
         0
     })
@@ -347,14 +403,12 @@ pub extern "C" fn riscbox_next_action() -> u32 {
         match state.action {
             Some(HostAction::Request(_)) => 1,
             Some(HostAction::Started) => 2,
+            Some(HostAction::Prepared) => 15,
             Some(HostAction::Console(_)) => 3,
             Some(HostAction::Network(_)) => 4,
             Some(HostAction::Framebuffer(_)) => 6,
             Some(HostAction::Halted(_)) => 10,
             Some(HostAction::Reset(_)) => 11,
-            Some(HostAction::HostBlock(HostBlockAction::Request(_))) => 12,
-            Some(HostAction::HostBlock(HostBlockAction::Reset { .. })) => 13,
-            Some(HostAction::HostBlock(HostBlockAction::Close { .. })) => 14,
             None => 0,
         }
     })
@@ -365,47 +419,14 @@ pub extern "C" fn riscbox_action_value() -> u32 {
     STATE.with_borrow(|state| match state.action.as_ref() {
         Some(HostAction::Request(request)) => request.id,
         Some(HostAction::Halted(cause) | HostAction::Reset(cause)) => *cause as u32,
-        Some(HostAction::HostBlock(HostBlockAction::Request(request))) => {
-            u32::from(request.kind == HostBlockKind::Write)
-        }
         _ => 0,
     })
 }
 
 #[must_use]
-pub extern "C" fn riscbox_action_endpoint() -> u32 {
-    STATE.with_borrow(|state| match state.action.as_ref() {
-        Some(HostAction::HostBlock(action)) => match action {
-            HostBlockAction::Request(request) => request.provider.0,
-            HostBlockAction::Reset { provider, .. } | HostBlockAction::Close { provider } => {
-                provider.0
-            }
-        },
-        _ => 0,
-    })
-}
-
-#[must_use]
-pub extern "C" fn riscbox_action_generation() -> u32 {
-    STATE.with_borrow(|state| match state.action.as_ref() {
-        Some(HostAction::HostBlock(HostBlockAction::Request(request))) => request.generation.0,
-        Some(HostAction::HostBlock(HostBlockAction::Reset { generation, .. })) => generation.0,
-        _ => 0,
-    })
-}
-
-#[must_use]
-pub extern "C" fn riscbox_action_request_id() -> u32 {
-    STATE.with_borrow(|state| match state.action.as_ref() {
-        Some(HostAction::HostBlock(HostBlockAction::Request(request))) => request.id.0,
-        _ => 0,
-    })
-}
-
-#[must_use]
-pub extern "C" fn riscbox_action_reply_capacity() -> u32 {
-    STATE.with_borrow(|state| match state.action.as_ref() {
-        Some(HostAction::HostBlock(HostBlockAction::Request(request))) => request.length,
+pub extern "C" fn riscbox_action_disk() -> u32 {
+    STATE.with_borrow(|state| match &state.action {
+        Some(HostAction::Request(request)) => request.disk.map_or(0, |disk| disk.0 + 1),
         _ => 0,
     })
 }
@@ -454,62 +475,12 @@ pub extern "C" fn riscbox_action_stride() -> u32 {
 }
 
 #[must_use]
-pub extern "C" fn riscbox_action_sector_low() -> u32 {
-    STATE.with_borrow(|state| match state.action.as_ref() {
-        Some(HostAction::HostBlock(HostBlockAction::Request(request))) => {
-            u32::try_from(request.sector & u64::from(u32::MAX)).unwrap_or(0)
-        }
-        _ => 0,
-    })
-}
-
-#[must_use]
-pub extern "C" fn riscbox_action_sector_high() -> u32 {
-    STATE.with_borrow(|state| match state.action.as_ref() {
-        Some(HostAction::HostBlock(HostBlockAction::Request(request))) => {
-            u32::try_from(request.sector >> 32).unwrap_or(0)
-        }
-        _ => 0,
-    })
-}
-
-#[must_use]
-pub extern "C" fn riscbox_block_complete(
-    provider: u32,
-    generation: u32,
-    id: u32,
-    status: u32,
-    address: u32,
-    length: u32,
-) -> i32 {
-    STATE.with_borrow_mut(|state| {
-        let result = match status {
-            0 => match completion_bytes(state, address, length) {
-                Some(bytes) => HostBlockOutcome::Success(bytes),
-                None => return -1,
-            },
-            1 if length == 0 => HostBlockOutcome::IoError,
-            _ => return -1,
-        };
-        state
-            .runtime
-            .complete_host_block(
-                HostBlockProviderId(provider),
-                HostBlockGeneration(generation),
-                HostBlockRequestId(id),
-                result,
-            )
-            .map_or(-1, |()| 0)
-    })
-}
-
-#[must_use]
 pub extern "C" fn riscbox_http_complete(id: u32, status: u32, address: u32, length: u32) -> i32 {
     let Ok(status) = u16::try_from(status) else {
         return -1;
     };
     STATE.with_borrow_mut(|state| {
-        let Some(bytes) = allocated_bytes(state, address, length).map(<[u8]>::to_vec) else {
+        let Some(bytes) = completion_bytes(state, address, length) else {
             return -1;
         };
         state
@@ -551,12 +522,11 @@ fn action_bytes(state: &AbiState) -> Option<&[u8]> {
     match state.action.as_ref()? {
         HostAction::Request(request) => Some(request.url.as_bytes()),
         HostAction::Console(bytes) | HostAction::Network(bytes) => Some(bytes),
-        HostAction::HostBlock(HostBlockAction::Request(request)) => Some(&request.data),
         HostAction::Framebuffer(update) => state.runtime.framebuffer_bytes(*update),
-        HostAction::Started | HostAction::Halted(_) | HostAction::Reset(_) => None,
-        HostAction::HostBlock(HostBlockAction::Reset { .. } | HostBlockAction::Close { .. }) => {
-            None
-        }
+        HostAction::Prepared
+        | HostAction::Started
+        | HostAction::Halted(_)
+        | HostAction::Reset(_) => None,
     }
 }
 

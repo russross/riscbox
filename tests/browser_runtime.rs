@@ -1,12 +1,13 @@
+use riscbox::block_storage::BlockDiskId;
 use riscbox::browser_input::BrowserInputQueue;
 use riscbox::browser_runtime::{
-    BrowserRuntime, HostAction, HostBlockAction, LifecycleCause, QuantumOutcome, QuantumStart,
-    RuntimeError, RuntimeStart,
+    BrowserRuntime, HostAction, LifecycleCause, QuantumOutcome, QuantumStart, RuntimeError,
+    RuntimeStart,
 };
+use riscbox::browser_storage::StorageError;
 use riscbox::config::VmConfig;
-use riscbox::host_block::HostBlockProviderId;
-use riscbox::ninep::{FileRead, Filesystem, Limits};
-use riscbox::ninep_backend::RustFilesystem;
+use riscbox::ninep::Filesystem;
+use riscbox::virtio_devices::BlockBackend;
 
 fn start() -> RuntimeStart {
     RuntimeStart {
@@ -17,152 +18,6 @@ fn start() -> RuntimeStart {
         height: 0,
         has_network: false,
     }
-}
-
-#[test]
-fn filesystem_handle_claims_one_vm_and_releases_on_destroy_or_failed_start() {
-    let tree = RustFilesystem::new(Filesystem::new(Limits::default(), 100));
-    let config = VmConfig::from_resolved(
-        r#"{"version":1,"machine":"riscv64","memory_size":32,"console":"uart",
-        "uart_output":true,"rtc_local_time":false,"cmdline":"","bios":"https://host/fw.bin",
-        "fs0":{"server":"share","tag":"first"},"fs1":{"server":"alias","tag":"second"}}"#,
-    )
-    .unwrap();
-    let mut first = BrowserRuntime::default();
-    first
-        .register_filesystem_handle("share".into(), tree.clone())
-        .unwrap();
-    first
-        .register_filesystem_handle("alias".into(), tree.clone())
-        .unwrap();
-    first.start_resolved(start(), config.clone()).unwrap();
-    let (id, _) = request(&mut first);
-    first
-        .complete_http(id, 200, vec![0x73, 0, 0x50, 0x10])
-        .unwrap();
-    assert!(tree.is_attached());
-    let mut second = BrowserRuntime::default();
-    second
-        .register_filesystem_handle("share".into(), tree.clone())
-        .unwrap();
-    second
-        .register_filesystem_handle("alias".into(), tree.clone())
-        .unwrap();
-    second.start_resolved(start(), config.clone()).unwrap();
-    let (id, _) = request(&mut second);
-    assert!(
-        second
-            .complete_http(id, 200, vec![0x73, 0, 0x50, 0x10])
-            .is_err()
-    );
-    first.reset().unwrap();
-    assert!(tree.is_attached());
-    first.halt().unwrap();
-    assert!(tree.is_attached());
-    first.destroy().unwrap();
-    assert!(!tree.is_attached());
-    second.start_resolved(start(), config.clone()).unwrap();
-    let (id, _) = request(&mut second);
-    assert!(second.complete_http(id, 200, Vec::new()).is_err());
-    assert!(!tree.is_attached());
-    second.start_resolved(start(), config).unwrap();
-    let (id, _) = request(&mut second);
-    second
-        .complete_http(id, 200, vec![0x73, 0, 0x50, 0x10])
-        .unwrap();
-    assert!(tree.is_attached());
-    second.halt().unwrap();
-    second.destroy().unwrap();
-    assert!(!tree.is_attached());
-}
-
-#[test]
-fn registered_rust_namespace_exists_before_boot_and_survives_vm_lifetimes() {
-    let mut runtime = BrowserRuntime::default();
-    runtime
-        .register_filesystem("workspace".into(), Filesystem::new(Limits::default(), 100))
-        .unwrap();
-    runtime
-        .with_filesystem("workspace", |fs| fs.write_file("host", b"before"))
-        .unwrap();
-    assert!(
-        runtime
-            .register_filesystem("workspace".into(), Filesystem::new(Limits::default(), 100))
-            .is_err()
-    );
-    for _ in 0..2 {
-        let config = VmConfig::from_resolved(
-            r#"{"version":1,"machine":"riscv64","memory_size":32,"console":"uart",
-            "uart_output":true,"rtc_local_time":false,"cmdline":"",
-            "bios":"https://host/fw.bin","fs0":{"server":"workspace","tag":"shared"},
-            "fs1":{"server":"workspace","tag":"peer"}}"#,
-        )
-        .unwrap();
-        runtime.start_resolved(start(), config).unwrap();
-        let (firmware, _) = request(&mut runtime);
-        runtime
-            .complete_http(firmware, 200, vec![0x73, 0, 0x50, 0x10])
-            .unwrap();
-        assert_eq!(runtime.next_action(), Some(HostAction::Started));
-        assert!(runtime.next_action().is_none());
-        assert_eq!(
-            runtime
-                .with_filesystem("workspace", |fs| fs.read_file("host"))
-                .unwrap(),
-            FileRead::Resident(b"before".to_vec())
-        );
-        runtime.reset().unwrap();
-        assert_eq!(
-            runtime
-                .with_filesystem("workspace", |fs| fs.read_file("host"))
-                .unwrap(),
-            FileRead::Resident(b"before".to_vec())
-        );
-        runtime.halt().unwrap();
-        runtime.destroy().unwrap();
-        assert!(runtime.next_ninep_load().is_none());
-    }
-    runtime
-        .with_filesystem("workspace", Filesystem::reset)
-        .unwrap();
-    assert!(
-        runtime
-            .with_filesystem("workspace", |fs| fs.read_file("host"))
-            .is_err()
-    );
-}
-
-#[test]
-fn destroy_cancels_startup_and_retires_late_http_without_losing_filesystems() {
-    let mut runtime = BrowserRuntime::default();
-    runtime
-        .register_filesystem("workspace".into(), Filesystem::new(Limits::default(), 100))
-        .unwrap();
-    runtime
-        .with_filesystem("workspace", |fs| fs.write_file("host", b"retained"))
-        .unwrap();
-    runtime.start(start()).unwrap();
-    let (old_config, _) = request(&mut runtime);
-    runtime.destroy().unwrap();
-    runtime.start(start()).unwrap();
-    let (new_config, _) = request(&mut runtime);
-    assert_ne!(old_config, new_config);
-    runtime.complete_http(old_config, 404, Vec::new()).unwrap();
-    runtime.complete_http(new_config, 200, br#"{version:1,machine:"riscv64",memory_size:32,bios:"fw.bin",console:"uart",fs0:{server:"workspace",tag:"shared"}}"#.to_vec()).unwrap();
-    let (old_firmware, _) = request(&mut runtime);
-    runtime.destroy().unwrap();
-    runtime
-        .complete_http(old_firmware, 200, vec![0; 64])
-        .unwrap();
-    assert!(!runtime.is_running());
-    assert_eq!(runtime.next_action(), None);
-    assert_eq!(
-        runtime
-            .with_filesystem("workspace", |fs| fs.read_file("host"))
-            .unwrap(),
-        FileRead::Resident(b"retained".to_vec())
-    );
-    runtime.destroy().unwrap();
 }
 
 #[test]
@@ -185,7 +40,7 @@ fn resolved_mixed_drives_load_in_guest_order() {
         r#"{"version":1,"machine":"riscv64","memory_size":32,
         "console":"uart","uart_output":false,"rtc_local_time":false,"cmdline":"",
         "bios":"https://host/firmware.bin",
-        "drive0":{"provider":7,"capacity_sectors":"8"},
+        "drive0":{"capacity_sectors":"8"},
         "drive1":{"file":"https://host/disk/blk.txt"}}"#,
     )
     .expect("mixed drives");
@@ -204,12 +59,7 @@ fn resolved_mixed_drives_load_in_guest_order() {
     assert_eq!(runtime.next_action(), Some(HostAction::Started));
     runtime.halt().expect("halt");
     runtime.destroy().expect("destroy");
-    assert!(matches!(
-        runtime.next_action(),
-        Some(HostAction::HostBlock(HostBlockAction::Close {
-            provider: HostBlockProviderId(7)
-        }))
-    ));
+    assert_eq!(runtime.next_action(), None);
 }
 
 #[test]
@@ -672,21 +522,6 @@ fn drive_manifest_precedes_machine_start_and_prefetch_requests_follow_it() {
 }
 
 #[test]
-fn unbound_9p_filesystems_reject_startup() {
-    let mut runtime = BrowserRuntime::default();
-    runtime.start(start()).expect("start");
-    let (config_id, _) = request(&mut runtime);
-    runtime.complete_http(config_id, 200,
-        br#"{version:1,machine:"riscv64",memory_size:32,bios:"fw.bin",console:"uart",fs0:{server:"missing",tag:"shared"}}"#.to_vec()).expect("config");
-    let (firmware_id, _) = request(&mut runtime);
-    assert!(matches!(
-        runtime.complete_http(firmware_id, 200, vec![0; 64]),
-        Err(RuntimeError::InvalidConfig(_))
-    ));
-    assert!(!runtime.is_running());
-}
-
-#[test]
 fn framebuffer_updates_coexist_with_the_virtio_console() {
     let mut runtime = BrowserRuntime::default();
     runtime.start(start()).expect("start");
@@ -760,4 +595,173 @@ fn wfi_sleep_uses_bounded_wakeup_delay() {
     assert_eq!(outcome, QuantumOutcome::WfiSleep);
     assert_eq!(runtime.finish_quantum(1.0, 1_000_001).expect("finish"), 99);
     assert_eq!(runtime.next_action(), None);
+}
+
+// Preparation creates all platform storage before any instruction executes.
+fn prepared_storage_platform() -> BrowserRuntime {
+    let config = VmConfig::from_resolved(
+        r#"{"version":1,"machine":"riscv64","memory_size":32,
+        "console":"uart","uart_output":false,"rtc_local_time":false,"cmdline":"",
+        "bios":"https://host/fw.bin","drive0":{"capacity_sectors":"8"},
+        "drive1":{"file":"https://host/disk/blk.txt"},
+        "fs0":{"server":"workspace","tag":"shared"},
+        "fs1":{"server":"workspace","tag":"peer"}}"#,
+    )
+    .unwrap();
+    let mut runtime = BrowserRuntime::default();
+    runtime.prepare_resolved(start(), config).unwrap();
+    let (id, _) = request(&mut runtime);
+    runtime
+        .complete_http(id, 200, vec![0x73, 0, 0x50, 0x10])
+        .unwrap();
+    let (id, _) = request(&mut runtime);
+    runtime
+        .complete_http(id, 200, b"{block_size:1,n_block:2}".to_vec())
+        .unwrap();
+    assert_eq!(runtime.next_action(), Some(HostAction::Prepared));
+    assert!(runtime.is_halted());
+    runtime
+}
+
+#[test]
+fn failed_platform_construction_does_not_publish_partial_storage() {
+    let config = VmConfig::parse(
+        "{version:1,machine:\"riscv64\",memory_size:32,bios:\"fw.bin\",bios_address:\"0x90000000\",fs0:{server:\"workspace\",tag:\"shared\"}}",
+    ).unwrap();
+    let mut runtime = BrowserRuntime::default();
+    runtime.prepare_resolved(start(), config).unwrap();
+    let (id, _) = request(&mut runtime);
+    assert!(
+        runtime
+            .complete_http(id, 200, vec![0x73, 0, 0x50, 0x10])
+            .is_err()
+    );
+    assert!(runtime.filesystem_handle("workspace").is_none());
+    assert!(!runtime.is_halted() && !runtime.is_running());
+    runtime.destroy().unwrap();
+}
+
+#[test]
+fn platform_storage_survives_reboots_and_destroy_releases_all_names() {
+    let mut runtime = prepared_storage_platform();
+    runtime
+        .with_filesystem("workspace", |fs| fs.write_file("host", b"before"))
+        .unwrap();
+    runtime
+        .with_disk(BlockDiskId(0), |store| store.write_sectors(1, &[7; 512]))
+        .unwrap()
+        .unwrap();
+    runtime.reset().unwrap();
+    assert!(
+        runtime
+            .with_disk(BlockDiskId(0), |store| store.capacity_sectors())
+            .is_err()
+    );
+    runtime
+        .with_filesystem("workspace", |fs| fs.write_file("host", b"during"))
+        .unwrap();
+    runtime.reset().unwrap();
+    runtime.halt().unwrap();
+    let mut bytes = [0; 512];
+    runtime
+        .with_disk(BlockDiskId(0), |store| store.read_sectors(1, &mut bytes))
+        .unwrap()
+        .unwrap();
+    assert_eq!(bytes, [7; 512]);
+    assert_eq!(
+        runtime
+            .with_filesystem("workspace", |fs| fs.read_file("host"))
+            .unwrap(),
+        b"during"
+    );
+    runtime.cold_reset().unwrap();
+    runtime
+        .with_filesystem("workspace", Filesystem::reset)
+        .unwrap();
+    assert!(
+        runtime
+            .with_filesystem("workspace", |fs| fs.read_file("host"))
+            .is_err()
+    );
+    runtime.reset().unwrap();
+    runtime.halt().unwrap();
+    runtime.destroy().unwrap();
+    assert!(runtime.filesystem_handle("workspace").is_none());
+    assert!(
+        runtime
+            .with_disk(BlockDiskId(0), |store| store.capacity_sectors())
+            .is_err()
+    );
+}
+
+#[test]
+fn powered_off_http_reads_writes_and_discard_use_the_same_store() {
+    let mut runtime = prepared_storage_platform();
+    let disk = BlockDiskId(1);
+    runtime
+        .with_disk(disk, |store| store.write_sectors(1, &[9; 512]))
+        .unwrap()
+        .unwrap();
+    assert_eq!(runtime.next_action(), None);
+    let mut data = [0; 1024];
+    assert_eq!(
+        runtime
+            .with_disk(disk, |store| store.read_sectors(0, &mut data))
+            .unwrap(),
+        Err(StorageError::MissingBlock(0))
+    );
+    let (id, _) = request(&mut runtime);
+    runtime.complete_http(id, 200, vec![3; 1024]).unwrap();
+    runtime
+        .with_disk(disk, |store| store.read_sectors(0, &mut data))
+        .unwrap()
+        .unwrap();
+    assert_eq!(&data[..512], &[3; 512]);
+    assert_eq!(&data[512..], &[9; 512]);
+    runtime.discard_disk_changes(disk).unwrap();
+    runtime
+        .with_disk(disk, |store| store.read_sectors(0, &mut data))
+        .unwrap()
+        .unwrap();
+    assert_eq!(data, [3; 1024]);
+    assert!(runtime.discard_disk_changes(BlockDiskId(0)).is_err());
+    assert_eq!(
+        runtime
+            .with_disk(disk, |store| store.read_sectors(2, &mut data))
+            .unwrap(),
+        Err(StorageError::MissingBlock(1))
+    );
+    let (old, _) = request(&mut runtime);
+    runtime.discard_disk_changes(disk).unwrap();
+    runtime.complete_http(old, 200, vec![5; 1024]).unwrap();
+    assert_eq!(
+        runtime
+            .with_disk(disk, |store| store.read_sectors(2, &mut data))
+            .unwrap(),
+        Err(StorageError::MissingBlock(1))
+    );
+}
+
+#[test]
+fn destroy_cancels_configuration_and_boot_asset_requests() {
+    let mut runtime = BrowserRuntime::default();
+    runtime.start(start()).unwrap();
+    let (old, _) = request(&mut runtime);
+    runtime.destroy().unwrap();
+    runtime.start(start()).unwrap();
+    let (current, _) = request(&mut runtime);
+    assert_ne!(old, current);
+    runtime.complete_http(old, 404, Vec::new()).unwrap();
+    runtime
+        .complete_http(
+            current,
+            200,
+            br#"{version:1,machine:"riscv64",memory_size:32,bios:"fw.bin"}"#.to_vec(),
+        )
+        .unwrap();
+    let (firmware, _) = request(&mut runtime);
+    runtime.destroy().unwrap();
+    runtime.complete_http(firmware, 200, vec![0; 64]).unwrap();
+    assert_eq!(runtime.next_action(), None);
+    assert!(!runtime.is_running());
 }

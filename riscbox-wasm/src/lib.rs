@@ -40,36 +40,9 @@ pub extern "C" fn riscbox_free(address: u32, length: u32) {
     browser_abi::riscbox_free(address, length);
 }
 
-// Filesystem packets are copied into owned storage before namespace access.
-// Returned snapshots must be copied before another filesystem activation.
-#[unsafe(no_mangle)]
-pub extern "C" fn riscbox_fs_create(address: u32, length: u32) -> u32 {
-    browser_abi::ninep::riscbox_fs_create(address, length)
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn riscbox_fs_bind(handle: u32, address: u32, length: u32) -> i32 {
-    browser_abi::ninep::riscbox_fs_bind(handle, address, length)
-}
-
 #[unsafe(no_mangle)]
 pub extern "C" fn riscbox_fs_call(handle: u32, address: u32, length: u32) -> i32 {
     browser_abi::ninep::riscbox_fs_call(handle, address, length)
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn riscbox_fs_close(handle: u32) -> i32 {
-    browser_abi::ninep::riscbox_fs_close(handle)
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn riscbox_fs_next_load() -> u32 {
-    browser_abi::ninep::riscbox_fs_next_load()
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn riscbox_fs_complete_load(handle: u32, address: u32, length: u32) -> i32 {
-    browser_abi::ninep::riscbox_fs_complete_load(handle, address, length)
 }
 
 #[unsafe(no_mangle)]
@@ -250,26 +223,6 @@ pub extern "C" fn riscbox_action_value() -> u32 {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn riscbox_action_endpoint() -> u32 {
-    browser_abi::riscbox_action_endpoint()
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn riscbox_action_generation() -> u32 {
-    browser_abi::riscbox_action_generation()
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn riscbox_action_request_id() -> u32 {
-    browser_abi::riscbox_action_request_id()
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn riscbox_action_reply_capacity() -> u32 {
-    browser_abi::riscbox_action_reply_capacity()
-}
-
-#[unsafe(no_mangle)]
 pub extern "C" fn riscbox_action_data_address() -> u32 {
     browser_abi::riscbox_action_data_address()
 }
@@ -305,28 +258,84 @@ pub extern "C" fn riscbox_action_stride() -> u32 {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn riscbox_action_sector_low() -> u32 {
-    browser_abi::riscbox_action_sector_low()
+pub extern "C" fn riscbox_http_complete(id: u32, status: u32, address: u32, length: u32) -> i32 {
+    browser_abi::riscbox_http_complete(id, status, address, length)
+}
+
+// Share lookup does not require a separate construction or binding phase.
+#[unsafe(no_mangle)]
+pub extern "C" fn riscbox_fs_get(address: u32, length: u32) -> u32 {
+    browser_abi::ninep::riscbox_fs_get(address, length)
+}
+
+// Platform storage and preparation use the same copied raw ABI boundary.
+#[unsafe(no_mangle)]
+pub extern "C" fn riscbox_prepare_resolved(
+    config_address: u32,
+    config_length: u32,
+    ram_mib: u32,
+    width: u32,
+    height: u32,
+    has_network: u32,
+) -> i32 {
+    install_entropy_callback();
+    browser_abi::riscbox_prepare_resolved(
+        config_address,
+        config_length,
+        ram_mib,
+        width,
+        height,
+        has_network,
+    )
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn riscbox_action_sector_high() -> u32 {
-    browser_abi::riscbox_action_sector_high()
+pub extern "C" fn riscbox_cold_reset() -> i32 {
+    browser_abi::riscbox_cold_reset()
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn riscbox_block_complete(
-    provider: u32,
-    generation: u32,
-    id: u32,
-    status: u32,
+pub extern "C" fn riscbox_action_disk() -> u32 {
+    browser_abi::riscbox_action_disk()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn riscbox_disk_read(disk: u32, low: u32, high: u32, length: u32) -> i32 {
+    browser_abi::block::riscbox_disk_read(disk, low, high, length)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn riscbox_disk_finish(id: u32) -> i32 {
+    browser_abi::block::riscbox_disk_finish(id)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn riscbox_disk_write(
+    disk: u32,
+    low: u32,
+    high: u32,
     address: u32,
     length: u32,
 ) -> i32 {
-    browser_abi::riscbox_block_complete(provider, generation, id, status, address, length)
+    browser_abi::block::riscbox_disk_write(disk, low, high, address, length)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn riscbox_http_complete(id: u32, status: u32, address: u32, length: u32) -> i32 {
-    browser_abi::riscbox_http_complete(id, status, address, length)
+pub extern "C" fn riscbox_disk_discard(disk: u32) -> i32 {
+    browser_abi::block::riscbox_disk_discard(disk)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn riscbox_disk_capacity(disk: u32, high: u32) -> u32 {
+    browser_abi::block::riscbox_disk_capacity(disk, high)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn riscbox_disk_data_address() -> u32 {
+    browser_abi::block::riscbox_disk_data_address()
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn riscbox_disk_data_length() -> u32 {
+    browser_abi::block::riscbox_disk_data_length()
 }

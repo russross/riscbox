@@ -27,7 +27,7 @@ Release archive
 ---------------
 
 Each GitHub release has one `riscbox-VERSION.tar.gz` archive. Extract it into
-an application directory. Its `riscbox.js`, `riscbox.wasm`, `block/`, `p9/`,
+an application directory. Its `riscbox.js`, `riscbox.d.ts`, `riscbox.wasm`,
 and `network/` files are ready to serve as static browser assets. The configured
 Linux Image, OpenSBI firmware, and U-Boot binary are gzip-compressed under
 content-hash names (`linux-HASH.gz`, `fw_dynamic.bin-HASH.gz`, and
@@ -56,7 +56,7 @@ supply that Image.
 To boot a RISC-V installation ISO, use OpenSBI as `bios`, U-Boot as `kernel`,
 and attach the ISO as `drive0`. Split the `.iso` with `tools/splitimg.py` and
 set `drive0.file` to its `drive-HASH/blk.txt`, or attach its bytes through a
-host block provider. Allocate 512 MiB of RAM for the Alpine standard ISO.
+VM-owned byte array. Allocate 512 MiB of RAM for the Alpine standard ISO.
 U-Boot scans FAT EFI boot partitions, including El Torito boot images, for
 `/EFI/BOOT/BOOTRISCV64.EFI`. The ISO's EFI loader supplies its own kernel and
 initramfs; the included Linux Image is not required for this boot path.
@@ -133,7 +133,7 @@ Build targets
 Browser library
 ---------------
 
-`js/riscbox.js` in the source tree (`riscbox.js` in the release archive)
+`build/js/riscbox.js` built by `make js` (`riscbox.js` in the release archive)
 installs a global `Riscbox` class. Instantiate it with the WASM
 bytes and callbacks, then start it with a configuration URL and RAM size:
 
@@ -189,7 +189,7 @@ machine, attached devices, 9p servers, and disk contents. `boot()` starts a
 halted VM from its boot images; `reset()` immediately resets a running VM. A
 guest-initiated poweroff halts the VM, and a guest-initiated reboot resets it
 in place. `destroy()` releases a halted VM or cancels startup; a later boot
-then needs a new VM. Its runtime and filesystem handles remain usable.
+then needs a new VM. Its runtime can prepare another VM; all filesystem and disk objects become invalid.
 `onVmHalted(cause)` and `onVmReset(cause)` report `guest-poweroff`,
 `guest-reboot`, `host-halt`, `host-reset`, `host-boot`, or `guest-failure` as
 applicable. `onVmDestroyed()` reports teardown. `consoleReset()` and
@@ -226,14 +226,11 @@ The root Rust crate exposes the machine, device, configuration, storage, and
 browser-runtime modules for focused testing and custom Rust-side integration.
 `guest_memory` contains the shared guest-memory types and TinyEMU RAM bridge.
 The crate is not published on crates.io. Its stable deployment boundary is the
-raw WASM ABI wrapped by `js/riscbox.js`.
+raw WASM ABI wrapped by the generated `build/js/riscbox.js` adapter.
 
-The raw WASM exports also provide independently owned Rust filesystem handles
-for advanced embedding. They support host operations before VM startup,
-on-demand source tickets, change events, and retained state across VM lifetimes.
-The [filesystem ABI guide](src/browser_abi/ninep/README.md) documents packets,
-buffer lifetimes, and attachment rules. The promise facade below wraps these
-exports.
+The raw WASM exports provide VM-owned filesystem and disk handles for advanced
+embedding. The [storage ABI guide](src/browser_abi/ninep/README.md) documents
+copied packets, buffer lifetimes, and powered-off disk access.
 
 VM configuration
 ----------------
@@ -251,53 +248,56 @@ URLs when needed. `ramMiB` of zero uses the configuration's `memory_size`.
 `Riscbox.loadResolvedConfig(url, commandLine?, fetch?)` fetches a deployed
 configuration with `no-store` and returns the resolved object, so an embedding
 page can replace a drive entry before calling `startResolved`.
-Both startup methods load boot assets asynchronously, and the `onVmStarted` callback
-reports when the machine is ready. The older synchronous `start()` method
-remains for integrations using the legacy Rust config fetch path.
+Startup methods load boot assets asynchronously and boot the machine.
+`prepareResolved(config, ...)` and `prepareFromUrl(url, ...)` load and construct
+the same platform but leave it powered off. Populate storage before calling
+`await runtime.boot()`. The legacy `start()` also returns a promise.
 
-Pass `blockProviders: new Map([[1, provider]])` to `Riscbox.instantiate()`
-before starting a config with `drive0: { provider: 1, capacity_sectors: "..." }`.
-The provider implements `read(sector, length)`, `write(sector, bytes)`,
-`reset()`, and `close()` as defined in `js/block/index.ts`. `sector` is a
-`bigint`; reads return exactly `length` bytes in a `Uint8Array`, and writes
-resolve after the provider accepts the bytes. `reset()` clears pending
-interface work but retains stored data; `close()` runs on VM destroy. Errors
-and malformed read lengths complete the guest request with an I/O error.
-Copy data you need to retain before an asynchronous operation returns; the
-adapter copies guest write bytes and provider read replies across WASM memory.
-Observe an orderly guest shutdown before treating a writable host image as
-synchronized, since the guest kernel may buffer writes.
+Block storage
+-------------
 
-The parallel TypeScript HTTP provider opens an existing split-image manifest.
-Its `capacitySectors` supplies the resolved drive capacity; it keeps a bounded
-clean-block cache (16 MiB initially, growing for a single request) and a
-session-local 4 KiB copy-on-write overlay. The original `drive0: { file: ... }`
-path remains available. Import the generated module and register the provider:
+Rust owns disk bytes, the clean HTTP cache, and copy-on-write overlays.
+`drive0: { file: manifestUrl }` selects a split HTTP image.
+`drive0: { bytes: imageBytes }` copies a whole-sector `Uint8Array` into Rust;
+`drive0: { capacity_sectors: "131072" }` allocates a zeroed writable disk.
+Consecutive drive numbers preserve guest order for mixed HTTP and array disks.
 
 ```js
-import { openHttpBlockProvider } from "./block/http.js";
-
-const disk = await openHttpBlockProvider(new URL("./drive/blk.txt", location.href).href);
-const runtime = await Riscbox.instantiate(wasmBytes, {
-    blockProviders: new Map([[1, disk]]),
-});
-await runtime.startResolved({
+await runtime.prepareResolved({
     version: 1, machine: "riscv64", memory_size: 256,
     bios: firmwareUrl, kernel: kernelUrl,
-    drive0: { provider: 1, capacity_sectors: disk.capacitySectors.toString() },
+    drive0: { bytes: imageBytes },
 });
+const disk = runtime.block(0);
+disk.write(0n, bootSector);             // synchronous, whole 512-byte sectors
+const image = await disk.read(0n, Number(disk.capacitySectors) * 512);
+await runtime.boot();
 ```
 
-For a writable host image, import `ArrayBlockProvider` from
-`./block/array.js` and register `new ArrayBlockProvider(bytes)` in the same
-`blockProviders` map. Pass its `capacitySectors` as the resolved drive
-capacity. The provider uses the caller's exact `Uint8Array` view. The array must
-contain a positive whole number of 512-byte sectors; a partial final sector
-is rejected. Reads return copies, and writes directly change the supplied
-array. `reset()` retains its contents. `close()` makes the provider unusable
-but leaves the caller's array intact for export. Use a clone when the source
-must remain pristine, and inspect or export a filesystem image after orderly
-guest shutdown.
+All host disk operations require a powered-off VM: before boot, after
+`halt()`, or after observed guest poweroff. Reads return copied bytes directly
+when resident, otherwise a promise while HTTP chunks load. Writes are always
+synchronous. HTTP writes record only changed sectors and never fetch a chunk
+to preserve its unwritten sectors. Array writes update Rust's store directly.
+The caller's original array and exported snapshots remain independent copies.
+Pending host reads must finish or be retired by `coldReset()` before boot.
+
+Halt, reboot, and reset retain bytes and HTTP overlays. While powered off,
+`disk.discardChanges()` removes an HTTP disk's overlay while retaining its
+clean cache; array disks reject overlay discard. `coldReset()` resets
+CPU/devices and clears RAM while preserving storage. Use both operations for a
+clean HTTP-backed boot. Destroy invalidates every disk and share and frees their
+contents; page reload also loses all runtime data. Observe orderly guest
+shutdown before exporting an image that requires guest filesystem consistency.
+Disk operations throw or reject with `BlockError` carrying positive Linux errno.
+
+For alternate immutable chunk transport, supply
+`fetchBlock: ({ disk, url, cache }) => Promise<Uint8Array>` to
+`Riscbox.instantiate()`. Rust still owns caching, deduplication, writes, errors,
+and lifecycle retirement. The hook receives zero-based disk indexes and chunk
+URLs; configuration, boot assets, and manifests use the regular `fetch` option.
+Failures and incorrectly sized chunks become guest I/O errors or rejected host
+reads. Obsolete replies after reset/destroy are ignored.
 
 Replace `HASH` in the following example with each asset's eight-character
 suffix, and replace the drive path with the directory reported by `splitimg.py`.
@@ -328,14 +328,12 @@ The main options are:
     `kernel_address: "0x100000000"`.
 *   `console` is `virtio` by default or `uart`. `uart_output: true` mirrors
     firmware and early-kernel UART output while input stays on VirtIO.
-*   Consecutive `drive0` through `drive3` add VirtIO block devices. Browser
-    HTTP block writes remain in memory and disappear with the VM. A drive may
-    instead specify `{ provider: 1, capacity_sectors: "131072" }` to attach a
-    host block provider. Drive numbers determine guest device order, including
-    mixed HTTP and host drives. Capacity counts 512-byte sectors; quote large
-    values to preserve their full width.
-*   Consecutive `fs0` through `fs3` use `{ server, tag }` to add host-provided
-    VirtIO 9p channels. `server` selects the host registry entry; `tag` is the
+*   Consecutive `drive0` through `drive3` add VirtIO block devices.
+    Use `{ file: "drive-HASH/blk.txt" }` for HTTP, `{ bytes: imageBytes }`
+    in a host object, or `{ capacity_sectors: "131072" }` for a zeroed array.
+    Capacity counts 512-byte sectors; quote large values to preserve full width.
+*   Consecutive `fs0` through `fs3` use `{ server, tag }` to add shared
+    VirtIO 9p channels. `server` names an automatic resident tree; `tag` is the
     guest-visible mount tag.
 *   `display0: { device: "simplefb", width, height }` adds a framebuffer, and
     `input_device: "virtio"` adds keyboard and tablet devices. `eth0` adds the
@@ -375,21 +373,21 @@ converts the completed ext4 setup image to one EROFS disk. Its configuration
 loads the custom Linux Image directly through OpenSBI; Linux mounts the disk
 read-only at `/dev/vda`. The xv6 profile also uses the builder's `--erofs`
 mode. Both use session-local writable `/tmp`, `/var`,
-and `/home` mounts. The xv6 profile browser page attaches its split disk through
-the TypeScript HTTP provider for local performance testing. Other image
+and `/home` mounts. Both browser pages attach their split disks through Rust. Other image
 definitions can continue distributing ext4. The image Makefiles show
 the exact call order. Keep downloads and generated files
 under `build/`; the final ignored output belongs in `dist/`.
 
-Risclet buffers editor changes and writes them to the shared filesystem when
-the editor loses focus, a file or example is selected, the VM is used, or thirty
-seconds have passed since the first unflushed edit. Later edits do not postpone
-that deadline. Failed writes retain the editor text and retry; switching waits
-for a successful flush. If the filesystem changes a file with unflushed edits,
-the demo asks whether to discard the editor version. Keeping it replaces the
-filesystem version on the next flush. Example files and edits are session-local
-and do not persist across a page reload. Instruction images refresh when their
-shared files change, and terminal pastes queue until the VM accepts their bytes.
+Risclet uses one VM and one resident share. It downloads complete example
+files before boot and caches their original bytes in the application.
+Selecting an example or pressing Reset discards edits, stops the VM, clears
+RAM and the HTTP overlay, replaces the share, and boots. Reboot requests an
+orderly guest reboot and retains edits and disk changes.
+
+Editor changes flush on blur, file selection, VM interaction, or thirty seconds
+after the first unflushed edit. Failed writes retain text for retry. External
+changes to dirty files require a discard decision. Instruction images refresh
+when their shared files change; terminal pastes queue until accepted.
 
 The distribution builder splits the disk into HTTP-loadable blocks, compresses
 the next-stage payload with `gzip -9`, and gives boot and disk assets
@@ -413,64 +411,43 @@ to editable student workspaces, importing starter files, exporting results,
 sharing one tree with host UI. It is not an authentication boundary or a
 persistent store by itself.
 
-Configure `fs0: { server: "workspace", tag: "shared" }`, then create and bind
-its filesystem before starting the VM:
+Configure `fs0: { server: "workspace", tag: "shared" }`. Preparation creates
+the named resident share automatically:
 
 ```js
-import { Filesystem, createHttpsSeedPlugin } from "./p9/index.js";
 const runtime = await Riscbox.instantiate(wasmBytes, options);
-const workspace = await Filesystem.create(runtime);
-await workspace.writeFile("hello.txt", "shared with the guest\n");
-await workspace.bind("workspace");
-await runtime.startFromUrl(configUrl);
-const bytes = await workspace.readFile("hello.txt");
+await runtime.prepareFromUrl(configUrl);
+const workspace = runtime.filesystem("workspace");
+workspace.writeFile("hello.txt", "shared with the guest\n");
+await runtime.boot();
+const bytes = workspace.readFile("hello.txt");
 ```
 
 Mount it in Linux with:
 
     mount -t 9p -o trans=virtio,version=9p2000.L,cache=none shared /mnt/shared
 
-Two simultaneous mounts need distinct configured tags; both may select one
-filesystem. Only one live VM may attach a filesystem. Reboot/reset retains
-files while resetting protocol state. Shutdown/halt preserves device state.
-Destroy releases the attachment but retains host access and bindings.
-`await workspace.reset()` replaces the namespace even while mounted; pending
-host reads receive `ESTALE`, and the guest may need to remount.
+Host methods are synchronous and throw `FilesystemError` with positive Linux
+`errno`. They include `readFile`, `writeFile`, `mkdir`, `remove`, `rename`,
+`listFiles`, `listDirectory`, `stat`, `symlink`, `readlink`, and `link`.
+Writes replace whole files and require existing parent directories. Paths are
+literal namespace paths; the empty path names the root directory.
 
-Host methods always return promises and reject with `FilesystemError` carrying
-positive Linux `errno`. They include whole-file reads/writes, directory and link
-operations, metadata, and change subscriptions. `await workspace.subscribe(fn)`
-returns an async unsubscribe function. Events include aliases and a numeric
-`bigint` host origin for filtering an application's own writes.
+`workspace.subscribe(listener)` returns a synchronous unsubscribe function.
+Copied change events are delivered after WASM returns, with aliases, host/guest
+source, and a `bigint` host origin for filtering application writes. Supply the
+origin as the final argument to mutations. Reads return copied byte arrays.
 
-9p source plugins
------------------
+Several configured tags may share one server name and independent protocol
+sessions. Host access works before boot, while running, and after poweroff.
+`workspace.clear()` replaces the tree only while powered off; reboot and reset
+retain it. Destroy invalidates all shares. Loaders, seed plugins, independent
+filesystem creation/binding, and source tickets are removed: applications fetch
+their own content and insert it through the regular API.
 
-Rust owns the 9P2000.L server. Custom plugins supply a namespace and asynchronous
-file bodies; generic JavaScript protocol servers are no longer supported:
-
-```ts
-interface SeedPlugin<Key> {
-    readonly entries: readonly SeedEntry<Key>[];
-    readonly loader: {
-        load(key: Key, signal: AbortSignal): Promise<Uint8Array>;
-    };
-}
-```
-
-Build entries with `SeedBuilder`, then `await workspace.installSeed(plugin)`.
-`createHttpsSeedPlugin()` supports HTTP manifests; `createTarSeedPlugin()`
-exposes an already downloaded archive. Hosts can supply credentials and protocol
-handling for other sources through the same loader interface. Bodies load only
-on host or guest reads; there is no preload mechanism. Concurrent readers join
-one source request. Failure returns `EIO`; `retrySource(path)` permits a later
-read to retry. Host writes supersede pending source bytes.
-
-The optional limits are `maxFileBytes`, `maxTreeBytes`, `maxInodes`, and
-`maxDirectoryEntries`: defaults are 256 MiB per file, 1 GiB of logical file data,
-and 2^20 inodes and directory entries. See the [facade guide](js/p9/README.md)
-for host methods, notifications, and lifecycle details, and the
-[protocol profile](src/ninep_protocol/README.md) for supported guest operations.
+Default quotas are 256 MiB per file, 1 GiB of logical file data, and 2^20 inodes
+and directory entries. The [storage ABI](src/browser_abi/ninep/README.md) and
+[protocol profile](src/ninep_protocol/README.md) describe the native contracts.
 
 Platform summary
 ----------------

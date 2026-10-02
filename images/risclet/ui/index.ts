@@ -12,14 +12,17 @@ import { EditorView, keymap, ViewUpdate } from "@codemirror/view";
 import { FitAddon, init as initializeGhostty, Terminal } from "ghostty-web";
 import { basicSetup } from "codemirror";
 import { TerminalInputQueue } from "./terminal_input";
-import { Filesystem, createHttpsSeedPlugin, type FilesystemRuntime, type HttpsSeedFile, type P9Change } from "../../../js/p9";
+import type { Filesystem, P9Change } from "../../../js/storage";
+import type { Riscbox as RiscboxRuntime } from "../../../js/riscbox";
+
+interface ExampleFile { readonly path: string; readonly size: number; }
 
 interface ExampleDescription {
     readonly id: string;
     readonly title: string;
     readonly editable: string;
     readonly documentation?: string;
-    readonly files: readonly HttpsSeedFile[];
+    readonly files: readonly ExampleFile[];
 }
 
 interface ExampleState {
@@ -33,50 +36,9 @@ interface FileTreeNode {
     children: Record<string, FileTreeNode>;
 }
 
-interface FramebufferGeometry {
-    readonly x: number;
-    readonly y: number;
-    readonly width: number;
-    readonly height: number;
-    readonly stride: number;
-}
-
-interface ResolvedVmConfig {
-    readonly version: number;
-    readonly machine: string;
-    readonly memory_size: number;
-}
-
-interface RiscboxRuntime extends FilesystemRuntime {
-    readonly started: boolean;
-    startResolved(config: ResolvedVmConfig, memoryMiB: number): number;
-    consoleInput(bytes: Uint8Array): number;
-    consoleResize(columns: number, rows: number): void;
-    boot(): Promise<void>;
-    reset(): Promise<void>;
-    halt(): Promise<void>;
-    destroy(): Promise<void>;
-}
-
-interface RiscboxOptions {
-    readonly debugTiming?: boolean;
-    readonly consoleWrite: (text: string | Uint8Array) => void;
-    readonly consoleReset?: () => void;
-    readonly onVmStarted: () => void;
-    readonly onVmHalted?: (cause: string) => void;
-    readonly onVmReset?: (cause: string) => void;
-    readonly onError: (error: unknown) => void;
-    readonly framebufferRefresh?: (bytes: Uint8Array, geometry: FramebufferGeometry) => void;
-}
-
-interface RiscboxApi {
-    instantiate(bytes: ArrayBuffer, options: RiscboxOptions): Promise<RiscboxRuntime>;
-    loadResolvedConfig(url: string): Promise<ResolvedVmConfig>;
-}
-
 declare global {
     interface Window {
-        Riscbox: RiscboxApi;
+        Riscbox: typeof RiscboxRuntime;
     }
 }
 
@@ -175,7 +137,7 @@ function parseExample(value: unknown): ExampleDescription {
     }
     const id = normalizeRelativePath(value.id);
     if (id.includes("/")) throw new Error("Example ID must be one path component");
-    const files = value.files.map((file: unknown): HttpsSeedFile => {
+    const files = value.files.map((file: unknown): ExampleFile => {
         if (typeof file !== "object" || file === null
             || !("path" in file) || typeof file.path !== "string"
             || !("size" in file) || typeof file.size !== "number"
@@ -281,7 +243,7 @@ async function openFile(path: string): Promise<void> {
     }
     let content: Uint8Array;
     try {
-        content = await example.filesystem.readFile(path);
+        content = example.filesystem.readFile(path);
     } catch (error: unknown) {
         if (view !== viewGeneration || request !== openGeneration || revision !== editorRevision) return;
         clearEditor();
@@ -329,7 +291,7 @@ function syncEditor(): Promise<void> {
         const revision = editorRevision;
         const content = fileContentFromEditor();
         try {
-            await example.filesystem.writeFile(path, content, EDITOR_ORIGIN);
+            example.filesystem.writeFile(path, content, EDITOR_ORIGIN);
         } catch (error: unknown) {
             scheduleEditorFlush();
             throw error;
@@ -403,7 +365,7 @@ async function renderFileTree(): Promise<void> {
     const request = ++treeGeneration;
     const example = currentExample;
     const pane = requiredElement("file-tree-pane");
-    const paths = example === null ? [] : await example.filesystem.listFiles();
+    const paths = example === null ? [] : example.filesystem.listFiles();
     if (view !== viewGeneration || request !== treeGeneration || example !== currentExample) return;
     if (currentPath !== null && !paths.includes(currentPath) && !editorIsDirty()) {
         clearEditor();
@@ -435,10 +397,10 @@ function imageMimeType(path: string): string | null {
 }
 
 async function renderInstructions(filesystem: Filesystem, dependencies: Set<string>): Promise<string> {
-    if (!(await filesystem.listFiles()).includes(DOC_PATH)) {
+    if (!(filesystem.listFiles()).includes(DOC_PATH)) {
         return "";
     }
-    const document = markdownParser.parse(decoder.decode(await filesystem.readFile(DOC_PATH)));
+    const document = markdownParser.parse(decoder.decode(filesystem.readFile(DOC_PATH)));
     const documentUrl = new URL(DOC_PATH, "https://workspace.invalid/");
     const walker = document.walker();
     let event = walker.next();
@@ -448,7 +410,7 @@ async function renderInstructions(filesystem: Filesystem, dependencies: Set<stri
             if (url.origin === documentUrl.origin) {
                 const path = decodeURIComponent(url.pathname.replace(/^\//, ""));
                 dependencies.add(path);
-                const content = await filesystem.readFile(path);
+                const content = filesystem.readFile(path);
                 const mimeType = imageMimeType(path);
                 if (mimeType === null) {
                     throw new Error(`Instruction image has an unsupported type: ${path}`);
@@ -529,7 +491,7 @@ async function handleFilesystemChange(example: ExampleState, change: P9Change): 
         // Structural notifications preserve a dirty buffer at its renamed path.
         // Content replacement requires an explicit decision before discarding it.
         if (editorIsDirty()) {
-            if (followsRename || change.kind === "metadata" || change.kind === "loaded") return;
+            if (followsRename || change.kind === "metadata") return;
             if (conflictPath === currentPath) return;
             if (!window.confirm("The filesystem changed this file while you have unflushed edits. Discard your edits and use the filesystem version? Keeping your edits will replace the filesystem version on the next flush.")) {
                 conflictPath = currentPath;
@@ -541,7 +503,7 @@ async function handleFilesystemChange(example: ExampleState, change: P9Change): 
         }
         const view = viewGeneration;
         const path = currentPath;
-        const paths = await example.filesystem.listFiles();
+        const paths = example.filesystem.listFiles();
         if (view !== viewGeneration || example !== currentExample || currentPath !== path) return;
         if (editorIsDirty()) return;
         if (paths.includes(currentPath)) {
@@ -554,6 +516,7 @@ async function handleFilesystemChange(example: ExampleState, change: P9Change): 
 
 class VmController {
     private readonly bootButton: HTMLButtonElement;
+    private readonly resetButton: HTMLButtonElement;
     private readonly fitAddon = new FitAddon();
     private readonly terminal: Terminal;
     private runtime: RiscboxRuntime | undefined;
@@ -568,6 +531,12 @@ class VmController {
 
     constructor(host: HTMLElement, bootButton: HTMLButtonElement) {
         this.bootButton = bootButton;
+        const resetButton = requiredElement("vm-reset-button");
+        if (!(resetButton instanceof HTMLButtonElement)) throw new Error("Reset control must be a button");
+        this.resetButton = resetButton;
+        resetButton.addEventListener("click", () => {
+            if (this.target) void switchExample(this.target).catch(reportUiError);
+        });
         this.terminal = new Terminal({
             convertEol: false,
             cursorBlink: true,
@@ -603,12 +572,41 @@ class VmController {
     }
 
     async setTarget(target: ExampleState): Promise<void> {
-        await this.stop();
+        const runtime = this.runtime;
+        if (!runtime) throw new Error("Runtime is unavailable");
+        this.state = "loading";
         this.target = target;
-        this.resetTerminal();
-        this.bootButton.hidden = false;
-        this.state = "ready";
+        this.clearInput();
         this.updateControls();
+        try {
+            if (runtime.started) await runtime.halt();
+            await runtime.coldReset();
+            runtime.block(0).discardChanges();
+            target.filesystem.clear();
+            const files = await loadExampleFiles(target.description);
+
+            // Populate parents before children so the regular API alone builds
+            // the resident namespace, including binary instruction assets.
+            const directories = new Set<string>();
+            for (const [path, bytes] of files) {
+                const parts = path.split("/");
+                for (let end = 1; end < parts.length; end++) {
+                    const directory = parts.slice(0, end).join("/");
+                    if (!directories.has(directory)) {
+                        target.filesystem.mkdir(directory);
+                        directories.add(directory);
+                    }
+                }
+                target.filesystem.writeFile(path, bytes);
+            }
+            this.resetTerminal();
+            this.bootButton.hidden = false;
+            this.state = "ready";
+            await this.boot();
+        } catch (error: unknown) {
+            this.fail(error instanceof Error ? error.message : String(error));
+            throw error;
+        }
     }
 
     fit(): void {
@@ -627,18 +625,6 @@ class VmController {
         }
     }
 
-    private async stop(): Promise<void> {
-        this.generation += 1;
-        this.clearInput();
-        const runtime = this.runtime;
-        this.state = "ready";
-        if (runtime) {
-            if (runtime.started) await runtime.halt();
-            await runtime.destroy();
-        }
-        this.state = "ready";
-    }
-
     private resetTerminal(): void {
         this.clearInput();
         this.terminal.reset();
@@ -647,20 +633,10 @@ class VmController {
     }
 
     private async reboot(): Promise<void> {
-        if (this.state === "running" && this.runtime) {
-            this.state = "loading";
-            this.clearInput();
-            this.updateControls();
-            try {
-                await this.runtime.reset();
-            } catch (error: unknown) {
-                this.fail(error instanceof Error ? error.message : String(error));
-            }
-            return;
-        }
-        await this.stop();
-        this.resetTerminal();
-        await this.boot();
+        if (!this.runtime) throw new Error("Runtime is unavailable");
+        this.clearInput();
+        if (this.state === "running") await this.runtime.requestReboot();
+        else await this.bootRetained();
     }
 
     private async bootRetained(): Promise<void> {
@@ -689,15 +665,9 @@ class VmController {
         try {
             const runtime = this.runtime;
             if (runtime === undefined) throw new Error("Runtime is unavailable");
-            const config = await window.Riscbox.loadResolvedConfig(new URL("riscbox.cfg", window.location.href).href);
-            if (generation !== this.generation) return;
-            await target.filesystem.bind("default");
             if (generation !== this.generation) return;
             this.fit();
-            const result = runtime.startResolved(config, 256);
-            if (result !== 0) {
-                throw new Error("Riscbox rejected the VM configuration");
-            }
+            await runtime.boot();
         } catch (error: unknown) {
             if (generation === this.generation) {
                 this.fail(error instanceof Error ? error.message : String(error));
@@ -705,8 +675,7 @@ class VmController {
         }
     }
 
-    // The runtime and host namespaces exist before any guest starts. VM teardown
-    // releases machine state while each example retains its filesystem handle.
+    // One prepared platform owns the disk and share used by every example.
     async prepareRuntime(): Promise<RiscboxRuntime> {
         const response = await fetch("riscbox.wasm", { cache: "no-cache" });
         if (!response.ok) throw new Error(`WASM request failed with status ${response.status}`);
@@ -725,6 +694,8 @@ class VmController {
             onError: (error): void => this.fail(error instanceof Error ? error.message : String(error)),
         });
         this.runtime = runtime;
+        const config = await window.Riscbox.loadResolvedConfig(new URL("riscbox.cfg", window.location.href).href);
+        await runtime.prepareResolved(config, 256);
         return runtime;
     }
 
@@ -753,6 +724,7 @@ class VmController {
 
     private updateControls(): void {
         this.bootButton.disabled = this.target === undefined || this.state === "loading";
+        this.resetButton.disabled = this.target === undefined || this.state === "loading";
         this.bootButton.textContent = this.state === "running" || this.state === "failed"
             ? "Reboot VM"
             : "Boot VM";
@@ -767,17 +739,31 @@ async function loadExamples(runtime: RiscboxRuntime): Promise<ExampleState[]> {
     const manifest: unknown = await manifestResponse.json();
     if (!Array.isArray(manifest)) throw new Error("Example manifest must be an array");
     const descriptions = manifest.map(parseExample);
-    return Promise.all(descriptions.map(async (description): Promise<ExampleState> => {
-        const files = description.files.map(file => ({ ...file, path: normalizeRelativePath(file.path) }));
-        const base = new URL(`examples/${encodeURIComponent(description.id)}/`, window.location.href);
-        const filesystem = await Filesystem.create(runtime);
-        await filesystem.installSeed(createHttpsSeedPlugin({ files }, base));
-        const state = { description, filesystem };
-        await filesystem.subscribe((change: P9Change): void => {
-            void handleFilesystemChange(state, change).catch(reportUiError);
-        });
-        return state;
+    const filesystem = runtime.filesystem("default");
+    filesystem.subscribe((change: P9Change): void => {
+        if (currentExample !== null) void handleFilesystemChange(currentExample, change).catch(reportUiError);
+    });
+    return descriptions.map(description => ({ description, filesystem }));
+}
+
+// Example downloads belong to the application. A populated share contains all
+// bytes before boot, so guest and editor operations are always synchronous.
+const exampleFiles = new Map<string, ReadonlyMap<string, Uint8Array>>();
+async function loadExampleFiles(description: ExampleDescription): Promise<ReadonlyMap<string, Uint8Array>> {
+    const cached = exampleFiles.get(description.id);
+    if (cached) return cached;
+    const base = new URL(`examples/${encodeURIComponent(description.id)}/`, window.location.href);
+    const entries = await Promise.all(description.files.map(async (file): Promise<readonly [string, Uint8Array]> => {
+        const path = file.path.split("/").map(encodeURIComponent).join("/");
+        const response = await fetch(new URL(path, base));
+        if (!response.ok) throw new Error(`Example file ${file.path}: HTTP ${response.status}`);
+        const bytes = new Uint8Array(await response.arrayBuffer());
+        if (bytes.length !== file.size) throw new Error(`Example file ${file.path}: incorrect size`);
+        return [file.path, bytes];
     }));
+    const files = new Map(entries);
+    exampleFiles.set(description.id, files);
+    return files;
 }
 
 function renderMenu(): void {
@@ -799,11 +785,14 @@ function renderMenu(): void {
 
 function switchExample(example: ExampleState): Promise<void> {
     const generation = ++viewGeneration;
-    // Serialize machine teardown and selection while old body reads can finish
-    // independently. Only the newest view request may update the visible panes.
+    for (const button of document.querySelectorAll<HTMLButtonElement>(".example-button")) {
+        button.disabled = false;
+    }
+    // Serialize powered-off storage replacement and reboot. Only the newest
+    // selection may update the visible panes after example downloads finish.
     const selection = switchQueue.then(async () => {
         if (generation !== viewGeneration) return false;
-        await syncEditor();
+        clearEditor();
         await vmController.setTarget(example);
         return generation === viewGeneration;
     });
@@ -820,7 +809,7 @@ async function showExample(example: ExampleState, generation: number): Promise<v
     clearEditor();
     await Promise.all([renderFileTree(), updateInstructions()]);
     if (generation !== viewGeneration) return;
-    const paths = await example.filesystem.listFiles();
+    const paths = example.filesystem.listFiles();
     if (generation !== viewGeneration) return;
     const preferred = paths.includes(example.description.editable)
         ? example.description.editable
@@ -829,7 +818,7 @@ async function showExample(example: ExampleState, generation: number): Promise<v
         await openFile(preferred);
     }
     if (generation !== viewGeneration) return;
-    requiredElement("status").textContent = `Ready · ${example.description.title}`;
+    requiredElement("status").textContent = `Running · ${example.description.title}`;
     if (paths.includes(DOC_PATH)) {
         selectTab("instructions");
     } else {
@@ -874,6 +863,7 @@ async function initialize(): Promise<void> {
     requiredButton("vm-tab-button").addEventListener("click", (): void => selectTab("vm"));
     const runtime = await vmController.prepareRuntime();
     examples = await loadExamples(runtime);
+    renderMenu();
     if (examples.length === 0) {
         throw new Error("No examples are configured");
     }

@@ -2,10 +2,9 @@
 
 use riscbox::entropy::{EntropyError, EntropySource};
 use riscbox::guest_memory::{AccessWidth, GuestAddress};
-use riscbox::machine::{BootImages, Machine, MachineConfig, VIRTIO_BASE};
-use riscbox::ninep::{FileRead, Filesystem, Limits, SourceId};
+use riscbox::machine::{Machine, MachineConfig, VIRTIO_BASE};
+use riscbox::ninep::{Filesystem, Limits};
 use riscbox::ninep_backend::{RustFilesystem, RustNineP};
-use riscbox::tinyemu_core::CpuRunExitReason;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -140,31 +139,6 @@ impl Ring {
         write(machine, self.mmio() + 0x50, AccessWidth::Word, 0);
     }
 
-    fn cpu_kick(&self, machine: &mut Machine) -> CpuRunExitReason {
-        // A small firmware probe notifies the device then sleeps. Resident
-        // service reaches WFI in this CPU run; a source load exits at MMIO.
-        let address = u32::try_from(self.mmio()).unwrap();
-        let instructions = [
-            (address & 0xffff_f000) | (5 << 7) | 0x37,
-            ((address & 0xfff) << 20) | (5 << 15) | (5 << 7) | 0x13,
-            (2 << 25) | (5 << 15) | (2 << 12) | (16 << 7) | 0x23,
-            0x1050_0073,
-        ];
-        let firmware: Vec<u8> = instructions
-            .into_iter()
-            .flat_map(u32::to_le_bytes)
-            .collect();
-        machine
-            .load_boot(BootImages {
-                firmware: Some(&firmware),
-                kernel: None,
-                initrd: None,
-                command_line: "",
-            })
-            .unwrap();
-        machine.run_cpu(1000).state
-    }
-
     fn count(&self, machine: &mut Machine) -> u16 {
         u16::from_le_bytes(
             machine
@@ -230,153 +204,34 @@ fn read(fid: u32) -> Vec<u8> {
     body
 }
 
+// Resident requests complete inside queue notification, with independent sessions.
 pub fn regression() {
-    let mut filesystem = Filesystem::new(Limits::default(), 100);
-    filesystem.write_file("resident", b"now").unwrap();
-    filesystem.add_lazy_file("first", 3, SourceId(1)).unwrap();
-    filesystem.add_lazy_file("second", 3, SourceId(2)).unwrap();
-    let tree = RustFilesystem::new(filesystem);
+    let tree = RustFilesystem::new(Filesystem::new(Limits::default(), 100));
+    tree.with_filesystem(|fs| fs.write_file("file", b"abc"))
+        .unwrap();
     let mut machine = new_machine();
-    let mut ring = Ring::new(&mut machine, &tree, 0);
-    ring.negotiate(&mut machine);
-    ring.open(&mut machine, "resident", 2);
-    ring.enqueue(&mut machine, 0, 116, 4, &read(2));
-    assert_eq!(ring.cpu_kick(&mut machine), CpuRunExitReason::WfiSleep);
-    assert_eq!(&ring.reply(&mut machine, 0)[11..], b"now");
-    assert_eq!(ring.count(&mut machine), 5);
-    assert!(tree.next_load().is_none());
-
-    // Boot loading preserves an existing CPU's sleep state. Use a fresh CPU
-    // and independent namespace for the lazy-service exit probe.
-    let lazy_tree = RustFilesystem::new(Filesystem::new(Limits::default(), 100));
-    lazy_tree
-        .with_filesystem(|fs| fs.add_lazy_file("first", 3, SourceId(99)))
+    let mut first = Ring::new(&mut machine, &tree, 0);
+    let mut second = Ring::new(&mut machine, &tree, 1);
+    first.negotiate(&mut machine);
+    second.negotiate(&mut machine);
+    first.open(&mut machine, "file", 2);
+    second.open(&mut machine, "file", 2);
+    first.submit(&mut machine, 0, 116, 4, &read(2));
+    assert_eq!(&first.reply(&mut machine, 0)[11..], b"abc");
+    tree.with_filesystem(|fs| fs.write_file("file", b"new"))
         .unwrap();
-    let mut lazy_machine = new_machine();
-    let mut lazy_ring = Ring::new(&mut lazy_machine, &lazy_tree, 0);
-    lazy_ring.negotiate(&mut lazy_machine);
-    lazy_ring.open(&mut lazy_machine, "first", 3);
-    lazy_ring.enqueue(&mut lazy_machine, 1, 116, 10, &read(3));
-    assert_eq!(
-        lazy_ring.cpu_kick(&mut lazy_machine),
-        CpuRunExitReason::HostServiceRequested
-    );
-    drop(lazy_machine);
-
-    // A flush publishes the zero-length retirement before its own reply.
-    ring.open(&mut machine, "first", 3);
-    ring.submit(&mut machine, 1, 116, 10, &read(3));
-    let first = tree.next_load().unwrap();
-    let before = ring.count(&mut machine);
-    ring.submit(&mut machine, 2, 108, 11, &10_u16.to_le_bytes());
-    assert_eq!(ring.count(&mut machine), before + 2);
-    assert_eq!(ring.used(&mut machine, before), (2, 0));
-    assert_eq!(ring.used(&mut machine, before + 1), (4, 7));
-    ring.submit(&mut machine, 1, 116, 10, &read(3));
-    assert!(tree.next_load().is_none());
-
-    // Independent source completions publish in completion order, not request
-    // order; another endpoint can join the same retained source operation.
-    ring.open(&mut machine, "second", 4);
-    ring.submit(&mut machine, 3, 116, 12, &read(4));
-    let second = tree.next_load().unwrap();
-    let mut other = Ring::new(&mut machine, &tree, 1);
-    other.negotiate(&mut machine);
-    other.open(&mut machine, "first", 3);
-    other.submit(&mut machine, 1, 116, 10, &read(3));
-    assert!(tree.next_load().is_none());
-    let before = ring.count(&mut machine);
-    tree.with_filesystem(|fs| fs.complete_load(second, b"two".to_vec()))
-        .unwrap();
-    machine.poll_ninep().unwrap();
-    assert_eq!(ring.used(&mut machine, before), (6, 14));
-    assert_eq!(&ring.reply(&mut machine, 3)[11..], b"two");
-    tree.with_filesystem(|fs| fs.complete_load(first, b"one".to_vec()))
-        .unwrap();
-    machine.poll_ninep().unwrap();
-    assert_eq!(&ring.reply(&mut machine, 1)[11..], b"one");
-    assert_eq!(&other.reply(&mut machine, 1)[11..], b"one");
-
-    // A guest truncation on another endpoint satisfies the pending read in
-    // the same notification, and superseded source work is never dispatched.
-    tree.with_filesystem(|fs| fs.add_lazy_file("truncate", 3, SourceId(5)))
-        .unwrap();
-    ring.open(&mut machine, "truncate", 7);
-    ring.submit(&mut machine, 1, 116, 20, &read(7));
-    let before = ring.count(&mut machine);
-    other.open_flags(&mut machine, "truncate", 7, 0x202);
-    assert_eq!(ring.count(&mut machine), before + 1);
-    assert_eq!(ring.used(&mut machine, before), (2, 11));
-    assert_eq!(ring.reply(&mut machine, 1)[4], 117);
-    assert!(tree.next_load().is_none());
-
-    // Source failure publishes an ordinary tagged EIO response; it does not
-    // fail the endpoint or require a new notification from the guest.
-    tree.with_filesystem(|fs| fs.add_lazy_file("failure", 3, SourceId(6)))
-        .unwrap();
-    ring.open(&mut machine, "failure", 8);
-    ring.submit(&mut machine, 1, 116, 21, &read(8));
-    let failure = tree.next_load().unwrap();
-    tree.with_filesystem(|fs| fs.fail_load(failure)).unwrap();
-    machine.poll_ninep().unwrap();
-    assert_eq!(ring.reply(&mut machine, 1)[4], 7);
-    assert_eq!(word(&mut machine, ring.base + 0x3c07), 5);
-
-    // Namespace reset completes retained descriptors with ESTALE, whereas
-    // device reset never writes old guest rings even if a source finishes.
-    tree.with_filesystem(|fs| fs.add_lazy_file("late", 3, SourceId(3)))
-        .unwrap();
-    ring.open(&mut machine, "late", 5);
-    ring.submit(&mut machine, 1, 116, 13, &read(5));
-    let late = tree.next_load().unwrap();
-    tree.with_filesystem(Filesystem::reset).unwrap();
-    machine.poll_ninep().unwrap();
-    assert_eq!(ring.reply(&mut machine, 1)[4], 7);
-    assert_eq!(word(&mut machine, ring.base + 0x3c07), 116);
-    assert!(
-        tree.with_filesystem(|fs| fs.complete_load(late, b"old".to_vec()))
-            .is_err()
-    );
-    tree.with_filesystem(|fs| fs.add_lazy_file("after", 3, SourceId(4)))
-        .unwrap();
-    ring.submit(&mut machine, 0, 104, 14, &{
-        let mut attach = 1_u32.to_le_bytes().to_vec();
-        attach.extend(u32::MAX.to_le_bytes());
-        string(&mut attach, "host");
-        string(&mut attach, "");
-        attach.extend(1000_u32.to_le_bytes());
-        attach
-    });
-    ring.open(&mut machine, "after", 6);
-    ring.submit(&mut machine, 1, 116, 15, &read(6));
-    let load = tree.next_load().unwrap();
-    let old_ring = machine.read_ram(ring.base + 0x2000, 132).unwrap().to_vec();
-    write(&mut machine, ring.mmio() + 0x70, AccessWidth::Word, 0);
-    tree.with_filesystem(|fs| fs.complete_load(load, b"new".to_vec()))
-        .unwrap();
-    machine.poll_ninep().unwrap();
-    assert_eq!(machine.read_ram(ring.base + 0x2000, 132).unwrap(), old_ring);
-    // Whole-VM reset also retires every endpoint while preserving undispatched
-    // namespace loads. Their later completions cannot touch either old ring.
-    tree.with_filesystem(|fs| fs.add_lazy_file("vm-reset", 3, SourceId(8)))
-        .unwrap();
-    other.negotiate(&mut machine);
-    other.open(&mut machine, "vm-reset", 9);
-    other.submit(&mut machine, 1, 116, 22, &read(9));
-    let old_other_ring = machine.read_ram(other.base + 0x2000, 132).unwrap().to_vec();
+    second.submit(&mut machine, 0, 116, 4, &read(2));
+    assert_eq!(&second.reply(&mut machine, 0)[11..], b"new");
+    assert!(first.count(&mut machine) > 0);
+    assert!(first.used(&mut machine, 0).1 > 0);
     machine.reset().unwrap();
-    let retained_load = tree.next_load().unwrap();
-    tree.with_filesystem(|fs| fs.complete_load(retained_load, b"yes".to_vec()))
-        .unwrap();
-    machine.poll_ninep().unwrap();
     assert_eq!(
-        machine.read_ram(other.base + 0x2000, 132).unwrap(),
-        old_other_ring
+        tree.with_filesystem(|fs| fs.read_file("file")).unwrap(),
+        b"new"
     );
-    assert_eq!(machine.read_ram(ring.base + 0x2000, 132).unwrap(), old_ring);
-    drop(machine);
-    assert_eq!(
-        tree.with_filesystem(|fs| fs.read_file("after")).unwrap(),
-        FileRead::Resident(b"new".to_vec())
-    );
+    first.configure(&mut machine);
+    first.negotiate(&mut machine);
+    first.open(&mut machine, "file", 2);
+    first.submit(&mut machine, 0, 116, 4, &read(2));
+    assert_eq!(&first.reply(&mut machine, 0)[11..], b"new");
 }

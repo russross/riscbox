@@ -1,7 +1,7 @@
 RUSTBOX_WASM=target/wasm32-unknown-unknown/release/riscbox_wasm.wasm
 VERSION := $(shell python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["workspace"]["package"]["version"])')
 ARCHIVE := build/releases/riscbox-$(VERSION).tar.gz
-JS_SOURCES := $(shell find js/block js/network js/p9 -name '*.ts' -type f)
+JS_SOURCES := $(shell find js/network -name '*.ts' -type f) js/storage.ts js/riscbox.d.ts
 RUST_SOURCES := $(shell find src riscbox-wasm tinyemu-core -type f)
 
 all: dist
@@ -13,7 +13,7 @@ test-unit: js
 	cargo test --workspace
 	uv run -q --script tests/test_splitimg.py
 	uv run -q --script tests/test_image_deployment.py
-	node --test js/block.test.mjs js/network.test.mjs js/p9.test.mjs js/riscbox.test.cjs
+	node --test js/network.test.mjs js/riscbox.test.cjs
 	node --test tests/risclet_input.test.mjs
 	node --test tests/ninep_wasm.test.mjs
 	node --test tests/ninep_abi.test.mjs
@@ -40,9 +40,10 @@ wasm: $(RUSTBOX_WASM)
 
 js: build/js/.built
 
-build/js/.built: js/tsconfig.json $(JS_SOURCES)
-	rm -f build/js/p9/session.js build/js/p9/session.d.ts
+build/js/.built: js/tsconfig.json $(JS_SOURCES) js/riscbox.js tools/build_adapter.mjs
+	rm -rf build/js/p9 build/js/block
 	images/risclet/ui/node_modules/.bin/tsc -p js/tsconfig.json
+	node tools/build_adapter.mjs
 	@mkdir -p build/js
 	@touch $@
 
@@ -66,7 +67,7 @@ dist:
 	$(MAKE) wasm js kernel opensbi uboot
 	$(MAKE) $(ARCHIVE)
 
-$(ARCHIVE): Makefile $(RUSTBOX_WASM) build/js/.built js/riscbox.js kernel/.asset-name opensbi/.asset-name uboot/.asset-name .github/scripts/package-release.sh README.md CHANGELOG.md LICENSE js/p9/README.md js/network/README.md
+$(ARCHIVE): Makefile $(RUSTBOX_WASM) build/js/.built js/riscbox.js kernel/.asset-name opensbi/.asset-name uboot/.asset-name .github/scripts/package-release.sh README.md CHANGELOG.md LICENSE js/storage.ts js/network/README.md
 	.github/scripts/package-release.sh $@
 
 clean:

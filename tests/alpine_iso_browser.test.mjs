@@ -15,8 +15,7 @@ test("Alpine ISO boots through U-Boot EFI in Chrome", {
     const blockSize = 512 * 1024;
     try {
         await runChromePage(`<!doctype html><pre id="console"></pre>
-        <script src="/js/riscbox.js"></script><script type="module">
-        import { ArrayBlockProvider } from "/build/js/block/array.js";
+        <script src="/build/js/riscbox.js"></script><script type="module">
         const encoder = new TextEncoder();
         let output = "";
         let pending = new Uint8Array();
@@ -26,10 +25,8 @@ test("Alpine ISO boots through U-Boot EFI in Chrome", {
         const report = status => fetch("/result?status=" + encodeURIComponent(status));
         try {
             const media = new Uint8Array(await (await fetch("/test.iso")).arrayBuffer());
-            const provider = new ArrayBlockProvider(media);
             runtime = await Riscbox.instantiate(
                 await (await fetch("/target/wasm32-unknown-unknown/release/riscbox_wasm.wasm")).arrayBuffer(), {
-                blockProviders: new Map([[1, provider]]),
                 consoleWrite(text) {
                     output += text;
                     document.getElementById("console").textContent = output;
@@ -61,9 +58,9 @@ test("Alpine ISO boots through U-Boot EFI in Chrome", {
             const input = setInterval(() => {
                 if (pending.length) pending = pending.slice(runtime.consoleInput(pending));
             }, 10);
-            runtime.startResolved({ version: 1, machine: "riscv64", memory_size: 512,
+            await runtime.startResolved({ version: 1, machine: "riscv64", memory_size: 512,
                 console: "uart", bios: "/opensbi/fw_dynamic.bin", kernel: "/uboot/u-boot.bin",
-                drive0: ${http ? '{ file: "/iso/blk.txt" }' : '{ provider: 1, capacity_sectors: media.length / 512 }'} });
+                drive0: ${http ? '{ file: "/iso/blk.txt" }' : '{ bytes: media }'} });
         } catch (error) { report(error.message + "\\n" + output); }
         </script>`, directory, {
             timeoutMs: 300_000,

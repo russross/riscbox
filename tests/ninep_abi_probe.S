@@ -133,7 +133,7 @@ walk:
     .short 2
     .word 1, 2
     .short 1, 4
-    .ascii "lazy"
+    .ascii "file"
 walk_end:
     .balign 8
 open:

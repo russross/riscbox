@@ -3,8 +3,8 @@
 use std::collections::BTreeMap;
 
 use super::{
-    AttributeUpdate, ChangeKind, FileBody, FileTime, Filesystem, FilesystemError, InodeId,
-    InodeKind, ListedEntry, MAX_NAME_BYTES, TimeUpdate,
+    AttributeUpdate, ChangeKind, FileTime, Filesystem, FilesystemError, InodeId, InodeKind,
+    ListedEntry, MAX_NAME_BYTES, TimeUpdate,
 };
 
 impl Filesystem {
@@ -85,14 +85,7 @@ impl Filesystem {
         uid: u32,
         gid: u32,
     ) -> Result<InodeId, FilesystemError> {
-        self.create_at(
-            parent,
-            name,
-            InodeKind::File(FileBody::Resident(Vec::new())),
-            mode,
-            uid,
-            gid,
-        )
+        self.create_at(parent, name, InodeKind::File(Vec::new()), mode, uid, gid)
     }
 
     /// # Errors
@@ -163,7 +156,7 @@ impl Filesystem {
 
     /// # Errors
     /// Reports a missing inode or a non-regular-file target.
-    pub fn file_body(&self, id: InodeId) -> Result<&FileBody, FilesystemError> {
+    pub fn file_body(&self, id: InodeId) -> Result<&[u8], FilesystemError> {
         match &self.inode(id).ok_or(FilesystemError::NotFound)?.kind {
             InodeKind::File(body) => Ok(body),
             _ => Err(FilesystemError::IsDirectory),
@@ -172,7 +165,7 @@ impl Filesystem {
 
     /// Reads only the requested range, borrowing resident bytes until reply copy.
     /// # Errors
-    /// Reports missing inodes, wrong types, or bodies still needing a load.
+    /// Reports missing inodes, wrong types, or invalid ranges.
     pub fn read_inode(
         &mut self,
         id: InodeId,
@@ -189,11 +182,7 @@ impl Filesystem {
         {
             return Ok(&[]);
         }
-        let bytes = match body {
-            FileBody::Resident(bytes) => bytes,
-            FileBody::Failed { .. } => return Err(FilesystemError::LoadFailed),
-            _ => return Err(FilesystemError::NeedsLoad),
-        };
+        let bytes = body;
         if update_atime {
             inode.atime = self.now;
             inode.atime_nanoseconds = 0;
@@ -204,7 +193,7 @@ impl Filesystem {
     }
 
     // Size and quota checks happen before either loading or changing metadata.
-    // Logical bytes include unlinked files retained by fids or pending I/O.
+    // Logical bytes include unlinked files retained by open fids.
     /// # Errors
     /// Reports wrong types, oversized files, or exhausted tree quota.
     pub fn validate_resize(&self, id: InodeId, size: u64) -> Result<usize, FilesystemError> {
@@ -251,7 +240,7 @@ impl Filesystem {
 
     /// Writes through a retained inode; append chooses EOF at execution time.
     /// # Errors
-    /// Reports quotas, wrong types, or bodies still needing a load.
+    /// Reports quotas, wrong types, or invalid ranges.
     pub fn write_inode(
         &mut self,
         id: InodeId,
@@ -268,11 +257,7 @@ impl Filesystem {
             return Err(FilesystemError::IsDirectory);
         };
         let old = body.len();
-        let bytes = match body {
-            FileBody::Resident(bytes) => bytes,
-            FileBody::Failed { .. } => return Err(FilesystemError::LoadFailed),
-            _ => return Err(FilesystemError::NeedsLoad),
-        };
+        let bytes = body;
         let start = if append {
             old
         } else {
@@ -286,7 +271,7 @@ impl Filesystem {
         Ok(())
     }
 
-    /// Applies a validated attribute transaction after any required lazy load.
+    /// Applies a validated attribute transaction in the resident namespace.
     /// # Errors
     /// Checks size, type, and quotas before changing any selected field.
     pub fn update_attributes(
@@ -307,13 +292,8 @@ impl Filesystem {
                 return Err(FilesystemError::IsDirectory);
             };
             let old = body.len();
-            match body {
-                FileBody::Resident(bytes) => bytes.resize(size, 0),
-                _ if size == 0 => *body = FileBody::Resident(Vec::new()),
-                _ if size == old => {}
-                FileBody::Failed { .. } => return Err(FilesystemError::LoadFailed),
-                _ => return Err(FilesystemError::NeedsLoad),
-            }
+            let bytes = body;
+            bytes.resize(size, 0);
             self.logical_bytes = self.logical_bytes - old + size;
             inode.mtime = self.now;
             inode.mtime_nanoseconds = 0;

@@ -1,6 +1,6 @@
 //! Browser-owned HTTP requests and cacheable storage formats.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 
 use crate::config::{Value, parse_value};
@@ -30,6 +30,7 @@ pub enum StorageError {
     UnknownRequest,
     MissingBlock(u32),
     OutOfRange,
+    BackingFailed,
 }
 
 impl fmt::Display for StorageError {
@@ -97,6 +98,20 @@ impl HttpQueue {
     }
 }
 
+// A dirty bit identifies each whole sector whose bytes override the base.
+// Unwritten sectors never need to be fetched merely to allocate an overlay.
+struct Overlay {
+    bytes: Box<[u8; CLUSTER_SIZE]>,
+    dirty: u8,
+}
+
+// Prefetch is speculative until an actual reader joins it. Only demand failures
+// become I/O errors; a failed unused prefetch can be fetched again on demand.
+struct PendingChunk {
+    block: u32,
+    demanded: bool,
+}
+
 pub struct HttpBlockStore {
     base_url: String,
     block_size: usize,
@@ -104,8 +119,9 @@ pub struct HttpBlockStore {
     cache_limit: usize,
     clock: u64,
     cache: BTreeMap<u32, (u64, Vec<u8>)>,
-    overlays: BTreeMap<u64, Box<[u8; CLUSTER_SIZE]>>,
-    pending: BTreeMap<u32, u32>,
+    overlays: BTreeMap<u64, Overlay>,
+    failed: BTreeSet<u32>,
+    pending: BTreeMap<u32, PendingChunk>,
     queue: HttpQueue,
 }
 
@@ -143,6 +159,7 @@ impl HttpBlockStore {
             clock: 0,
             cache: BTreeMap::new(),
             overlays: BTreeMap::new(),
+            failed: BTreeSet::new(),
             pending: BTreeMap::new(),
             queue: HttpQueue::default(),
         };
@@ -157,7 +174,7 @@ impl HttpBlockStore {
                         .ok_or(StorageError::InvalidManifest("prefetch integer expected"))?,
                 )
                 .map_err(|_| StorageError::InvalidManifest("invalid prefetch block"))?;
-                store.request_block(index)?;
+                store.request_block(index, false)?;
             }
         }
         Ok(store)
@@ -180,6 +197,31 @@ impl HttpBlockStore {
     pub fn reset_requests(&mut self) {
         self.pending.clear();
         self.queue.clear();
+        self.failed.clear();
+    }
+
+    pub fn discard_changes(&mut self) {
+        self.reset_requests();
+        self.overlays.clear();
+    }
+
+    pub fn clear_errors(&mut self) {
+        self.failed.clear();
+    }
+
+    /// Records a failed fetch so its waiting readers receive an I/O error.
+    /// # Errors
+    /// Rejects an unknown or retired request.
+    pub fn fail(&mut self, id: u32) -> Result<(), StorageError> {
+        self.queue.complete(id)?;
+        let pending = self
+            .pending
+            .remove(&id)
+            .ok_or(StorageError::UnknownRequest)?;
+        if pending.demanded {
+            self.failed.insert(pending.block);
+        }
+        Ok(())
     }
 
     /// Accepts one block response and makes it available to subsequent reads.
@@ -189,11 +231,15 @@ impl HttpBlockStore {
     /// Returns an error for an unknown request or a response of the wrong size.
     pub fn complete(&mut self, id: u32, data: Vec<u8>) -> Result<(), StorageError> {
         self.queue.complete(id)?;
-        let block = self
+        let pending = self
             .pending
             .remove(&id)
             .ok_or(StorageError::UnknownRequest)?;
+        let block = pending.block;
         if data.len() != self.block_size {
+            if pending.demanded {
+                self.failed.insert(block);
+            }
             return Err(StorageError::InvalidResponse);
         }
         self.clock = self.clock.wrapping_add(1);
@@ -220,16 +266,21 @@ impl HttpBlockStore {
                 )
                 .ok_or(StorageError::OutOfRange)?;
             let cluster = byte / CLUSTER_SIZE as u64;
-            if let Some(overlay) = self.overlays.get(&cluster) {
-                let offset = usize::try_from(byte % CLUSTER_SIZE as u64)
-                    .map_err(|_| StorageError::OutOfRange)?;
-                chunk.copy_from_slice(&overlay[offset..offset + SECTOR_SIZE]);
+            let offset = usize::try_from(byte % CLUSTER_SIZE as u64)
+                .map_err(|_| StorageError::OutOfRange)?;
+            if let Some(overlay) = self.overlays.get(&cluster)
+                && overlay.dirty & (1 << (offset / SECTOR_SIZE)) != 0
+            {
+                chunk.copy_from_slice(&overlay.bytes[offset..offset + SECTOR_SIZE]);
                 continue;
             }
             let block = u32::try_from(byte / self.block_size as u64)
                 .map_err(|_| StorageError::OutOfRange)?;
+            if self.failed.contains(&block) {
+                return Err(StorageError::BackingFailed);
+            }
             if !self.cache.contains_key(&block) {
-                self.request_block(block)?;
+                self.request_block(block, true)?;
                 return Err(StorageError::MissingBlock(block));
             }
             self.clock = self.clock.wrapping_add(1);
@@ -244,17 +295,16 @@ impl HttpBlockStore {
         Ok(())
     }
 
-    /// Writes sectors into 4 KiB copy-on-write clusters.
+    /// Writes sectors synchronously into sparse copy-on-write clusters.
     ///
     /// # Errors
     ///
-    /// Returns `MissingBlock` when the original cluster must first be fetched.
+    /// Returns an error for an invalid range.
     pub fn write_sectors(&mut self, sector: u64, data: &[u8]) -> Result<(), StorageError> {
         self.validate_range(sector, data.len())?;
         let start = sector
             .checked_mul(SECTOR_SIZE as u64)
             .ok_or(StorageError::OutOfRange)?;
-        self.retain_working_set(start, data.len())?;
         for (index, chunk) in data.chunks(SECTOR_SIZE).enumerate() {
             let byte = start
                 .checked_add(
@@ -262,18 +312,17 @@ impl HttpBlockStore {
                 )
                 .ok_or(StorageError::OutOfRange)?;
             let cluster_index = byte / CLUSTER_SIZE as u64;
-            if !self.overlays.contains_key(&cluster_index) {
-                let cluster_start_sector = cluster_index * 8;
-                let mut original = Box::new([0; CLUSTER_SIZE]);
-                self.read_sectors(cluster_start_sector, original.as_mut_slice())?;
-                self.overlays.insert(cluster_index, original);
-            }
+            let overlay = self
+                .overlays
+                .entry(cluster_index)
+                .or_insert_with(|| Overlay {
+                    bytes: Box::new([0; CLUSTER_SIZE]),
+                    dirty: 0,
+                });
             let offset = usize::try_from(byte % CLUSTER_SIZE as u64)
                 .map_err(|_| StorageError::OutOfRange)?;
-            let Some(overlay) = self.overlays.get_mut(&cluster_index) else {
-                return Err(StorageError::OutOfRange);
-            };
-            overlay[offset..offset + SECTOR_SIZE].copy_from_slice(chunk);
+            overlay.bytes[offset..offset + SECTOR_SIZE].copy_from_slice(chunk);
+            overlay.dirty |= 1 << (offset / SECTOR_SIZE);
         }
         Ok(())
     }
@@ -308,17 +357,25 @@ impl HttpBlockStore {
         Ok(())
     }
 
-    fn request_block(&mut self, block: u32) -> Result<(), StorageError> {
+    fn request_block(&mut self, block: u32, demanded: bool) -> Result<(), StorageError> {
         if block >= self.block_count {
             return Err(StorageError::OutOfRange);
         }
-        if self.cache.contains_key(&block) || self.pending.values().any(|value| *value == block) {
+        if self.cache.contains_key(&block) {
+            return Ok(());
+        }
+        if let Some(pending) = self
+            .pending
+            .values_mut()
+            .find(|pending| pending.block == block)
+        {
+            pending.demanded |= demanded;
             return Ok(());
         }
         let id = self
             .queue
             .get(format!("{}blk{block:09}.bin", self.base_url));
-        self.pending.insert(id, block);
+        self.pending.insert(id, PendingChunk { block, demanded });
         Ok(())
     }
 
@@ -359,7 +416,10 @@ impl BlockBackend for HttpBlockStore {
         match self.read_sectors(sector, data) {
             Ok(()) => Ok(BlockRequestStatus::Complete),
             Err(StorageError::MissingBlock(_)) => Ok(BlockRequestStatus::Pending),
-            Err(_) => Err(DeviceError::Backend),
+            Err(_) => {
+                self.clear_errors();
+                Err(DeviceError::Backend)
+            }
         }
     }
 

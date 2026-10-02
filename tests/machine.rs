@@ -1,5 +1,6 @@
 use flate2::Compression;
 use flate2::write::GzEncoder;
+use riscbox::block_storage::BlockStore;
 use riscbox::browser_storage::HttpBlockStore;
 use riscbox::entropy::{EntropyError, EntropySource};
 use riscbox::guest_memory::{AccessWidth, GuestAddress};
@@ -241,7 +242,7 @@ fn machine_routes_http_completions_back_to_a_pending_block_request() {
     let store = HttpBlockStore::from_manifest("disk.json", "{block_size:1,n_block:1}", 1024)
         .expect("valid manifest");
     let slot = machine
-        .add_http_block_device(store, *b"riscbox-http-0000000")
+        .add_storage_block_device(BlockStore::http(store), *b"riscbox-http-0000000")
         .expect("HTTP block slot");
     for (register, address) in [(0x80, DESC), (0x90, AVAIL), (0xa0, USED)] {
         machine
@@ -294,7 +295,7 @@ fn machine_routes_http_completions_back_to_a_pending_block_request() {
         .expect("HTTP block slot")
         .expect("block request");
     machine
-        .complete_http_block_request(slot, request.id, vec![0x37; 1024])
+        .complete_http_block_request(slot, request.id, Ok(vec![0x37; 1024]), true)
         .expect("HTTP completion");
     assert_eq!(
         machine

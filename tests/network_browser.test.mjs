@@ -122,7 +122,7 @@ test("real WASM exchanges Ethernet frames through Chrome and a local origin", as
     const temporary = await mkdtemp(join(tmpdir(), "riscbox-network-"));
     const probePath = compileProbe(temporary);
     const assets = new Map([
-        ["/riscbox.js", [join(root, "js/riscbox.js"), "text/javascript"]],
+        ["/riscbox.js", [join(root, "build/js/riscbox.js"), "text/javascript"]],
         ["/network/index.js", [join(root, "build/js/network/index.js"), "text/javascript"]],
         ["/riscbox.wasm", [join(root, "target/wasm32-unknown-unknown/release/riscbox_wasm.wasm"), "application/wasm"]],
         ["/network-probe.bin", [probePath, "application/octet-stream"]],
@@ -190,7 +190,6 @@ test("real WASM exchanges Ethernet frames through Chrome and a local origin", as
                 "Connection: Upgrade\r\n" +
                 `Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
             );
-            socket.write(encodeFrame(Buffer.from(fixture)));
         }, 250);
         let pending = Buffer.alloc(0);
         socket.on("data", (data) => {
@@ -199,6 +198,7 @@ test("real WASM exchanges Ethernet frames through Chrome and a local origin", as
             pending = Buffer.from(decoded.remaining);
             for (const frame of decoded.frames) {
                 if (frame.opcode === 2 && Buffer.from(expectedTransmit).equals(frame.payload)) {
+                    socket.write(encodeFrame(Buffer.from(fixture)));
                     transmitted = true;
                     transmitResolve();
                 }

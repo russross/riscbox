@@ -12,5 +12,5 @@
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true
   },
-  "include": ["block/**/*.ts", "network/**/*.ts", "p9/**/*.ts"]
+  "include": ["storage.ts", "riscbox.d.ts", "network/**/*.ts"]
 }

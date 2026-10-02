@@ -3,9 +3,8 @@ Rust 9P2000.L endpoint
 
 The [session](../ninep_protocol.rs) implements the standalone Rust server
 profile over [namespace state](../ninep.rs). The [Rust backend](../ninep_backend.rs)
-connects it to VirtIO and the runtime registry. The browser promise facade uses
-the same Rust server. The
-[filesystem ABI](../browser_abi/ninep/README.md) exposes handles and source work.
+connects it to VirtIO and the prepared VM. The synchronous browser facade uses the same Rust server. The
+[storage ABI](../browser_abi/ninep/README.md) exposes copied host operations.
 
 Wire behavior follows the [9P2000.L reference](https://github.com/chaos/diod/blob/master/protocol.md)
 and its linked Plan 9 operation specifications.
@@ -27,11 +26,9 @@ Unix DAC checks. Attach preserves numeric user identity for new inode ownership;
 an omitted numeric UID uses the root inode's UID. The export name does not select
 a subtree. Open access modes are enforced. The client resolves symlink traversal;
 opening a symlink inode, including an existing symlink in `Tlcreate`, returns
-`ELOOP`. Writes and fsync commit to the session's in-memory namespace, without a
-promise of external-source persistence. Sources provide initial file bytes only.
+`ELOOP`. Writes and fsync commit to the session's in-memory namespace, without external persistence.
 
-Message size is negotiated up to 64 KiB. Each session permits 65,536 fids and
-1,024 combined pending operations and queued completions. Names are UTF-8, at
+Message size is negotiated up to 64 KiB. Each session permits 65,536 fids. Names are UTF-8, at
 most 255 bytes, with slash and NUL excluded. Numeric fields retain their full
 wire widths. Attributes advertise only the supported basic mask; birth time,
 inode-generation, and data-version extension bits remain unclaimed.
@@ -39,27 +36,14 @@ inode-generation, and data-version extension bits remain unclaimed.
 Calling convention
 ------------------
 
-1. Create `Filesystem::new(limits, epoch_seconds)`, then
-   `NinePSession::new(&mut filesystem)`. The namespace has a private identity
-   token and a reset generation; a session cannot be passed a different tree.
-2. Set the supplied epoch time before each runtime activation. Call
-   `submit(&mut filesystem, RequestId, bytes, reply_capacity)`. An immediate
-   result contains the complete reply; a pending result identifies a started
-   or joined source load. Only started loads dispatch external work.
-3. Call `poll(&mut filesystem)` after load success/failure and after mutations
-   that can satisfy pending I/O, including host writes and guest truncation.
-   Poll every session sharing the tree. Pending operations own write bytes
-   and pin their inode independently of clunk, unlink, rename, and fid reuse.
-4. Drain `next_completion()` before publishing a current immediate reply.
-   Earlier completions carry transport request IDs and either reply bytes or
-   suppression. Queued completions continue reserving their protocol tag and
-   transport ID until drained. Flush therefore retires an old descriptor
-   before `Rflush`; a reply already queued precedes `Rflush` and is honored.
-5. Call `reset(&mut filesystem)` when a device resets and `close(...)` before
-   discarding a live session. Both release retained inodes and session locks.
-   Device reset discards completions because its old queues are no longer
-   usable. Filesystem reset instead causes tagged `ESTALE` completions for
-   pending requests and invalidates fids when the session next polls/submits.
+1. Create `Filesystem::new(limits, epoch_seconds)` and
+    `NinePSession::new(&mut filesystem)`. A session belongs to that tree.
+2. Set epoch time explicitly before activation. Call
+    `submit(&mut filesystem, bytes, reply_capacity)` for a complete synchronous
+    reply. The server never starts external work or retains pending requests.
+3. Call `reset(&mut filesystem)` when a device resets, and `close(...)` before
+    discarding a session. Both release fids, inode references, and locks while
+    preserving namespace bytes. Namespace clear invalidates prior fids.
 
 Resident file I/O borrows or writes only the requested range. Complete requests
 are parsed before dispatch, and reply space is checked before mutation.
@@ -67,57 +51,36 @@ are parsed before dispatch, and reply space is checked before mutation.
 QIDs without changing either fid. `Tsetattr` validates selected fields and
 quota before changing metadata; current timestamps resolve at commit time.
 `Tlcreate` may open an existing regular file unless `O_EXCL` is set, and
-`O_TRUNC` retires its lazy source without fetching it. Blocking lock requests
+`O_TRUNC` clears resident bytes. Blocking lock requests
 return blocked status for client retry rather than waiting inside Rust.
 
-Protocol errors encode Linux errno with the parsed tag. Duplicate live tags or
-transport IDs, wrong namespace identity, closed sessions, missing envelopes,
-and unusably small reply buffers are typed host/transport errors. Malformed
-flush messages cannot generate an `Rlerror`; valid flush messages always get
-`Rflush`. No function calls JavaScript or starts a browser promise. The runtime
-must dispatch source promises and notification listeners after WASM returns,
-and must not keep a JavaScript memory view across an await.
+Protocol errors encode Linux errno with the parsed tag. Wrong namespace
+identity, closed sessions, missing envelopes, and unusably small reply buffers
+are typed transport errors. Valid flush messages always receive `Rflush`:
+earlier requests have already completed. No function calls JavaScript.
 
 Runtime and transport ownership
 -------------------------------
 
-`BrowserRuntime::register_filesystem(key, filesystem)` takes ownership before
-startup. Configured endpoints matching the key receive independent Rust
-sessions over that tree. Unregistered keys reject startup. Registry entries
-outlive VM reset, shutdown, destroy, and recreation.
-The runtime may register an owned namespace or an independently owned handle.
-A VM lifetime guard permits several endpoints over a handle but rejects a
-second live VM. Destroy releases the guard while retaining the namespace.
+Preparation creates one resident namespace per configured server name and one
+independent session per mount tag. The VM owns all trees; reboot retains them,
+and destroy releases them. `BrowserRuntime::with_filesystem(key, operation)`
+permits host access between CPU activations, before boot, and while halted.
+The raw host clear operation requires a powered-off VM.
 
-`BrowserRuntime::with_filesystem(key, operation)` finishes the host operation,
-releases its namespace borrow, and polls all attached endpoints. This includes
-operations that report an error after settling a load as failed. Operations
-also work before startup and while halted. `next_ninep_load()` yields a server
-key and a started load ticket; joined requests do not dispatch source work.
-Host writes and namespace resets discard superseded queued tickets. Device
-reset retains valid source loads while discarding old protocol completions.
-
-The backend never calls JavaScript. `NinePDevice::notify` drains earlier
-completions before publishing the current reply. Machine MMIO also polls other
-9p endpoints after a guest mutation, so truncation can satisfy another session's
-pending read without a host round trip. Resident requests finish in the same
-CPU run; only external source work requests a host-service exit. After source
-completion, `Machine::poll_ninep()` publishes replies and updates device IRQs.
-Host mutation and source dispatch occur between exclusive CPU activations.
-Quantum entry supplies filesystem epoch time explicitly; standalone operations
-supply it through `Filesystem::set_time`.
+Resident guest requests finish within the notifying CPU run, without a browser
+service exit. Generic VirtIO descriptor handling remains separate from protocol
+and namespace semantics. Quantum entry supplies filesystem epoch time; standalone
+operations use `Filesystem::set_time`. Notifications are copied and delivered
+only after the Rust namespace borrow has ended.
 
 Validation
 ----------
 
 `cargo test ninep --lib` covers the namespace and protocol through independent
-packet builders. The raw-WASM probe in `tests/fixtures/ninep_wasm.rs` executes
-the namespace, session, transport, and TinyEMU CPU in Node during `make test-unit` and Chrome during
-`make test`. Native tests cover malformed/truncated requests, bounded replies,
-partial walks, open modes, ownership, nanoseconds, cookies, locks, shared loads,
-flush ordering, fid reuse, host writes, and the separate reset lifetimes.
-The shared transport probe uses real guest rings and a small firmware program
-to distinguish resident WFI completion from an external-load service exit.
-The ignored Alpine acceptance test additionally mounts the Rust share, performs
-Linux file and directory operations, completes a lazy load between CPU calls,
-and shuts down after verifying the guest's writes through the host API.
+packet builders: malformed/truncated requests, bounded replies, partial walks,
+open modes, ownership, nanoseconds, cookies, locks, and reset lifetimes.
+Executable WASM probes exercise host packets, real guest rings, synchronous
+shared reads/writes, notifications, reboot, shutdown, and destroy invalidation.
+The deployed Risclet test additionally exercises Linux mounts and editor/guest
+sharing in Chrome.

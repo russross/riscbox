@@ -34,6 +34,7 @@ export async function runChromePage(html, directory, options = {}) {
     await new Promise(resolveListen => server.listen(0, "127.0.0.1", resolveListen));
     const flags = process.env.DISPLAY ? [] : ["--headless=new"];
     const chrome = spawn("google-chrome", [...flags, "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage",
+        ...(options.chromeArgs ?? []),
         `--user-data-dir=${join(directory, "chrome")}`, `http://127.0.0.1:${server.address().port}/probe.html`],
         { stdio: ["ignore", "ignore", "pipe"] });
     const closed = new Promise(resolveClose => chrome.once("close", resolveClose));

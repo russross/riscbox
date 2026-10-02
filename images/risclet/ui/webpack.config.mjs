@@ -12,6 +12,8 @@ export default {
     },
     module: {
         rules: [
+            { test: /@wterm\/dom\/dist\/wterm\.js$/, use: path.resolve(directory, "wterm-viewport-loader.cjs") },
+            { test: /@wterm\/dom\/dist\/renderer\.js$/, use: path.resolve(directory, "wterm-renderer-loader.cjs") },
             { test: /\.ts$/, use: "ts-loader", exclude: /node_modules/ },
             { test: /\.css$/i, use: ["style-loader", "css-loader"] },
         ],

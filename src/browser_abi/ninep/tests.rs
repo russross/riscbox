@@ -105,3 +105,48 @@ fn destroy_invalidates_host_handles() {
         Err(Error::BadHandle)
     );
 }
+
+// Attribute packets validate completely before changing a live inode.
+#[test]
+fn restored_attributes_keep_permissions_ownership_and_timestamp_precision() {
+    let mut abi = FilesystemAbi::default();
+    let handle = Handle(1);
+    abi.entries.insert(
+        handle,
+        Entry {
+            tree: RustFilesystem::new(Filesystem::new(Limits::default(), 100)),
+        },
+    );
+    write(&mut abi, handle, "file", "bytes");
+    let mut body = path("file");
+    for value in [0o751_u32, 123, 456] {
+        body.extend(value.to_le_bytes());
+    }
+    body.extend(789_u64.to_le_bytes());
+    body.extend(123_456_789_u32.to_le_bytes());
+    body.extend(900_u64.to_le_bytes());
+    body.extend(987_654_321_u32.to_le_bytes());
+    assert_eq!(invoke(&mut abi, handle, 14, &body), Ok(0));
+    let before = abi.entries[&handle]
+        .tree
+        .with_filesystem(|fs| fs.inode(fs.lookup("file").unwrap()).unwrap().clone());
+    assert_eq!((before.mode, before.uid, before.gid), (0o751, 123, 456));
+    assert_eq!((before.atime, before.atime_nanoseconds), (789, 123_456_789));
+    assert_eq!((before.mtime, before.mtime_nanoseconds), (900, 987_654_321));
+
+    for end in 0..body.len() {
+        assert_eq!(
+            invoke(&mut abi, handle, 14, &body[..end]),
+            Err(Error::Packet)
+        );
+    }
+    let end = body.len();
+    body[end - 4..].copy_from_slice(&1_000_000_000_u32.to_le_bytes());
+    assert_eq!(
+        invoke(&mut abi, handle, 14, &body),
+        Err(Error::Filesystem(FilesystemError::InvalidPath))
+    );
+    abi.entries[&handle].tree.with_filesystem(|fs| {
+        assert_eq!(fs.inode(fs.lookup("file").unwrap()).unwrap(), &before);
+    });
+}

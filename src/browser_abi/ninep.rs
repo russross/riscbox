@@ -5,7 +5,8 @@ use std::str::from_utf8;
 
 use super::{STATE, allocated_string, completion_bytes};
 use crate::ninep::{
-    Change, ChangeKind, ChangeSource, Filesystem, FilesystemError, Inode, InodeKind,
+    AttributeUpdate, Change, ChangeKind, ChangeSource, FileTime, Filesystem, FilesystemError,
+    Inode, InodeKind, TimeUpdate,
 };
 use crate::ninep_backend::RustFilesystem;
 
@@ -149,6 +150,7 @@ enum Operation<'a> {
     Link(&'a str, &'a str),
     Reset,
     Tracking(bool),
+    Attributes(&'a str, AttributeUpdate),
 }
 
 // Decode the closed operation set and its entire body before touching a tree.
@@ -172,6 +174,30 @@ impl<'a> Operation<'a> {
                 1 => true,
                 _ => return Err(Error::Packet),
             }),
+            14 => {
+                let path = reader.string()?;
+                let mode = reader.u32()?;
+                if mode > 0o7777 {
+                    return Err(Error::Packet);
+                }
+                let uid = reader.u32()?;
+                let gid = reader.u32()?;
+                // Validate both times before dispatch so malformed packets cannot
+                // partially update permissions or ownership.
+                let atime = FileTime::new(reader.u64()?, u64::from(reader.u32()?))?;
+                let mtime = FileTime::new(reader.u64()?, u64::from(reader.u32()?))?;
+                Self::Attributes(
+                    path,
+                    AttributeUpdate {
+                        mode: Some(mode),
+                        uid: Some(uid),
+                        gid: Some(gid),
+                        atime: Some(TimeUpdate::Explicit(atime)),
+                        mtime: Some(TimeUpdate::Explicit(mtime)),
+                        ..AttributeUpdate::default()
+                    },
+                )
+            }
             _ => return Err(Error::Packet),
         };
         reader.done()?;
@@ -320,6 +346,9 @@ fn execute(
             fs.inode(fs.lookup(path)?)
                 .ok_or(FilesystemError::NotFound)?,
         )?,
+        Operation::Attributes(path, attributes) => {
+            fs.update_attributes(fs.lookup(path)?, attributes)?;
+        }
         Operation::Files => {
             let files = fs.list_files();
             output.extend(

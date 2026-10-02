@@ -48,6 +48,22 @@ export async function abiRegression(api, firmware) {
     check(new DataView(data().buffer).getBigUint64(16, true) === 0x0123456789abcdefn, "origin width");
     check(command(handle, 6, text("dir")) === 0 && new DataView(data().buffer).getUint32(0, true) === 1, "directory list");
     check(command(handle, 8, text("dir/file")) === 0 && new DataView(data().buffer).getBigUint64(32, true) === 7n, "stat size");
+    const attributes = join(text("dir/file"), u32(0o751), u32(123), u32(456), u64(789), u32(123456789), u64(900), u32(987654321));
+    check(command(handle, 14, attributes) === 0, "restore attributes");
+    check(command(handle, 8, text("dir/file")) === 0, "restored stat");
+    const restored = data();
+    const metadata = new DataView(restored.buffer);
+    check(metadata.getUint32(12, true) === 0o751 && metadata.getUint32(16, true) === 123
+        && metadata.getUint32(20, true) === 456, "permissions and ownership restored");
+    check(metadata.getBigUint64(40, true) === 789n && metadata.getUint32(48, true) === 123456789
+        && metadata.getBigUint64(52, true) === 900n && metadata.getUint32(60, true) === 987654321, "timestamp precision restored");
+    for (let length = 0; length < attributes.length; length++) {
+        check(command(handle, 14, attributes.subarray(0, length)) === -22, "truncated attribute packet");
+    }
+    const invalid = attributes.slice();
+    new DataView(invalid.buffer).setUint32(invalid.length - 4, 1_000_000_000, true);
+    check(command(handle, 14, invalid) === -22, "invalid nanoseconds");
+    check(command(handle, 8, text("dir/file")) === 0 && data().every((byte, index) => byte === restored[index]), "failed attributes leave stat unchanged");
     check(command(handle, 9, join(text("symlink"), text("dir/file"))) === 0, "symlink");
     check(command(handle, 10, text("symlink")) === 0 && decoder.decode(data()) === "dir/file", "readlink");
     check(command(handle, 11, join(text("dir/file"), text("hard"))) === 0, "hard link");

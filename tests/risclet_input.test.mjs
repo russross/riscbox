@@ -55,3 +55,22 @@ test("terminal input retains partial sends, copies paste bytes, and retires queu
         globalThis.window = previousWindow;
     }
 });
+
+test("invalid input acceptance cancels retries and retires pending bytes", () => {
+    const previousWindow = globalThis.window;
+    const callbacks = new Map();
+    globalThis.window = {
+        setTimeout(callback) { const id = callbacks.size + 1; callbacks.set(id, callback); return id; },
+        clearTimeout(id) { callbacks.delete(id); },
+    };
+    try {
+        for (const invalid of [-1, 2, 0.5, NaN]) {
+            const queue = new TerminalInputQueue(() => invalid);
+            queue.enqueue(Uint8Array.of(1));
+            const callback = [...callbacks.values()][0];
+            callbacks.clear();
+            assert.throws(callback, /Invalid VM input acceptance count/);
+            assert.equal(callbacks.size, 0);
+        }
+    } finally { globalThis.window = previousWindow; }
+});

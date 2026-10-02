@@ -59,6 +59,15 @@ test("Risclet shares Rust files with its host UI across image and VM lifetimes",
             await delay(50);
             check(events.filter(change => change.origin === 1n).length === flushCount, "clean blur does not rewrite the file");
 
+            step = "explicit Sync";
+            content.focus();
+            doc.execCommand("selectAll");
+            doc.execCommand("insertText", false, "explicit sync");
+            await wait(() => !doc.getElementById("sync-button").disabled, "dirty editor enables Sync");
+            doc.getElementById("sync-button").click();
+            await wait(() => decoder.decode(workspace.readFile("reduction_steps.s")) === "explicit sync\\n", "Sync writes without requiring blur");
+            check(doc.getElementById("sync-button").disabled, "successful Sync disables clean control");
+
             step = "failed editor flush";
             const writeFile = workspace.writeFile.bind(workspace);
             let rejectEditorWrite = true;
@@ -102,7 +111,7 @@ test("Risclet shares Rust files with its host UI across image and VM lifetimes",
             doc.getElementById("instructions-tab-button").focus();
             await workspace.writeFile("reduction_steps.s", original);
 
-            step = "bounded editor deadline";
+            step = "debounced editor deadline";
             await runtime.halt();
             await wait(() => content.textContent.includes(".global"), "original editor restored");
             content.focus();
@@ -111,7 +120,9 @@ test("Risclet shares Rust files with its host UI across image and VM lifetimes",
             await delay(15_000);
             doc.execCommand("insertText", false, " later edit");
             await delay(16_000);
-            check(decoder.decode(await workspace.readFile("reduction_steps.s")).includes("later edit"), "later edits do not postpone the first deadline: " + decoder.decode(workspace.readFile("reduction_steps.s")));
+            check(decoder.decode(workspace.readFile("reduction_steps.s")) === decoder.decode(original), "later edit postpones autosync");
+            await delay(15_000);
+            await wait(() => decoder.decode(workspace.readFile("reduction_steps.s")).includes("later edit"), "autosync runs thirty seconds after latest edit");
             check(!decoder.decode(await workspace.readFile("reduction_steps.s")).includes(".global"), "deadline flushed edited content");
             doc.getElementById("instructions-tab-button").focus();
             await workspace.writeFile("reduction_steps.s", original);
@@ -207,20 +218,102 @@ test("Risclet shares Rust files with its host UI across image and VM lifetimes",
             check(decoder.decode(workspace.readFile("reduction_steps.s")) === decoder.decode(original), "reset restores cached original");
             check(runtime === app.testRuntime && runtime.filesystems.size === 1, "reset retains runtime and share");
 
+            step = "orderly snapshot switches";
+            const buttons = () => [...doc.querySelectorAll(".example-button")];
+            workspace.writeFile("retained", "outgoing work");
+            workspace.mkdir("empty-directory");
+            workspace.link("retained", "retained-alias");
+            workspace.symlink("retained-link", "retained");
+            const attrs = { mode: 0o751, uid: 1000, gid: 1000,
+                atime: { seconds: 123n, nanoseconds: 456 }, mtime: { seconds: 789n, nanoseconds: 123 } };
+            workspace.setAttributes("retained", attrs);
+            const shutdown = runtime.requestShutdown.bind(runtime);
+            let shutdowns = 0;
+            runtime.requestShutdown = async () => { shutdowns += 1; await shutdown(); };
+            content.focus();
+            doc.execCommand("selectAll");
+            doc.execCommand("insertText", false, "buffered switch edit");
+            await wait(() => !doc.getElementById("sync-button").disabled, "outgoing editor is dirty");
+            step = "switch during example download";
+            buttons().find(button => button.textContent === "Insertion sort").click();
+            await wait(async () => (await (await fetch("/requests")).json()).some(path => path.endsWith("/examples/sort/sort.s")), "sort download pending");
+            app.testConsole = "";
+            buttons().find(button => button.textContent === "Binary reduction steps").click();
+            await wait(() => doc.querySelector('.selected[data-path="reduction_steps.s"]') && app.testConsole.includes("To test your code:") && app.testConsole.includes("$"), "latest selection wins after download");
+            check(workspace.listFiles().includes("retained") && !workspace.listFiles().includes("sort.s"), "superseded download preserves outgoing namespace");
+            const beforeSwitches = shutdowns;
+            step = "orderly snapshot switches";
+            app.testConsole = "";
+            buttons().find(button => button.textContent === "Insertion sort").click();
+            await wait(() => doc.querySelector('.selected[data-path="sort.s"]') && app.testConsole.includes("To test your code:") && app.testConsole.includes("$"), "switch shuts down and boots sort");
+            check(!workspace.listFiles().includes("retained"), "incoming example has independent files");
+            workspace.writeFile("sort-work", "sort snapshot");
+            app.testConsole = "";
+            buttons().find(button => button.textContent === "Binary reduction steps").click();
+            await wait(() => doc.querySelector('.selected[data-path="reduction_steps.s"]') && app.testConsole.includes("To test your code:") && app.testConsole.includes("$"), "switch restores reduction");
+            check(shutdowns === beforeSwitches + 2, "both running switches request orderly shutdown");
+            check(decoder.decode(workspace.readFile("reduction_steps.s")) === "buffered switch edit\\n", "switch flushes editor before snapshot");
+            check(decoder.decode(workspace.readFile("retained")) === "outgoing work", "outgoing work preserved");
+            check(workspace.stat("retained").inode === workspace.stat("retained-alias").inode, "snapshot preserves hard links");
+            check(workspace.readlink("retained-link") === "retained", "snapshot preserves symlinks");
+            check(workspace.listDirectory("empty-directory").length === 0, "snapshot preserves empty directories");
+            check(workspace.stat("retained").mode === 0o751 && workspace.stat("retained").mtime.seconds === 789n, "snapshot preserves executable metadata");
+            app.testConsole = "";
+            buttons().find(button => button.textContent === "Insertion sort").click();
+            await wait(() => doc.querySelector('.selected[data-path="sort.s"]') && app.testConsole.includes("To test your code:") && app.testConsole.includes("$"), "incoming sort snapshot restored");
+            check(decoder.decode(workspace.readFile("sort-work")) === "sort snapshot", "incoming example retains its own work");
+            app.testConsole = "";
+            buttons().find(button => button.textContent === "Binary reduction steps").click();
+            await wait(() => doc.querySelector('.selected[data-path="reduction_steps.s"]') && app.testConsole.includes("To test your code:") && app.testConsole.includes("$"), "reduction restored again");
+
+            step = "stalled shutdown recovery";
+            let rejectRetiredShutdown;
+            runtime.requestShutdown = () => {
+                shutdowns += 1;
+                return new Promise((resolve, reject) => { rejectRetiredShutdown = reject; });
+            };
+            buttons().find(button => button.textContent === "Insertion sort").click();
+            await wait(() => doc.getElementById("status").textContent.startsWith("Shutting down"), "waiting for poweroff");
+            check(!doc.getElementById("vm-reset-button").disabled, "Reset remains available during shutdown");
+            app.testConsole = "";
+            doc.getElementById("vm-reset-button").click();
+            await wait(() => doc.querySelector('.selected[data-path="reduction_steps.s"]') && app.testConsole.includes("To test your code:") && app.testConsole.includes("$"), "Reset interrupts stalled transition");
+            check(!workspace.listFiles().includes("retained"), "Reset discards saved snapshot");
+            check(decoder.decode(workspace.readFile("reduction_steps.s")) === decoder.decode(original), "Reset restores originals");
+            rejectRetiredShutdown(new Error("controlled retired shutdown failure"));
+            await delay(50);
+            check(runtime.started && doc.getElementById("status").textContent.startsWith("Running"), "late retired shutdown failure cannot fail new VM");
+            runtime.requestShutdown = shutdown;
+
             step = "shutdown";
             await runtime.requestShutdown();
             await wait(() => !runtime.started && doc.getElementById("status").textContent.startsWith("Halted"), "orderly shutdown");
-            workspace.writeFile("discard-me", "discarded");
+            workspace.writeFile("preserve-me", "preserved");
+            const disk = runtime.block(0);
+            const baseSector = await disk.read(0n, 512);
+            const overlay = baseSector.slice();
+            overlay[0] ^= 255;
+            disk.write(0n, overlay);
 
-            step = "switch during example download";
-            const buttons = () => [...doc.querySelectorAll(".example-button")];
+            step = "superseded example switch";
+            app.testConsole = "";
             buttons().find(button => button.textContent === "Insertion sort").click();
-            await wait(async () => (await (await fetch("/requests")).json()).some(path => path.endsWith("/examples/sort/sort.s")), "sort download pending");
             buttons().find(button => button.textContent === "Binary reduction steps").click();
-            await wait(() => doc.querySelector('.selected[data-path="reduction_steps.s"]') && doc.getElementById("status").textContent.startsWith("Running"), "reduction reselected");
+            await wait(() => doc.querySelector('.selected[data-path="reduction_steps.s"]') && doc.getElementById("status").textContent.startsWith("Running")
+                && !doc.getElementById("vm-boot-button").disabled && runtime.started
+                && app.testConsole.includes("To test your code:") && app.testConsole.includes("$"), "reduction reselected");
             await delay(500);
-            check(!workspace.listFiles().includes("sort.s") && !workspace.listFiles().includes("discard-me"), "switch clears previous files");
+            check(!workspace.listFiles().includes("sort.s") && workspace.listFiles().includes("preserve-me"), "superseded switch preserves outgoing files");
             check(runtime === app.testRuntime && runtime.filesystems.size === 1, "switch retains runtime and share");
+            await runtime.requestShutdown();
+            await wait(() => !runtime.started, "poweroff for retained disk inspection");
+            check((await disk.read(0n, 512))[0] === overlay[0], "switch retains disk overlay");
+            app.testConsole = "";
+            doc.getElementById("vm-reset-button").click();
+            await wait(() => app.testConsole.includes("To test your code:") && app.testConsole.includes("$"), "final Reset boot");
+            await runtime.requestShutdown();
+            await wait(() => !runtime.started, "poweroff after Reset");
+            check((await disk.read(0n, 512))[0] === baseSector[0], "Reset discards disk overlay");
             await unsubscribe();
             if (runtime.started) await runtime.halt();
             await runtime.destroy();
@@ -229,7 +322,7 @@ test("Risclet shares Rust files with its host UI across image and VM lifetimes",
             await fetch("/result?status=" + encodeURIComponent(step + ": " + error + "\\n" + (app?.testConsole ?? "")));
         }
         </script>`, directory, {
-            timeoutMs: 90_000,
+            timeoutMs: 150_000,
             onRequest(url) { requests.push(url.pathname); },
             async response(url) {
                 if (url.pathname === "/requests") return { status: 200, body: JSON.stringify(requests) };

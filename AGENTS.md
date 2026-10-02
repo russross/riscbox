@@ -172,18 +172,28 @@ identifies the platform as `riscbox`; QEMU names remain in functional board
 bindings and build targets. Linux uses UART early and the VirtIO console for
 login.
 Risclet uses one VM and one share across examples. It downloads complete file
-bodies before boot and caches original bytes in the application. Switching or
-Reset halts, cold-resets, discards the HTTP overlay, clears and repopulates the
-share, and boots. Reboot requests an orderly guest reboot retaining edits and
-storage. Filesystem operations and subscriptions are synchronous with numeric
+bodies before boot and caches original bytes in the application. Switching
+flushes the editor, requests orderly guest shutdown, snapshots the outgoing
+namespace, restores the incoming example's snapshot or originals, and boots
+the same VM with retained disk overlays. Application-memory snapshots retain
+bytes, directories, symlinks, hard links, permissions, ownership, and access/
+modification times; restored inode identities and ctime are new. Reset forces
+halt, cold-resets, discards the HTTP overlay, restores current-example originals,
+and boots. Reset can interrupt pending orderly shutdown or reboot.
+Reboot requests an orderly guest reboot retaining edits and storage.
+Filesystem operations and subscriptions are synchronous with numeric
 origin filtering; notifications run after Rust borrows end.
-The editor buffers changes until blur, file selection, VM interaction,
-or a thirty-second deadline from the first unflushed edit. Writes acknowledge
+The editor buffers changes until blur, file selection, VM interaction, Sync,
+or a thirty-second fallback timer restarted by each edit. Writes acknowledge
 only their submitted revision; failures retain dirty text and retry. Conflicting
 filesystem changes require a discard decision before replacing dirty text.
 Instruction subscriptions track referenced images as well as the document.
 Terminal input batches copied bytes, retries partial FIFO acceptance, and
 retires queued and pending input on reset, halt, teardown, or runtime failure.
+The terminal uses pinned Wterm 0.5.4 with its Ghostty core, DOM rendering, 18px
+Latin Modern Mono, and a 64 KiB history budget. Guarded build loaders adapt
+viewport clipping and connected box strokes. Browser rendering tests cover
+fractional scaling, partial-row clearing, retained history, and idle rendering.
 
 Rust sizes each execution quantum from a measured emulated cycle rate and a
 target duration, twenty milliseconds by default. Each quantum locks its rate

@@ -4,6 +4,19 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Migrated Risclet from ghostty-web to pinned Wterm 0.5.4 with its Ghostty
+    core, DOM rendering, connected box strokes, and live-screen history clipping.
+    Added fractional-scale pixel, clear/reset, paste, idle, and resize checks.
+    Sync writes dirty editor text to 9p; autosync now debounces thirty seconds
+    after the latest edit, matching exam's fallback timer.
+
+*   Example switches use orderly guest poweroff, snapshot outgoing namespaces,
+    restore independent example work, and retain disk overlays in one VM.
+    Snapshots preserve binary files, empty directories, symlinks, hard links,
+    permissions, ownership, and access/modification times. Reset remains forced
+    recovery: halt, cold-reset RAM, discard overlays, and restore originals.
+    Added synchronous filesystem attribute updates with raw-WASM validation.
+
 *   Consolidated platform storage in Rust. HTTP disks use a bounded clean cache
     and sparse sector overlays; synchronous writes never fetch missing chunks.
     VM-owned array disks write through directly. Powered-off host reads return

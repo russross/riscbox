@@ -27,6 +27,10 @@ export class TerminalInputQueue {
             const chunk = this.chunks[0];
             const bytes = chunk.subarray(this.offset, this.offset + 1024);
             const accepted = this.send(bytes);
+            if (!Number.isInteger(accepted) || accepted < 0 || accepted > bytes.length) {
+                this.clear();
+                throw new Error(`Invalid VM input acceptance count: ${accepted}`);
+            }
             this.offset += accepted;
             if (this.offset === chunk.length) {
                 this.chunks.shift();

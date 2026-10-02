@@ -72,6 +72,36 @@ No active implementation plans are currently recorded.
 Candidate work
 --------------
 
+### Exam client synchronization at its next development window
+
+The read-only `exam/` mount is a reference deployment, not Riscbox source.
+Its Wterm 0.5.4 integration supplied Risclet's terminal migration. Port these
+changes when exam development resumes:
+
+*   Upgrade to the current Riscbox adapter and synchronous VM-owned filesystem
+    API. Remove standalone filesystem creation, source loaders, seed installation,
+    and binding. Keep editor-to-9p sync distinct from server-save acknowledgement;
+    preserve the existing thirty-second debounce and server save queue.
+*   Preserve the outgoing workspace after orderly poweroff and restore the
+    incoming problem before boot. Same-image switches retain block overlays;
+    Reboot requests an orderly guest reboot. Image identity should include the
+    problem-type image/configuration and runtime: different images force halt,
+    destruction, and preparation of a new VM. Preserve per-problem snapshots
+    outside the destroyed VM. Official student paths still define submissions.
+*   Add a separate VM Reset fallback alongside exam's existing file Reset.
+    It forces halt, cold-resets RAM, discards disk changes, restores the current
+    problem's original 9p files, and boots. Keep it available while graceful
+    shutdown/reboot is pending; retire delayed input and obsolete transitions.
+*   Port Risclet's viewport clipping and explicit row-height CSS from
+    `images/risclet/ui/wterm-viewport-loader.cjs` and `terminal.css`. Physical
+    scroll-offset rounding can expose retained history after clear/Ctrl+L;
+    zero overscan alone does not clip rows retained for selection. Port the
+    fractional-scale pixel checks and container resize observation.
+*   Accepting a dirty-editor guest conflict currently cancels the guest-change
+    autosave timer in `exam/index.ts`. Keep/rearm it if the workspace still
+    needs server persistence, and test accepting the conflict without another
+    interaction. Preserve exam's private clipboard and grading-output policies.
+
 ### Interrupt-controller modernization
 
 The platform now describes its machine-local interrupt registers as ACLINT

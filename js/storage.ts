@@ -83,6 +83,10 @@ export interface FileStat {
     readonly linkCount: number; readonly size: bigint;
     readonly atime: FileTime; readonly mtime: FileTime; readonly ctime: FileTime;
 }
+export interface FileAttributes {
+    readonly mode: number; readonly uid: number; readonly gid: number;
+    readonly atime: FileTime; readonly mtime: FileTime;
+}
 export interface P9Change {
     readonly kind: "create" | "write" | "remove" | "rename" | "metadata" | "reset" | "rescan";
     readonly inode: bigint;
@@ -167,6 +171,15 @@ export class Filesystem {
     readlink(path: string): string { return new TextDecoder().decode(this.operation(10, new Writer().str(path))); }
     link(existing: string, path: string, origin = 0n): void { this.operation(11, new Writer().str(existing).str(path), origin); }
     clear(): void { this.operation(12); }
+
+    // Restored attributes preserve nanoseconds; inode identity and ctime are new.
+    setAttributes(path: string, attributes: FileAttributes, origin = 0n): void {
+        const { mode, uid, gid, atime, mtime } = attributes;
+        if (mode > 0o7777 || atime.nanoseconds >= 1_000_000_000 || mtime.nanoseconds >= 1_000_000_000)
+            throw new RangeError("invalid filesystem attributes");
+        this.operation(14, new Writer().str(path).u32(mode).u32(uid).u32(gid)
+            .u64(atime.seconds).u32(atime.nanoseconds).u64(mtime.seconds).u32(mtime.nanoseconds), origin);
+    }
 
     subscribe(listener: (change: P9Change) => void): () => void {
         if (this.closed) throw new FilesystemError(9);

@@ -35,6 +35,7 @@ test-images:
 	$(MAKE) -C images/xv6-profile
 	cargo test --release --test platform_acceptance alpine_reaches_login_and_shuts_down -- --ignored
 	node --test tests/risclet_browser.test.mjs
+	node --experimental-websocket --test tests/risclet_terminal.test.mjs
 
 wasm: $(RUSTBOX_WASM)
 

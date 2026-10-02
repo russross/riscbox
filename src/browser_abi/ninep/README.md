@@ -54,6 +54,14 @@ explicitly; raw WASM has no OS clock. The origin is recorded in change events.
 | 11   | Hard link       | `str existing, str new_path` | Empty                    |
 | 12   | Clear namespace | Empty                        | Empty                    |
 | 13   | Change tracking | `u32 enabled` (0 or 1)       | Empty                    |
+| 14   | Set attributes  | Attribute body below        | Empty                    |
+
+The attribute body is `str path`, `u32 mode`, `u32 uid`, `u32 gid`,
+`u64 atime_seconds`, `u32 atime_nanoseconds`, `u64 mtime_seconds`, and
+`u32 mtime_nanoseconds`. Mode is limited to `07777`; nanoseconds must be below
+one billion. Decode and validation finish before any mutation. The operation
+changes ctime and QID version and emits a metadata event carrying the origin.
+The synchronous facade exposes `setAttributes(path, FileAttributes, origin?)`.
 
 Operations work before boot, during execution boundaries, and while halted.
 Clear is permitted only while powered off.

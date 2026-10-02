@@ -7,8 +7,13 @@ import test from "node:test";
 import { createRequire } from "node:module";
 import { abiRegression } from "./fixtures/ninep_abi.mjs";
 import { facadeRegression } from "./fixtures/ninep_facade.mjs";
+import { snapshotRegression } from "./fixtures/risclet_workspace.mjs";
+import ts from "../images/risclet/ui/node_modules/typescript/lib/typescript.js";
 import { runChromePage } from "./chrome.mjs";
 const { Riscbox } = createRequire(import.meta.url)("../build/js/riscbox.js");
+const workspaceSource = ts.transpileModule(await readFile(new URL("../images/risclet/ui/workspace.ts", import.meta.url), "utf8"),
+    { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ES2022 } }).outputText;
+const { snapshotWorkspace, restoreWorkspace } = await import(`data:text/javascript;base64,${Buffer.from(workspaceSource).toString("base64")}`);
 
 test("deployed filesystem ABI owns bytes and handles through synchronous sharing and VM lifetimes", async () => {
     const directory = await mkdtemp(join(tmpdir(), "riscbox-ninep-abi-"));
@@ -35,7 +40,10 @@ test("deployed filesystem ABI owns bytes and handles through synchronous sharing
         } } });
         assert.equal(await abiRegression(instance.exports, firmware), 1);
         const runtime = new Riscbox(instance.exports, { onError: error => { throw error; } });
-        try { assert.equal(await facadeRegression(runtime, firmware), 1); }
+        try {
+            assert.equal(await facadeRegression(runtime, firmware), 1);
+            assert.equal(await snapshotRegression(runtime, snapshotWorkspace, restoreWorkspace), 1);
+        }
         finally { runtime.cancelWakeup(); }
 
         if (process.env.RISCBOX_TEST_BROWSER === "1") {
@@ -43,9 +51,13 @@ test("deployed filesystem ABI owns bytes and handles through synchronous sharing
                 .replace("export async function abiRegression", "async function abiRegression");
             const facade = (await readFile(join(import.meta.dirname, "fixtures/ninep_facade.mjs"), "utf8"))
                 .replace("export async function facadeRegression", "async function facadeRegression");
+            const snapshots = (await readFile(join(import.meta.dirname, "fixtures/risclet_workspace.mjs"), "utf8"))
+                .replace("export async function snapshotRegression", "async function snapshotRegression");
             await runChromePage(`<!doctype html><body>pending<script src="/build/js/riscbox.js"></script><script type="module">
                 ${source}
                 ${facade}
+                ${workspaceSource.replaceAll("export function", "function")}
+                ${snapshots}
                 try {
                     const bytes = Uint8Array.from(atob("${bytes.toString("base64")}"), value => value.charCodeAt(0));
                     let instance;
@@ -56,6 +68,7 @@ test("deployed filesystem ABI owns bytes and handles through synchronous sharing
                     await abiRegression(instance.exports, firmware);
                     const runtime = new Riscbox(instance.exports, { onError: error => { throw error; } });
                     await facadeRegression(runtime, firmware);
+                    await snapshotRegression(runtime, snapshotWorkspace, restoreWorkspace);
                     await fetch("/result?status=pass");
                 } catch (error) { await fetch("/result?status=" + encodeURIComponent(String(error))); }
             </script>`, directory);

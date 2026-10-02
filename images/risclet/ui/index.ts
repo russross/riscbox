@@ -9,9 +9,11 @@ import { gas } from "@codemirror/legacy-modes/mode/gas";
 import { shell } from "@codemirror/legacy-modes/mode/shell";
 import { Compartment, EditorSelection, EditorState } from "@codemirror/state";
 import { EditorView, keymap, ViewUpdate } from "@codemirror/view";
-import { FitAddon, init as initializeGhostty, Terminal } from "ghostty-web";
 import { basicSetup } from "codemirror";
 import { TerminalInputQueue } from "./terminal_input";
+import { TerminalView } from "./terminal";
+import { populateWorkspace, restoreWorkspace, snapshotWorkspace } from "./workspace";
+import type { WorkspaceSnapshot } from "./workspace";
 import type { Filesystem, P9Change } from "../../../js/storage";
 import type { Riscbox as RiscboxRuntime } from "../../../js/riscbox";
 
@@ -28,6 +30,7 @@ interface ExampleDescription {
 interface ExampleState {
     readonly description: ExampleDescription;
     readonly filesystem: Filesystem;
+    snapshot?: WorkspaceSnapshot;
 }
 
 interface FileTreeNode {
@@ -43,27 +46,6 @@ declare global {
 }
 
 const DOC_PATH = "doc/doc.md";
-const SHOW_CURSOR = "\x1b[?25h";
-const TERMINAL_THEME = {
-    background: "#000000",
-    foreground: "#c0c0c0",
-    black: "#000000",
-    red: "#ff0000",
-    green: "#00ff00",
-    yellow: "#ffff00",
-    blue: "#0000ff",
-    magenta: "#ff00ff",
-    cyan: "#00ffff",
-    white: "#ffffff",
-    brightBlack: "#808080",
-    brightRed: "#ff8080",
-    brightGreen: "#80ff80",
-    brightYellow: "#ffff80",
-    brightBlue: "#8080ff",
-    brightMagenta: "#ff80ff",
-    brightCyan: "#80ffff",
-    brightWhite: "#ffffff",
-} as const;
 const decoder = new TextDecoder();
 const encoder = new TextEncoder();
 const markdownParser = new commonmark.Parser();
@@ -92,6 +74,7 @@ let openGeneration = 0;
 let treeGeneration = 0;
 let instructionsGeneration = 0;
 let switchQueue = Promise.resolve();
+let switching = false;
 const EDITOR_ORIGIN = 1n;
 
 function reportUiError(error: unknown): void {
@@ -231,6 +214,7 @@ function clearEditor(): void {
     conflictPath = null;
     currentPath = null;
     resetEditor("", false, "");
+    updateSyncButton();
 }
 
 async function openFile(path: string): Promise<void> {
@@ -273,9 +257,10 @@ function cancelEditorTimer(): void {
     editorTimer = undefined;
 }
 
-// The first unflushed edit sets a bounded deadline, even during continuous typing.
+// Blur normally flushes edits; the timer is a fallback after typing stops.
 function scheduleEditorFlush(): void {
-    if (editorTimer !== undefined || !editorIsDirty()) return;
+    cancelEditorTimer();
+    if (!editorIsDirty()) return;
     editorTimer = window.setTimeout(() => {
         editorTimer = undefined;
         void syncEditor().catch(reportUiError);
@@ -302,10 +287,15 @@ function syncEditor(): Promise<void> {
             conflictPath = null;
             if (editorIsDirty()) scheduleEditorFlush();
             else cancelEditorTimer();
+            updateSyncButton();
         }
     });
     editorWrites = operation.catch(() => undefined);
     return operation;
+}
+
+function updateSyncButton(): void {
+    requiredButton("sync-button").disabled = switching || !editorIsDirty();
 }
 
 function buildFileTree(paths: readonly string[]): Record<string, FileTreeNode> {
@@ -348,6 +338,7 @@ function renderTree(node: Record<string, FileTreeNode>, parent: HTMLElement, dep
             listItem.classList.toggle("selected", item.fullPath === currentPath);
             listItem.addEventListener("click", (event: MouseEvent): void => {
                 event.stopPropagation();
+                if (switching) return;
                 void syncEditor().then(() => openFile(item.fullPath)).catch(reportUiError);
             });
         }
@@ -470,7 +461,7 @@ function changeAffectsPath(change: P9Change, path: string): boolean {
 }
 
 async function handleFilesystemChange(example: ExampleState, change: P9Change): Promise<void> {
-    if (example !== currentExample) {
+    if (switching || example !== currentExample) {
         return;
     }
     // Directory renames move every displayed child path. Alias events also
@@ -500,6 +491,7 @@ async function handleFilesystemChange(example: ExampleState, change: P9Change): 
             cancelEditorTimer();
             flushedRevision = editorRevision;
             conflictPath = null;
+            updateSyncButton();
         }
         const view = viewGeneration;
         const path = currentPath;
@@ -517,13 +509,14 @@ async function handleFilesystemChange(example: ExampleState, change: P9Change): 
 class VmController {
     private readonly bootButton: HTMLButtonElement;
     private readonly resetButton: HTMLButtonElement;
-    private readonly fitAddon = new FitAddon();
-    private readonly terminal: Terminal;
+    private readonly terminal: TerminalView;
     private runtime: RiscboxRuntime | undefined;
     private target: ExampleState | undefined;
     private generation = 0;
     private inputGeneration = 0;
-    private state: "ready" | "loading" | "running" | "halted" | "failed" = "ready";
+    private state: "ready" | "loading" | "stopping" | "running" | "halted" | "failed" = "ready";
+    private workspaceLoaded = false;
+    private shutdownWaiter: { resolve(): void; reject(error: Error): void } | undefined;
     private readonly input = new TerminalInputQueue(bytes => {
         if (this.state !== "running" || this.runtime === undefined) return 0;
         return this.runtime.consoleInput(bytes);
@@ -535,30 +528,12 @@ class VmController {
         if (!(resetButton instanceof HTMLButtonElement)) throw new Error("Reset control must be a button");
         this.resetButton = resetButton;
         resetButton.addEventListener("click", () => {
-            if (this.target) void switchExample(this.target).catch(reportUiError);
+            if (this.target) void switchExample(this.target, true).catch(reportUiError);
         });
-        this.terminal = new Terminal({
-            convertEol: false,
-            cursorBlink: true,
-            fontFamily: '"Latin Modern Mono", monospace',
-            fontSize: 18,
-            scrollback: 1000,
-            theme: TERMINAL_THEME,
-        });
-        this.terminal.loadAddon(this.fitAddon);
-        this.terminal.open(host);
-        this.fitAddon.fit();
-        this.terminal.onData((text: string): void => {
-            if (this.state !== "running") return;
-            const generation = this.inputGeneration;
-            void syncEditor().then(() => {
-                if (generation === this.inputGeneration && this.state === "running") {
-                    this.input.enqueue(encoder.encode(text));
-                }
-            }).catch(reportUiError);
-        });
-        this.terminal.onResize(({ cols, rows }): void => {
-            this.runtime?.consoleResize(cols, rows);
+        this.terminal = new TerminalView(host, {
+            onData: text => this.sendInput(encoder.encode(text)),
+            onBinary: bytes => this.sendInput(bytes),
+            onResize: (cols, rows) => this.runtime?.consoleResize(cols, rows),
         });
         this.bootButton.addEventListener("click", (): void => {
             void syncEditor().then(async () => {
@@ -571,49 +546,89 @@ class VmController {
         this.updateControls();
     }
 
-    async setTarget(target: ExampleState): Promise<void> {
+    private sendInput(bytes: Uint8Array): void {
+        if (this.state !== "running" || switching) return;
+        const generation = this.inputGeneration;
+        const copied = bytes.slice();
+        void syncEditor().then(() => {
+            if (generation === this.inputGeneration && this.state === "running" && !switching) {
+                this.input.enqueue(copied);
+            }
+        }).catch(reportUiError);
+    }
+
+    async setTarget(target: ExampleState, reset: boolean, isCurrent: () => boolean): Promise<boolean> {
         const runtime = this.runtime;
         if (!runtime) throw new Error("Runtime is unavailable");
-        this.state = "loading";
-        this.target = target;
+        const previous = this.target;
+        if (previous === undefined) this.target = target;
         this.clearInput();
-        this.updateControls();
         try {
-            if (runtime.started) await runtime.halt();
-            await runtime.coldReset();
-            runtime.block(0).discardChanges();
-            target.filesystem.clear();
-            const files = await loadExampleFiles(target.description);
-
-            // Populate parents before children so the regular API alone builds
-            // the resident namespace, including binary instruction assets.
-            const directories = new Set<string>();
-            for (const [path, bytes] of files) {
-                const parts = path.split("/");
-                for (let end = 1; end < parts.length; end++) {
-                    const directory = parts.slice(0, end).join("/");
-                    if (!directories.has(directory)) {
-                        target.filesystem.mkdir(directory);
-                        directories.add(directory);
-                    }
-                }
-                target.filesystem.writeFile(path, bytes);
+            // Downloads finish before retiring the outgoing namespace. A failed
+            // download leaves its bytes and VM available for recovery.
+            const files = reset || target.snapshot === undefined
+                ? await loadExampleFiles(target.description) : undefined;
+            if (!isCurrent()) return false;
+            if (reset) {
+                await this.forceHalt();
+                await runtime.coldReset();
+                runtime.block(0).discardChanges();
+            } else {
+                await this.shutdown();
             }
+            if (!isCurrent()) return false;
+            if (!reset && previous !== undefined && this.workspaceLoaded) {
+                previous.snapshot = snapshotWorkspace(previous.filesystem);
+            }
+            // Retired editor views cannot react to namespace replacement events.
+            clearEditor();
+            currentExample = null;
+            this.target = target;
+            this.workspaceLoaded = false;
+            if (reset) target.snapshot = undefined;
+            if (target.snapshot !== undefined) restoreWorkspace(target.filesystem, target.snapshot);
+            else if (files !== undefined) populateWorkspace(target.filesystem, files);
+            else throw new Error("Example files are unavailable");
+            this.workspaceLoaded = true;
             this.resetTerminal();
             this.bootButton.hidden = false;
             this.state = "ready";
             await this.boot();
+            return isCurrent();
         } catch (error: unknown) {
-            this.fail(error instanceof Error ? error.message : String(error));
+            if (isCurrent()) this.fail(error instanceof Error ? error.message : String(error));
             throw error;
         }
     }
 
     fit(): void {
-        this.fitAddon.fit();
+        this.terminal.fit();
+    }
+
+    // Poweroff completion, rather than input delivery, makes snapshotting safe.
+    private async shutdown(): Promise<void> {
+        const runtime = this.runtime;
+        if (runtime === undefined || !runtime.started) return;
+        this.state = "stopping";
+        this.updateControls();
+        requiredElement("status").textContent = "Shutting down VM · Reset can force recovery";
+        const stopped = new Promise<void>((resolve, reject) => { this.shutdownWaiter = { resolve, reject }; });
+        const waiter = this.shutdownWaiter;
+        void runtime.requestShutdown().catch((error: unknown) => {
+            if (this.shutdownWaiter !== waiter) return;
+            waiter?.reject(error instanceof Error ? error : new Error(String(error)));
+            this.shutdownWaiter = undefined;
+        });
+        await stopped;
+    }
+
+    async forceHalt(): Promise<void> {
+        this.clearInput();
+        if (this.runtime?.started) await this.runtime.halt();
     }
 
     bootIfInactive(): void {
+        if (switching) return;
         if (this.state === "ready") {
             void this.boot();
         } else if (this.state === "halted") {
@@ -627,15 +642,22 @@ class VmController {
 
     private resetTerminal(): void {
         this.clearInput();
-        this.terminal.reset();
-        this.terminal.scrollToBottom();
-        this.terminal.write(SHOW_CURSOR);
+        this.terminal.clear();
     }
 
     private async reboot(): Promise<void> {
         if (!this.runtime) throw new Error("Runtime is unavailable");
         this.clearInput();
-        if (this.state === "running") await this.runtime.requestReboot();
+        if (this.runtime.started) {
+            this.state = "stopping";
+            this.updateControls();
+            requiredElement("status").textContent = "Rebooting VM · Reset can force recovery";
+            try { await this.runtime.requestReboot(); }
+            catch (error: unknown) {
+                this.fail(error instanceof Error ? error.message : String(error));
+                throw error;
+            }
+        }
         else await this.bootRetained();
     }
 
@@ -677,6 +699,7 @@ class VmController {
 
     // One prepared platform owns the disk and share used by every example.
     async prepareRuntime(): Promise<RiscboxRuntime> {
+        await this.terminal.ready;
         const response = await fetch("riscbox.wasm", { cache: "no-cache" });
         if (!response.ok) throw new Error(`WASM request failed with status ${response.status}`);
         const runtime = await window.Riscbox.instantiate(await response.arrayBuffer(), {
@@ -686,6 +709,9 @@ class VmController {
             onVmStarted: (): void => this.markRunning(),
             onVmHalted: (): void => {
                 this.clearInput();
+                const waiter = this.shutdownWaiter;
+                this.shutdownWaiter = undefined;
+                if (waiter !== undefined) { waiter.resolve(); return; }
                 this.state = "halted";
                 this.updateControls();
                 requiredElement("status").textContent = `Halted · ${this.target?.description.title ?? "VM"}`;
@@ -716,14 +742,16 @@ class VmController {
 
     private fail(message: string): void {
         this.clearInput();
+        this.shutdownWaiter?.reject(new Error(message));
+        this.shutdownWaiter = undefined;
         this.state = "failed";
         this.terminal.writeln(`\r\n${message}`);
         requiredElement("status").textContent = `VM failed · ${message}`;
         this.updateControls();
     }
 
-    private updateControls(): void {
-        this.bootButton.disabled = this.target === undefined || this.state === "loading";
+    updateControls(): void {
+        this.bootButton.disabled = switching || this.target === undefined || this.state === "loading" || this.state === "stopping";
         this.resetButton.disabled = this.target === undefined || this.state === "loading";
         this.bootButton.textContent = this.state === "running" || this.state === "failed"
             ? "Reboot VM"
@@ -783,23 +811,45 @@ function renderMenu(): void {
     }
 }
 
-function switchExample(example: ExampleState): Promise<void> {
+function switchExample(example: ExampleState, reset = false): Promise<void> {
     const generation = ++viewGeneration;
     for (const button of document.querySelectorAll<HTMLButtonElement>(".example-button")) {
         button.disabled = false;
     }
-    // Serialize powered-off storage replacement and reboot. Only the newest
-    // selection may update the visible panes after example downloads finish.
+    // Forced recovery bypasses the queue to release an outstanding shutdown.
+    // Namespace mutation still waits for the retired transition to finish.
+    const stopped = reset ? vmController.forceHalt() : Promise.resolve();
     const selection = switchQueue.then(async () => {
-        if (generation !== viewGeneration) return false;
-        clearEditor();
-        await vmController.setTarget(example);
-        return generation === viewGeneration;
+        if (generation !== viewGeneration) return;
+        await stopped;
+        if (!reset) await syncEditor();
+        switching = true;
+        updateSyncButton();
+        vmController.updateControls();
+        const wasReadOnly = editor.state.readOnly;
+        editor.dispatch({ effects: editable.reconfigure([
+            EditorView.editable.of(false), EditorState.readOnly.of(true),
+        ]) });
+        let selected = false;
+        try {
+            if (await vmController.setTarget(example, reset, () => generation === viewGeneration)) {
+                await showExample(example, generation);
+                selected = true;
+            }
+        } finally {
+            switching = false;
+            // Successful selection sets the new editor's access mode itself.
+            if (!selected) {
+                editor.dispatch({ effects: editable.reconfigure([
+                    EditorView.editable.of(!wasReadOnly), EditorState.readOnly.of(wasReadOnly),
+                ]) });
+            }
+            updateSyncButton();
+            vmController.updateControls();
+        }
     });
     switchQueue = selection.then(() => undefined, reportUiError);
-    return selection.then(async selected => {
-        if (selected) await showExample(example, generation);
-    });
+    return selection;
 }
 
 async function showExample(example: ExampleState, generation: number): Promise<void> {
@@ -830,7 +880,6 @@ async function showExample(example: ExampleState, generation: number): Promise<v
 }
 
 async function initialize(): Promise<void> {
-    await initializeGhostty();
     Split(["#file-tree-pane", "#editor-pane", "#info-pane"], {
         sizes: [10, 45, 45],
         gutterSize: 8,
@@ -852,6 +901,7 @@ async function initialize(): Promise<void> {
                     if (update.docChanged && !programmaticEditorUpdate && !editor.state.readOnly) {
                         editorRevision += 1;
                         scheduleEditorFlush();
+                        updateSyncButton();
                     }
                 }),
             ],
@@ -859,6 +909,7 @@ async function initialize(): Promise<void> {
         parent: requiredElement("editor-pane"),
     });
     vmController = new VmController(requiredElement("vm-terminal"), requiredButton("vm-boot-button"));
+    requiredButton("sync-button").addEventListener("click", (): void => { void syncEditor().catch(reportUiError); });
     requiredButton("instructions-tab-button").addEventListener("click", (): void => selectTab("instructions"));
     requiredButton("vm-tab-button").addEventListener("click", (): void => selectTab("vm"));
     const runtime = await vmController.prepareRuntime();

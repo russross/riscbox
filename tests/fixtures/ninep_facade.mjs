@@ -24,6 +24,15 @@ export async function facadeRegression(runtime, firmware) {
     checkFacade(!(share.readFile("file") instanceof Promise), "resident API is synchronous");
     await delay();
     checkFacade(events.some(event => event.kind === "write" && event.origin === 0x0123456789abcdefn), "origin notification");
+    share.setAttributes("file", { mode: 0o751, uid: 123, gid: 456,
+        atime: { seconds: 789n, nanoseconds: 123456789 }, mtime: { seconds: 900n, nanoseconds: 987654321 } }, 42n);
+    const attributes = share.stat("file");
+    checkFacade(attributes.mode === 0o751 && attributes.uid === 123 && attributes.gid === 456
+        && attributes.mtime.seconds === 900n && attributes.mtime.nanoseconds === 987654321, "typed attributes restored");
+    await delay();
+    checkFacade(events.some(event => event.kind === "metadata" && event.origin === 42n), "attribute origin notification");
+    await rejects(() => share.setAttributes("file", { ...attributes, mode: 0o10000 }), "invalid mode rejected");
+    await rejects(() => share.setAttributes("file", { ...attributes, mtime: { seconds: 0n, nanoseconds: 1_000_000_000 } }), "invalid timestamp rejected");
     await runtime.boot();
     runtime.cancelWakeup();
     await rejects(() => share.clear(), "running share clear must fail");

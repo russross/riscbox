@@ -14,7 +14,9 @@
     "@codemirror/legacy-modes": "^6.5.4",
     "codemirror": "^6.0.2",
     "commonmark": "^0.31.2",
-    "ghostty-web": "^0.4.0",
+    "@wterm/core": "0.5.4",
+    "@wterm/dom": "0.5.4",
+    "@wterm/ghostty": "0.5.4",
     "split.js": "^1.6.5"
   },
   "devDependencies": {

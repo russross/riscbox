@@ -380,14 +380,28 @@ under `build/`; the final ignored output belongs in `dist/`.
 
 Risclet uses one VM and one resident share. It downloads complete example
 files before boot and caches their original bytes in the application.
-Selecting an example or pressing Reset discards edits, stops the VM, clears
-RAM and the HTTP overlay, replaces the share, and boots. Reboot requests an
-orderly guest reboot and retains edits and disk changes.
+Selecting an example flushes the editor, requests orderly guest shutdown,
+snapshots the outgoing share, restores the incoming example, and boots the same
+VM with retained disk changes. Snapshots preserve file bytes, empty directories,
+symlinks, hard links, permissions, ownership, and access/modification times.
+They live in application memory and are lost when the page reloads. Reboot
+requests an orderly guest reboot and retains the current share and disk changes.
+Reset forces halt, clears RAM and the HTTP overlay, restores the current
+example's original files, and boots. Reset remains available while orderly
+shutdown or reboot is pending.
 
-Editor changes flush on blur, file selection, VM interaction, or thirty seconds
-after the first unflushed edit. Failed writes retain text for retry. External
+Editor changes flush on blur, file selection, VM interaction, Sync, or thirty
+seconds after the latest edit. Each edit restarts this fallback timer. Sync is
+enabled while the editor is dirty; it writes to 9p without server persistence.
+Failed writes retain text for retry. External
 changes to dirty files require a discard decision. Instruction images refresh
 when their shared files change; terminal pastes queue until accepted.
+
+The terminal uses Wterm's DOM renderer with its Ghostty core, 18px Latin Modern
+Mono, and a 64 KiB history budget. Screen clearing clips retained history at
+the live-screen boundary; Reset removes history and selection. Browser checks
+cover fractional scaling, partial-row viewport heights, connected box drawing,
+bracketed paste, idle rendering, and container resizing.
 
 The distribution builder splits the disk into HTTP-loadable blocks, compresses
 the next-stage payload with `gzip -9`, and gives boot and disk assets
@@ -429,7 +443,9 @@ Mount it in Linux with:
 
 Host methods are synchronous and throw `FilesystemError` with positive Linux
 `errno`. They include `readFile`, `writeFile`, `mkdir`, `remove`, `rename`,
-`listFiles`, `listDirectory`, `stat`, `symlink`, `readlink`, and `link`.
+`listFiles`, `listDirectory`, `stat`, `symlink`, `readlink`, `link`, and
+`setAttributes`. Attributes specify permissions, ownership, and access/
+modification times with nanosecond precision; changing them updates ctime.
 Writes replace whole files and require existing parent directories. Paths are
 literal namespace paths; the empty path names the root directory.
 

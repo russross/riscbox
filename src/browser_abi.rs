@@ -10,21 +10,10 @@ use crate::config::VmConfig;
 
 use crate::{block_abi, filesystem_abi};
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct StartRequest {
-    pub config_url: String,
-    pub ram_mib: u32,
-    pub command_line: String,
-    pub width: u32,
-    pub height: u32,
-    pub has_network: bool,
-}
-
 #[derive(Default)]
 pub(crate) struct AbiState {
     allocations: Vec<Box<[u8]>>,
     input_queue: BrowserInputQueue,
-    start: Option<StartRequest>,
     pub(crate) runtime: BrowserRuntime,
     action: Option<HostAction>,
     pub(crate) filesystems: filesystem_abi::FilesystemAbi,
@@ -69,71 +58,6 @@ pub extern "C" fn riscbox_free(address: u32, length: u32) {
 }
 
 #[must_use]
-pub extern "C" fn riscbox_start(
-    url_address: u32,
-    url_length: u32,
-    ram_mib: u32,
-    command_address: u32,
-    command_length: u32,
-    width: u32,
-    height: u32,
-    has_network: u32,
-) -> i32 {
-    STATE.with_borrow_mut(|state| {
-        let Some(config_url) = allocated_string(state, url_address, url_length) else {
-            return -1;
-        };
-        let Some(command_line) = allocated_string(state, command_address, command_length) else {
-            return -1;
-        };
-        if config_url.is_empty() || ram_mib == 0 {
-            return -1;
-        }
-        let request = RuntimeStart {
-            config_url: config_url.clone(),
-            ram_mib,
-            command_line: command_line.clone(),
-            width,
-            height,
-            has_network: has_network != 0,
-        };
-        state.start = Some(StartRequest {
-            config_url,
-            ram_mib,
-            command_line,
-            width,
-            height,
-            has_network: has_network != 0,
-        });
-        if state.runtime.start(request).is_err() {
-            -1
-        } else {
-            0
-        }
-    })
-}
-
-#[must_use]
-pub extern "C" fn riscbox_start_resolved(
-    config_address: u32,
-    config_length: u32,
-    ram_mib: u32,
-    width: u32,
-    height: u32,
-    has_network: u32,
-) -> i32 {
-    start_resolved(
-        config_address,
-        config_length,
-        ram_mib,
-        width,
-        height,
-        has_network,
-        false,
-    )
-}
-
-#[must_use]
 pub extern "C" fn riscbox_prepare_resolved(
     config_address: u32,
     config_length: u32,
@@ -141,26 +65,6 @@ pub extern "C" fn riscbox_prepare_resolved(
     width: u32,
     height: u32,
     has_network: u32,
-) -> i32 {
-    start_resolved(
-        config_address,
-        config_length,
-        ram_mib,
-        width,
-        height,
-        has_network,
-        true,
-    )
-}
-
-fn start_resolved(
-    config_address: u32,
-    config_length: u32,
-    ram_mib: u32,
-    width: u32,
-    height: u32,
-    has_network: u32,
-    prepare: bool,
 ) -> i32 {
     STATE.with_borrow_mut(|state| {
         let Some(source) = allocated_string(state, config_address, config_length) else {
@@ -185,12 +89,10 @@ fn start_resolved(
             height,
             has_network: has_network != 0,
         };
-        if prepare {
-            state.runtime.prepare_resolved(start, config)
-        } else {
-            state.runtime.start_resolved(start, config)
-        }
-        .map_or(-1, |()| 0)
+        state
+            .runtime
+            .prepare_resolved(start, config)
+            .map_or(-1, |()| 0)
     })
 }
 
@@ -485,11 +387,6 @@ pub extern "C" fn riscbox_http_complete(id: u32, status: u32, address: u32, leng
             .complete_http(id, status, bytes)
             .map_or(-1, |()| 0)
     })
-}
-
-#[must_use]
-pub fn take_start_request() -> Option<StartRequest> {
-    STATE.with_borrow_mut(|state| state.start.take())
 }
 
 fn allocated_bytes(state: &AbiState, address: u32, length: u32) -> Option<&[u8]> {

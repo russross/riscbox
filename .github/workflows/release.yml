@@ -99,7 +99,7 @@ jobs:
           archive=build/releases/riscbox-${{ steps.version.outputs.version }}.tar.gz
           tar -tzf "$archive" > /tmp/riscbox-archive-files
           prefix=riscbox-${{ steps.version.outputs.version }}
-          for asset in riscbox.wasm riscbox.js riscbox.d.ts splitimg.py README.md STORAGE-ABI.md NINEP.md DEPLOYMENT.md network/index.js; do
+          for asset in riscbox.wasm riscbox.js riscbox.d.ts splitimg.py README.md STORAGE-ABI.md NINEP.md API.md HOWTO.md network/index.js; do
             grep -Fx "$prefix/$asset" /tmp/riscbox-archive-files
           done
           echo "archive=$archive" >> "$GITHUB_OUTPUT"

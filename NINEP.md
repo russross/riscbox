@@ -1,6 +1,9 @@
 Rust 9P2000.L endpoint
 =====================
 
+This is the guest protocol implementation reference. Host applications use
+[API.md](API.md) and [HOWTO.md](HOWTO.md) for the JavaScript embedding boundary.
+
 The [session and endpoint](https://github.com/russross/riscbox/blob/main/src/ninep_protocol.rs) implement the resident Rust
 server over [namespace state](https://github.com/russross/riscbox/blob/main/src/ninep.rs). VirtIO owns a concrete endpoint
 with one independent session over a shared VM namespace. The synchronous

@@ -50,25 +50,31 @@ export interface RiscboxOptions {
     readonly consoleWrite?: (text: string) => void;
     readonly consoleReset?: () => void;
     readonly onVmStarted?: () => void;
-    readonly onVmHalted?: (cause: string) => void;
-    readonly onVmReset?: (cause: string) => void;
+    readonly onVmHalted?: (cause: HaltCause) => void;
+    readonly onVmReset?: (cause: ResetCause) => void;
     readonly onVmDestroyed?: () => void;
     readonly onError?: (error: unknown) => void;
     readonly networkWrite?: (bytes: Uint8Array) => void;
     readonly framebufferClear?: () => void;
     readonly framebufferRefresh?: (bytes: Uint8Array, geometry: { x: number; y: number; width: number; height: number; stride: number }) => void;
 }
-export declare class Riscbox implements StorageRuntime {
-    readonly exports: StorageExports;
+export type VmState = "empty" | "preparing" | "halted" | "running";
+export type HaltCause = "guest-poweroff" | "host-halt" | "guest-failure";
+export type ResetCause = "guest-reboot" | "host-reset" | "host-boot";
+
+// The client boundary exposes owned storage and automatic VM execution.
+export declare class Riscbox {
+    private constructor();
+    static readonly FilesystemError: typeof FilesystemError;
+    static readonly BlockError: typeof BlockError;
+    readonly state: VmState;
     readonly started: boolean;
-    readonly filesystems: Map<number, Filesystem>;
     static instantiate(bytes: BufferSource | WebAssembly.Module, options?: RiscboxOptions): Promise<Riscbox>;
     static loadResolvedConfig(url: string, commandLine?: string, fetchRequest?: typeof fetch): Promise<VmConfig>;
     prepareResolved(config: VmConfig, ramMiB?: number, width?: number, height?: number, hasNetwork?: boolean): Promise<void>;
     prepareFromUrl(url: string, ramMiB?: number, commandLine?: string, width?: number, height?: number, hasNetwork?: boolean): Promise<void>;
     startResolved(config: VmConfig, ramMiB?: number, width?: number, height?: number, hasNetwork?: boolean): Promise<void>;
     startFromUrl(url: string, ramMiB?: number, commandLine?: string, width?: number, height?: number, hasNetwork?: boolean): Promise<void>;
-    start(url: string, ramMiB: number, commandLine?: string, width?: number, height?: number, hasNetwork?: boolean): Promise<void>;
     filesystem(name: string): Filesystem;
     block(index: number): BlockDisk;
     boot(): Promise<void>;
@@ -83,14 +89,7 @@ export declare class Riscbox implements StorageRuntime {
     keyEvent(down: boolean, code: number): number;
     pointerEvent(x: number, y: number, buttons: number): number;
     wheelEvent(delta: number): number;
-    runQuantum(): void;
     networkInput(bytes: Uint8Array): number;
     networkCarrier(up: boolean): number;
-    withBytes<Value>(bytes: Uint8Array | string, call: (address: number, length: number) => Value): Value;
-    bytes(address: number, length: number): Uint8Array;
-    serviceStorage(): void;
-    drainActions(): void;
-    filesystemChanged(): void;
-    reportFilesystemError(error: unknown): void;
 }
-import type { BlockDisk, Filesystem, StorageExports, StorageRuntime } from "./storage";
+import type { BlockDisk, Filesystem, FilesystemError, BlockError } from "./storage";

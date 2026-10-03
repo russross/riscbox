@@ -4,6 +4,25 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Define the current JavaScript embedding boundary with private runtime and
+    storage internals, checked VM states/device inputs, and client-only generated
+    declarations. Remove the redundant `start()` alias and unused raw startup
+    exports. Preparation reserves the runtime before downloads, rejects overlap,
+    and cleans up failures; cancelled loads cannot replace a later VM. Native
+    and Chrome probes exercise the public facade as well as internal storage.
+
+*   Decode console UTF-8 incrementally per runtime across host imports and
+    queued output. Halt flushes truncated sequences; reset/destroy retire them.
+    Tests cover split characters, separate VMs, memory growth, and lifecycle
+    boundaries without retaining WASM byte views.
+
+*   Consolidate embedding documentation into call contracts in `API.md`,
+    narrated workflows in `HOWTO.md`, and overview/scope in README. Absorb the
+    deployment guide into HOWTO and label storage/protocol guides as internal
+    references. Package both client guides. Add explicit local
+    `make check-release` for core checks and actual archive validation/loading;
+    GitHub remains release-only, with no cross-release compatibility promises.
+
 *   Separate historical guest images and shared client source from core builds,
     tests, and release automation. Own the build-only TypeScript compiler and
     Chrome probe harness here. Package the standalone image splitter and the

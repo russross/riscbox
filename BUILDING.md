@@ -3,7 +3,7 @@ Building Riscbox
 
 These instructions are for contributors working from a source checkout.
 Distribution users should start with [README.md](README.md) and
-[DEPLOYMENT.md](DEPLOYMENT.md). The independent historical image projects and
+[HOWTO.md](HOWTO.md). The independent historical image projects and
 shared browser client are not inputs to any core build or test.
 
 Prerequisites
@@ -25,15 +25,16 @@ in `Cargo.lock`; native Rust builds are development and test environments.
 Targets
 -------
 
-| Target            | Result                                                   |
-| ----------------- | -------------------------------------------------------- |
-| `make`            | Runtime, boot assets, and archive in `build/releases/`     |
-| `make wasm js`    | WASM runtime and generated browser module/declarations    |
-| `make test-unit`  | Rust, splitter, adapter, network, and Node raw-WASM probes |
-| `make test`       | Unit checks plus real Chrome/WASM device and ABI probes   |
-| `make check`      | Full core checks, TypeScript, Clippy, and Python types     |
-| `make demo`       | Build the release-based Alpine embedding app              |
-| `make test-demo`  | Opt-in Chrome acceptance of the assembled demo            |
+| Target               | Result                                                     |
+| -------------------- | ---------------------------------------------------------- |
+| `make`               | Runtime, boot assets, and archive in `build/releases/`     |
+| `make wasm js`       | WASM runtime and generated browser module/declarations     |
+| `make test-unit`     | Rust, splitter, adapter, network, and Node raw-WASM probes |
+| `make test`          | Unit checks plus real Chrome/WASM device and ABI probes    |
+| `make check`         | Full core checks, TypeScript, Clippy, and Python types     |
+| `make check-release` | Core checks, package build, archive validation/loading     |
+| `make demo`          | Build the release-based Alpine embedding app               |
+| `make test-demo`     | Opt-in Chrome acceptance of the assembled demo             |
 
 `make kernel`, `make opensbi`, and `make uboot` build their pinned components.
 `make release` builds the optimized Rust workspace for development.
@@ -42,7 +43,9 @@ Targets
 removes only demo outputs.
 
 Browser validation uses temporary profiles, headed Chrome when `DISPLAY` is
-available, and headless Chrome otherwise. Core tests use small firmware probes
+available, and headless Chrome otherwise. Validation is run explicitly with the
+targets above. GitHub runs checks only as part of the release cycle. Core tests
+use small firmware probes
 and require no guest root filesystem, QEMU, mounted source, or UI framework.
 The optional demo build needs QEMU, fakeroot, cpio, and erofs-utils; see
 [demo/README.md](demo/README.md).
@@ -50,10 +53,10 @@ The optional demo build needs QEMU, fakeroot, cpio, and erofs-utils; see
 Repository boundaries
 ---------------------
 
-The main README and deployment, storage, and protocol guides are packaged for
-embedding applications. `AGENTS.md`, `DEV.md`, and this file describe contributor
-workflow and architecture. `demo/` is an example consumer, excluded from the
-archive and core checks. Its `dist/riscbox/` directory is copied from the release
+README, API, and HOWTO are packaged for embedding applications. Storage and
+protocol guides document implementation boundaries. `AGENTS.md`, `DEV.md`, and
+this file describe contributor workflow and architecture. `demo/` is an example
+consumer, excluded from the archive and core checks. Its `dist/riscbox/` directory is copied from the release
 archive, and its browser code accesses only that directory and demo-owned assets.
 
 Guest image definitions and their full-system acceptance tests belong to the

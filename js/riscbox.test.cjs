@@ -1,7 +1,7 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 
-const { Riscbox } = require("../build/js/riscbox.js");
+const { RiscboxRuntime: Riscbox } = require("../build/js/riscbox-internal.js");
 
 function fakeModule() {
     const memory = new WebAssembly.Memory({ initial: 1 });
@@ -35,7 +35,7 @@ function fakeModule() {
         riscbox_action_data_length() { return 0; },
     };
     for (const name of [
-        "start", "start_resolved", "prepare_resolved", "reset", "console_input", "console_resize", "key_event", "pointer_event",
+        "prepare_resolved", "reset", "console_input", "console_resize", "key_event", "pointer_event",
         "wheel_event", "network_input", "network_carrier",
     ]) {
         exports[`riscbox_${name}`] = (...args) => {
@@ -187,6 +187,60 @@ test("host imports copy output and validate memory ranges", () => {
     assert.throws(() => runtime.bytes(65535, 2), RangeError);
 });
 
+test("console UTF-8 spans imports and actions without sharing decoder state between VMs", () => {
+    const firstOutput = [], secondOutput = [];
+    const firstHost = Riscbox.hostImports({ consoleWrite: text => firstOutput.push(text) });
+    const secondHost = Riscbox.hostImports({ consoleWrite: text => secondOutput.push(text) });
+    const first = fakeModule(), second = fakeModule();
+    const runtime = firstHost.attach(first.exports);
+    secondHost.attach(second.exports);
+    const euro = new TextEncoder().encode("€");
+    new Uint8Array(first.exports.memory.buffer, 32, 1).set(euro.slice(0, 1));
+    firstHost.imports.console_write(32, 1);
+    new Uint8Array(second.exports.memory.buffer, 32, 2).set(euro.slice(1));
+    secondHost.imports.console_write(32, 2);
+    assert.equal(firstOutput.join(""), "");
+    assert.equal(secondOutput.join(""), "��");
+
+    // Growing memory and returning through the action queue preserves only decoder bytes.
+    first.exports.memory.grow(1);
+    new Uint8Array(first.exports.memory.buffer, 32, 2).set(euro.slice(1));
+    const actions = [3, 0];
+    first.exports.riscbox_next_action = () => actions.shift() ?? 0;
+    first.exports.riscbox_action_data_address = () => 32;
+    first.exports.riscbox_action_data_length = () => 2;
+    runtime.drainActions();
+    assert.equal(firstOutput.join(""), "€");
+});
+
+test("console decoding flushes at halt and retires partial sequences at reset and destroy", async () => {
+    const output = [];
+    const fake = fakeModule();
+    const host = Riscbox.hostImports({ consoleWrite: text => output.push(text) });
+    const runtime = host.attach(fake.exports);
+    function prefix() {
+        new Uint8Array(fake.exports.memory.buffer, 32, 1).set([0xe2]);
+        host.imports.console_write(32, 1);
+    }
+    function lifecycle(kind, cause) {
+        const actions = [kind, 0];
+        fake.exports.riscbox_next_action = () => actions.shift() ?? 0;
+        fake.exports.riscbox_action_value = () => cause;
+        runtime.drainActions();
+    }
+    prefix(); lifecycle(10, 0);
+    assert.equal(output.join(""), "�");
+    prefix(); lifecycle(11, 3);
+    host.imports.console_write(32, 0);
+    runtime.writeConsole(new TextEncoder().encode("fresh"));
+    assert.equal(output.join(""), "�fresh");
+    prefix();
+    fake.exports.riscbox_destroy = () => 0;
+    await runtime.destroy();
+    runtime.writeConsole(new TextEncoder().encode("new VM"));
+    assert.equal(output.join(""), "�freshnew VM");
+});
+
 test("random host import fills WASM memory from Web Crypto", () => {
     const host = Riscbox.hostImports();
     const fake = fakeModule();
@@ -287,8 +341,6 @@ test("configured quantum duration and diagnostics are passed to WASM", () => {
     new Riscbox(fake.exports);
     assert.deepEqual(calls, [[5, 1], [20, 0]]);
     assert.throws(() => new Riscbox(fake.exports, { targetQuantumMs: 0 }), /targetQuantumMs/);
-    assert.throws(() => new Riscbox(fake.exports, { guestClockSkew: 0.2 }), /adaptive/);
-    assert.throws(() => new Riscbox(fake.exports, { timesliceMs: 5 }), /renamed to targetQuantumMs/);
 });
 
 test("timing diagnostics report adaptive skew and rate variance", async () => {

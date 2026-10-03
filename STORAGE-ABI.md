@@ -1,9 +1,10 @@
 Platform storage raw WASM ABI
 =============================
 
-The scalar exports expose storage owned by the prepared VM. The single browser
-adapter wraps copied packets with synchronous filesystem operations and disk
-reads that return either resident copies or promises for HTTP misses.
+This is an implementation reference for the adapter's scalar exports and packet
+formats. Embedding applications use the JavaScript contracts in [API.md](API.md)
+and the workflows in [HOWTO.md](HOWTO.md). The adapter wraps VM-owned storage
+with synchronous filesystem calls and copied or asynchronous HTTP disk reads.
 
 Ownership and buffers
 ---------------------

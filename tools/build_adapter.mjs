@@ -7,7 +7,11 @@ const adapter = await readFile("js/riscbox.js", "utf8");
 const declarations = await readFile("build/js/storage.d.ts", "utf8");
 const runtimeTypes = await readFile("js/riscbox.d.ts", "utf8");
 
-// The storage source has no imports. Its exported classes are installed inside
-// a private scope before the runtime exposes its unified public surface.
-await writeFile("build/js/riscbox.js", `(function (root) {\n${storage.replace(/^export /gm, "")}\nroot.RiscboxStorage = { Filesystem, FilesystemError, BlockDisk, BlockError };\n}(globalThis));\n${adapter}`);
+// Runtime and storage share a private scope. Only the client facade is deployed.
+const bundle = adapter.replace("    // STORAGE_IMPLEMENTATION", storage.replace(/^export /gm, ""));
+await writeFile("build/js/riscbox.js", bundle.replace("    // DEVELOPMENT_EXPORTS", ""));
+
+// Architectural tests get a separate artifact that is never packaged for clients.
+await writeFile("build/js/riscbox-internal.js", bundle.replace("    // DEVELOPMENT_EXPORTS",
+    `    root.RiscboxRuntime = RiscboxRuntime;\n    if (typeof module === "object" && module.exports) module.exports.RiscboxRuntime = RiscboxRuntime;`));
 await writeFile("build/js/riscbox.d.ts", declarations + "\n" + runtimeTypes.replace(/^import type .*;\n/gm, ""));

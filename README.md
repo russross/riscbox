@@ -1,352 +1,52 @@
-Riscbox
-========
+Riscbox virtual platform
+========================
 
-Riscbox is a small RV64 virtual platform for teaching, grading, and running
-purpose-built Linux systems in a web page. The platform is written in Rust
-around a TinyEMU C CPU and memory core, compiled directly to WebAssembly,
-and integrated with a dependency-free
-JavaScript adapter. It is designed for static hosting and controlled guest
-images rather than broad hardware compatibility.
+Riscbox is a focused RV64 virtual platform for small teaching and grading VMs
+in a browser. The production runtime is raw WebAssembly with a dependency-free
+JavaScript adapter. Native Rust builds are test/development tools, not a
+supported native emulator.
 
-Typical uses include:
-
-*   Browser-hosted student kernels and operating-system exercises.
-*   Small Alpine Linux applications distributed as static web assets.
-*   Sandboxed grading or lab VMs with a serial console and session-local disk
-    writes.
-*   A live filesystem shared between a guest, its host page, and optionally
-    other VMs through VirtIO 9p.
-
-Riscbox supports one little-endian RV64 hart, M/S/U privilege modes, Sv39,
-OpenSBI, current xv6, and a focused QEMU `virt`-style device set. It intentionally
-does not support RV32, SMP, vectors, hypervisor mode, PCIe, or general
-device emulation. Native Rust builds support testing; the browser is the
-deployment target.
-
-Release archive
----------------
-
-Each GitHub release has one `riscbox-VERSION.tar.gz` archive. Extract it into
-an application directory. Its `riscbox.js`, `riscbox.d.ts`, `riscbox.wasm`,
-and `network/` files are ready to serve as static browser assets. The configured
-Linux Image, OpenSBI firmware, and U-Boot binary are gzip-compressed under
-content-hash names (`linux-HASH.gz`, `fw_dynamic.bin-HASH.gz`, and
-`u-boot.bin-HASH.gz`). The archive also contains this API
-README, storage and protocol guides, deployment guide, the standalone
-`splitimg.py` executable, the changelog, and the license. It contains no guest
-root filesystem, disk blocks, sample VM, or image build scripts.
-
-To boot Linux directly, prepare a compatible RISC-V root filesystem image,
-split it into HTTP blocks using the archive's `splitimg.py`,
-and place its block directory beside the runtime. Create `riscbox.cfg` there
-using the example in “VM configuration” below; replace `drive/blk.txt` with
-the path reported by the splitter. Serve the directory over HTTP or HTTPS and
-load `riscbox.js` and `riscbox.wasm` as shown in “Browser library”. The
-configuration URL is the base for its boot and disk paths. For an EROFS root,
-use `rootfstype=erofs` and `ro` in `cmdline`; for a prepared ext4 root, use
-`rootfstype=ext4` and `rw`. Serve `.wasm` as `application/wasm`.
-
-The archive's OpenSBI and U-Boot binaries are compiled from the pinned source
-versions in this repository. To use U-Boot, set `kernel` to the archive's
-`u-boot.bin-HASH.gz` name and put
-`/boot/Image` and `/boot/extlinux/extlinux.conf` in the guest disk; U-Boot
-loads Linux from the disk. Decompress the included `linux-HASH.gz` asset to
-supply that Image.
-
-To boot a RISC-V installation ISO, use OpenSBI as `bios`, U-Boot as `kernel`,
-and attach the ISO as `drive0`. Split the `.iso` with `splitimg.py` and
-set `drive0.file` to its `drive-HASH/blk.txt`, or attach its bytes through a
-VM-owned byte array. Allocate 512 MiB of RAM for the Alpine standard ISO.
-U-Boot scans FAT EFI boot partitions, including El Torito boot images, for
-`/EFI/BOOT/BOOTRISCV64.EFI`. The ISO's EFI loader supplies its own kernel and
-initramfs; the included Linux Image is not required for this boot path.
-Alpine standard 3.24.2 riscv64 has been validated through login, filesystem
-access, and shutdown in Chrome. HTTP disk writes remain session-local.
-
-The supplied Linux Image also includes its RISC-V EFI stub, compressed
-initramfs support, FAT/VFAT, ISO9660 with Rock Ridge and Joliet, loop devices,
-and SquashFS with zlib, XZ, and Zstandard decompression. U-Boot reads the FAT
-boot image inside an ISO; an EFI application such as GRUB reads the ISO9660
-tree. Boot media must contain a RISC-V EFI loader compatible with this platform.
-
-Embedding demo
---------------
-
-The [release-based demo](https://github.com/russross/riscbox/tree/main/demo)
-shows an Alpine VM, TinyCC source trees loaded through resident 9p, explicit file
-editing, and VM/storage lifecycle controls. It consumes only packaged runtime
-assets. Source build instructions are in
+Start with [HOWTO.md](HOWTO.md) for narrated embedding, storage, shutdown,
+recovery, and deployment workflows. [API.md](API.md) defines the current
+JavaScript calls, options, types, and enforced VM-state contracts. The
+[embedding demo](https://github.com/russross/riscbox/tree/main/demo) builds a
+plain Alpine app around exactly the assets in a release. Contributor setup and
+explicit local validation commands are in
 [BUILDING.md](https://github.com/russross/riscbox/blob/main/BUILDING.md).
-See [DEPLOYMENT.md](DEPLOYMENT.md) for disk splitting and static hosting.
 
-Browser library
----------------
-
-`build/js/riscbox.js` built by `make js` (`riscbox.js` in the release archive)
-installs a global `Riscbox` class. Instantiate it with the WASM
-bytes and callbacks, then start it with a configuration URL and RAM size:
-
-```html
-<script src="./riscbox.js"></script>
-<script type="module">
-const terminal = document.querySelector("#terminal");
-const response = await fetch("./riscbox.wasm");
-const runtime = await Riscbox.instantiate(await response.arrayBuffer(), {
-    consoleWrite: (text) => terminal.append(document.createTextNode(text)),
-    onVmStarted: () => console.log("VM started"),
-    onError: (error) => console.error(error),
-});
-
-await runtime.startFromUrl(new URL("./riscbox.cfg", location.href).href, 256);
-</script>
-```
-
-The adapter schedules execution automatically. Runnable guests request an
-immediate next execution quantum through a browser task; WFI sleeping guests
-wake at the nearest guest timer deadline or after at most 100 milliseconds.
-A completed asynchronous device request can wake a WFI sleeping guest. Rust calibrates the quantum cycle
-budget from complete quanta timed by JavaScript. Set `targetQuantumMs` in the
-instantiate options to choose a nominal duration greater than zero and at most
-100 milliseconds (default 20); carried guest-clock lead can extend an
-individual quantum beyond that nominal duration. The cycle-rate estimate
-uses a ten-second half-life. The cycle
-budget and target duration both extend by any guest-clock lead from the
-previous quantum. A decayed P99 estimate of recent clock variation slows
-guest time proactively. When lead remains, the next quantum uses the more
-conservative of that skewed rate and the rate implied by the previous quantum's
-measured cycle throughput. Guest time remains monotonic without delaying
-runnable quanta. Set `debugTiming: true` to log the smoothed estimated rate,
-interval mean and standard deviation of runnable quantum rates, active
-emulated Mcycles/s, CPU runs per quantum, timer intervals, WFI sleep time, and
-the latest guest-clock lead sampled at the start of a quantum. The variance fields retain the latest interval maximum and the
-50th, 90th, and 99th percentiles across runnable quanta since boot. Timing
-reports stop when the VM powers off.
-Integrations can also provide
-`networkWrite`, `framebufferRefresh`, and `onError`. Host input methods are
-`consoleInput(bytes)`, `consoleResize(columns, rows)`, `keyEvent()`,
-`pointerEvent()`, `wheelEvent()`, `networkInput()`, and `networkCarrier()`.
-`runQuantum()` explicitly requests a quantum when a host integration needs to
-resume a VM; normal wakeups are scheduled by the browser adapter.
-Framebuffer callbacks receive a zero-copy WASM view plus `x`, `y`, `width`,
-`height`, and full-frame `stride`; consume the view synchronously.
-
-Lifecycle methods return promises. `requestShutdown()` and `requestReboot()`
-deliver guest input events and return before the guest has acted; the guest OS
-must handle those events. The embedding demo runs BusyBox
-`acpid` for them. `halt()` immediately stops CPU execution and retains the
-machine, attached devices, 9p servers, and disk contents. `boot()` starts a
-halted VM from its boot images; `reset()` immediately resets a running VM. A
-guest-initiated poweroff halts the VM, and a guest-initiated reboot resets it
-in place. `destroy()` releases a halted VM or cancels startup; a later boot
-then needs a new VM. Its runtime can prepare another VM; all filesystem and disk objects become invalid.
-`onVmHalted(cause)` and `onVmReset(cause)` report `guest-poweroff`,
-`guest-reboot`, `host-halt`, `host-reset`, `host-boot`, or `guest-failure` as
-applicable. `onVmDestroyed()` reports teardown. `consoleReset()` and
-`framebufferClear()` let host displays clear themselves on reset. A forced
-halt or reset does not let the guest flush filesystem buffers. Wait for an
-observed guest halt or reboot before treating a writable disk as synchronized.
-
-For the supplied WebSocket network frontend, import the generated TypeScript
-module and attach it before starting a network-enabled VM:
-
-```js
-import { WebSocketNetwork } from "./network/index.js";
-
-const network = new WebSocketNetwork(
-    new URL("./network", location.href).href.replace(/^http/, "ws"),
-    { onError: (error) => console.error(error) },
-);
-const runtime = await Riscbox.instantiate(await response.arrayBuffer(), {
-    consoleWrite: (text) => terminal.append(document.createTextNode(text)),
-    networkWrite: network.transmit,
-});
-network.attach(runtime);
-network.connect();
-await runtime.startFromUrl(new URL("./riscbox.cfg", location.href).href, 256, "", 0, 0, true);
-```
-
-The endpoint uses the protocol documented in `network/README.md`: each binary
-WebSocket message is one Ethernet frame without a VirtIO header or frame-check
-sequence. Riscbox provides the browser client but no production origin service.
-The origin must supply authentication, isolation, rate limiting, routing,
-filtering, and any required NAT, DNS, or DHCP.
-
-The root Rust crate exposes the machine, device, configuration, storage, and
-browser-runtime modules for focused testing and custom Rust-side integration.
-`guest_memory` contains the shared guest-memory types and TinyEMU RAM bridge.
-The crate is not published on crates.io. Its stable deployment boundary is the
-raw WASM ABI wrapped by the generated `build/js/riscbox.js` adapter.
-
-The raw WASM exports provide VM-owned filesystem and disk handles for advanced
-embedding. The [storage ABI guide](STORAGE-ABI.md) documents
-copied packets, buffer lifetimes, and powered-off disk access.
-
-VM configuration
+Release contents
 ----------------
 
-Riscbox accepts JSON with comments, unquoted property names, and trailing
-commas. Asset paths are resolved relative to the configuration file. A minimal
-disk-backed Linux VM is:
+Each release has one `riscbox-VERSION.tar.gz` archive containing `riscbox.js`,
+`riscbox.wasm`, `riscbox.d.ts`, the optional `network/` modules, the standalone
+`splitimg.py`, and hash-named gzip Linux/OpenSBI/U-Boot payloads. It includes this
+README, API/HOWTO guides, implementation storage/protocol references, changelog,
+and license. Guest root filesystems, example apps, and image build scripts are
+separate application assets.
 
-`startFromUrl(url, ramMiB?, commandLine?, width?, height?, hasNetwork?)`
-fetches the file with `no-store`, resolves defaults and asset URLs in
-JavaScript, then passes the result to Rust for validation and machine setup.
-`startResolved(config, ramMiB?, width?, height?, hasNetwork?)` accepts a host
-object directly. Its asset paths are used as given; callers supply absolute
-URLs when needed. `ramMiB` of zero uses the configuration's `memory_size`.
-`Riscbox.loadResolvedConfig(url, commandLine?, fetch?)` fetches a deployed
-configuration with `no-store` and returns the resolved object, so an embedding
-page can replace a drive entry before calling `startResolved`.
-Startup methods load boot assets asynchronously and boot the machine.
-`prepareResolved(config, ...)` and `prepareFromUrl(url, ...)` load and construct
-the same platform but leave it powered off. Populate storage before calling
-`await runtime.boot()`. The legacy `start()` also returns a promise.
+Embedding applications use the JavaScript adapter. Raw WASM exports, scheduling,
+packet buffers, and internal storage handles are implementation details. The
+source's native configuration parser remains for development tests. Documentation
+and declarations describe the current release; no legacy entry points or
+cross-release stability guarantees are provided.
 
-Block storage
--------------
+Supported platform
+------------------
 
-Rust owns disk bytes, the clean HTTP cache, and copy-on-write overlays.
-`drive0: { file: manifestUrl }` selects a split HTTP image.
-`drive0: { bytes: imageBytes }` copies a whole-sector `Uint8Array` into Rust;
-`drive0: { capacity_sectors: "131072" }` allocates a zeroed writable disk.
-Consecutive drive numbers preserve guest order for mixed HTTP and array disks.
+The target is one little-endian RV64 hart with M/S/U modes and Sv39, following
+QEMU `virt` sufficiently to boot current xv6 and deliberately prepared Alpine.
+Devices include a 16550A UART, optional VirtIO console, Goldfish RTC, PLIC,
+ACLINT MSWI/MTIMER, SiFive test finisher, simple framebuffer, and VirtIO MMIO
+block, resident 9p, Ethernet, entropy, keyboard, and tablet devices.
 
-```js
-await runtime.prepareResolved({
-    version: 1, machine: "riscv64", memory_size: 256,
-    bios: firmwareUrl, kernel: kernelUrl,
-    drive0: { bytes: imageBytes },
-});
-const disk = runtime.block(0);
-disk.write(0n, bootSector);             // synchronous, whole 512-byte sectors
-const image = await disk.read(0n, Number(disk.capacitySectors) * 512);
-await runtime.boot();
-```
+Rust owns platform devices, VM storage, boot loading, and browser requests.
+HTTP disks combine bounded clean caching with sparse session-local overlays;
+resident 9p trees support synchronous copied host operations while the guest
+runs. Applications own persistence. Destroy or page reload loses VM storage.
 
-All host disk operations require a powered-off VM: before boot, after
-`halt()`, or after observed guest poweroff. Reads return copied bytes directly
-when resident, otherwise a promise while HTTP chunks load. Writes are always
-synchronous. HTTP writes record only changed sectors and never fetch a chunk
-to preserve its unwritten sectors. Array writes update Rust's store directly.
-The caller's original array and exported snapshots remain independent copies.
-Pending host reads must finish or be retired by `coldReset()` before boot.
-
-Halt, reboot, and reset retain bytes and HTTP overlays. While powered off,
-`disk.discardChanges()` removes an HTTP disk's overlay while retaining its
-clean cache; array disks reject overlay discard. `coldReset()` resets
-CPU/devices and clears RAM while preserving storage. Use both operations for a
-clean HTTP-backed boot. Destroy invalidates every disk and share and frees their
-contents; page reload also loses all runtime data. Observe orderly guest
-shutdown before exporting an image that requires guest filesystem consistency.
-Disk operations throw or reject with `BlockError` carrying positive Linux errno.
-
-For alternate immutable chunk transport, supply
-`fetchBlock: ({ disk, url, cache }) => Promise<Uint8Array>` to
-`Riscbox.instantiate()`. Rust still owns caching, deduplication, writes, errors,
-and lifecycle retirement. The hook receives zero-based disk indexes and chunk
-URLs; configuration, boot assets, and manifests use the regular `fetch` option.
-Failures and incorrectly sized chunks become guest I/O errors or rejected host
-reads. Obsolete replies after reset/destroy are ignored.
-
-Replace `HASH` in the following example with each asset's eight-character
-suffix, and replace the drive path with the directory reported by `splitimg.py`.
-
-```js
-{
-    version: 1,
-    machine: "riscv64",
-    memory_size: 256,
-    bios: "fw_dynamic.bin-HASH.gz",
-    kernel: "linux-HASH.gz",
-    cmdline: "root=/dev/vda rw rootfstype=ext4 console=hvc0",
-    drive0: { file: "drive/blk.txt" },
-    console: "virtio",
-    uart_output: true,
-}
-```
-
-The main options are:
-
-*   `bios`, `kernel`, and optional `initrd` select boot payloads. At least one
-    of `bios` and `kernel` is required. Firmware and kernels may be raw or
-    gzip-compressed; initrds are passed to the guest unchanged. `memory_size`
-    is in MiB, and `cmdline` is passed to Linux.
-*   `bios_address`, `kernel_address`, `initrd_address`, and `fdt_address`
-    optionally set physical load addresses. Use quoted hexadecimal strings for
-    addresses above the config parser's signed 32-bit integer range, such as
-    `kernel_address: "0x100000000"`.
-*   `console` is `virtio` by default or `uart`. `uart_output: true` mirrors
-    firmware and early-kernel UART output while input stays on VirtIO.
-*   Consecutive `drive0` through `drive3` add VirtIO block devices.
-    Use `{ file: "drive-HASH/blk.txt" }` for HTTP, `{ bytes: imageBytes }`
-    in a host object, or `{ capacity_sectors: "131072" }` for a zeroed array.
-    Capacity counts 512-byte sectors; quote large values to preserve full width.
-*   Consecutive `fs0` through `fs3` use `{ server, tag }` to add shared
-    VirtIO 9p channels. `server` names an automatic resident tree; `tag` is the
-    guest-visible mount tag.
-*   `display0: { device: "simplefb", width, height }` adds a framebuffer, and
-    `input_device: "virtio"` adds keyboard and tablet devices. `eth0` adds the
-    single supported network interface as `{ driver: "user" }` when the host
-    installs a frontend. Native TAP and SLIRP backends are not supported.
-
-Boot payloads are explicit. By default, firmware loads at `0x80000000`, a
-kernel at `0x80200000`, and an initrd at the kernel address plus half of RAM
-(capped at 512 MiB). The device tree is placed near the end of RAM at a 2 MiB
-boundary. Riscbox passes OpenSBI `fw_dynamic.bin` the kernel entry through
-its dynamic-info block in the reset ROM. Omitting `bios` starts the kernel in
-M-mode; this supports bare-metal guests such as xv6. An S-mode U-Boot binary
-can be supplied as `kernel` after OpenSBI. Riscbox does not parse ELF,
-PE/COFF, FIT, qcow2, or other compressed kernel formats. The runtime loads
-firmware and bootloader binaries supplied by the image; the repository builds
-its pinned OpenSBI and U-Boot binaries separately.
-
-9p file sharing
----------------
-
-VirtIO 9p lets a guest mount a filesystem owned by the host page. It is suited
-to editable student workspaces, importing starter files, exporting results,
-sharing one tree with host UI. It is not an authentication boundary or a
-persistent store by itself.
-
-Configure `fs0: { server: "workspace", tag: "shared" }`. Preparation creates
-the named resident share automatically:
-
-```js
-const runtime = await Riscbox.instantiate(wasmBytes, options);
-await runtime.prepareFromUrl(configUrl);
-const workspace = runtime.filesystem("workspace");
-workspace.writeFile("hello.txt", "shared with the guest\n");
-await runtime.boot();
-const bytes = workspace.readFile("hello.txt");
-```
-
-Mount it in Linux with:
-
-    mount -t 9p -o trans=virtio,version=9p2000.L,cache=none shared /mnt/shared
-
-Host methods are synchronous and throw `FilesystemError` with positive Linux
-`errno`. They include `readFile`, `writeFile`, `mkdir`, `remove`, `rename`,
-`listFiles`, `listDirectory`, `stat`, `symlink`, `readlink`, `link`, and
-`setAttributes`. Attributes specify permissions, ownership, and access/
-modification times with nanosecond precision; changing them updates ctime.
-Writes replace whole files and require existing parent directories. Paths are
-literal namespace paths; the empty path names the root directory.
-
-`workspace.subscribe(listener)` returns a synchronous unsubscribe function.
-Copied change events are delivered after WASM returns, with aliases, host/guest
-source, and a `bigint` host origin for filtering application writes. Supply the
-origin as the final argument to mutations. Reads return copied byte arrays.
-
-Several configured tags may share one server name and independent protocol
-sessions. Host access works before boot, while running, and after poweroff.
-`workspace.clear()` replaces the tree only while powered off; reboot and reset
-retain it. Destroy invalidates all shares. Loaders, seed plugins, independent
-filesystem creation/binding, and source tickets are removed: applications fetch
-their own content and insert it through the regular API.
-
-Default quotas are 256 MiB per file, 1 GiB of logical file data, and 2^20 inodes
-and directory entries. The [storage ABI](STORAGE-ABI.md) and
-[protocol profile](NINEP.md) describe the native contracts.
+RV32, multiple harts, vectors, hypervisor support, PCIe, AIA, a native UI,
+SLIRP/TAP, and native filesystem/socket backends are outside scope. Networking
+requires a host-selected WebSocket origin; no production origin is supplied.
 
 Platform summary
 ----------------

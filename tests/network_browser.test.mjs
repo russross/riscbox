@@ -103,7 +103,8 @@ try {
             if (up && !started) {
                 started = true;
                 try {
-                    runtime.start("/riscbox.cfg", 32, "", 0, 0, true);
+                    void runtime.startFromUrl(new URL("/riscbox.cfg", location.href).href, 32, "", 0, 0, true)
+                        .catch(error => report("startup: " + error.message));
                 } catch (error) {
                     report("startup: " + error.message);
                 }

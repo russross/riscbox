@@ -44,7 +44,7 @@ Repository map and terminology
 *   `tinyemu-core/` is the active freestanding TinyEMU CPU, SoftFP, and physical
     memory implementation. `build.rs` compiles it with Clang for native and
     raw WASM targets.
-*   `riscbox-wasm/` supplies the small stable raw WASM export surface. Keep
+*   `riscbox-wasm/` supplies the small internal raw WASM export surface. Keep
     unsafe ABI code isolated there. Main-crate unsafe code is confined to the
     TinyEMU FFI module.
 *   The workspace version in root `Cargo.toml` is inherited by both Rust
@@ -52,11 +52,16 @@ Repository map and terminology
     release archive with the WASM runtime, browser modules, canonical Linux
     Image, OpenSBI firmware, U-Boot binary, and API documentation. The release
     archive excludes guest images and image build scripts.
-*   `js/riscbox.js` is the dependency-free browser adapter for the raw ABI.
+*   `js/riscbox.js` owns the dependency-free client adapter and its private
+    runtime. The client factory exposes checked lifecycle/input calls and owned
+    storage facades; raw exports, scheduling, and buffer helpers are internal.
 *   `js/network/` is the typed WebSocket Ethernet frontend and protocol.
 *   `js/storage.ts` supplies synchronous filesystem and copied disk facades.
-    `tools/build_adapter.mjs` combines it with `js/riscbox.js` into the single
-    deployable `build/js/riscbox.js` and declaration file. `src/block_storage.rs`
+    `tools/build_adapter.mjs` combines it with `js/riscbox.js` in one private
+    scope for deployable `build/js/riscbox.js` and declarations. Public storage
+    interfaces omit creation/polling/invalidation; internal `FilesystemHandle`
+    and `DiskHandle` own those operations. Development probes use the separate
+    `build/js/riscbox-internal.js`, which is never packaged. `src/block_storage.rs`
     unifies Rust-owned array and split HTTP stores, HTTP requests, bounded
     clean cache, and sparse sector overlays.
 *   `src/ninep.rs` owns the resident namespace and `SharedFilesystem` ownership;
@@ -79,10 +84,11 @@ Repository map and terminology
     tracks its Makefile, version, and config; downloads, sources, and outputs
     are ignored. The release packages both firmware and the Linux next stage. OpenSBI's
     `defconfig` selects the one-hart Riscbox SBI services and FDT drivers.
-*   `README.md`, `DEPLOYMENT.md`, `STORAGE-ABI.md`, and `NINEP.md` are packaged
-    user documentation. `BUILDING.md` covers contributor setup and checks.
-    `DEV.md` holds only active plans,
-    future work, and deferred findings. `CHANGELOG.md` is the historical record.
+*   `README.md` owns overview/scope, `API.md` client call contracts, and
+    `HOWTO.md` narrated application/deployment workflows. Those are packaged
+    alongside `STORAGE-ABI.md` and `NINEP.md` implementation references.
+    `BUILDING.md` covers contributor setup and explicit local checks. `DEV.md`
+    holds active plans/future work; `CHANGELOG.md` is the historical record.
 
 In this repository, "native" means a Rust test or image-preparation execution
 environment. It does not imply a supported native emulator. "Browser runtime"
@@ -137,10 +143,20 @@ deployments gzip firmware and the next-stage payload while naming them from
 their uncompressed hashes. HTTP
 disk writes are session-local. The browser adapter uses `force-cache` for
 content-hash-named boot and disk assets and `no-store` for the configuration.
-The browser adapter now parses configuration files, supplies defaults, and
+The browser adapter parses configuration files, supplies defaults, and
 resolves boot and drive URLs through `startFromUrl`; `startResolved` accepts a
 host object. Rust validates the resolved configuration and still constructs
-the machine. The legacy `start` path and native Rust parser remain available.
+the machine. Native Rust configuration loading remains for development tests.
+The client has no `start()` alias or raw startup entry points; documentation
+describes the current release without cross-release compatibility promises.
+Client state is `empty`, `preparing`, `halted`, or `running`. Preparation reserves
+the VM before downloads, rejects overlapping loads, and cleans up failures.
+Boot requires halt, forced reset requires running, and cold reset requires halt;
+queued controls check prerequisites at dispatch. Device input checks scalar
+ranges and device/state prerequisites before WASM conversion. Network carrier
+may precede preparation, while frames outside execution are dropped.
+Each runtime owns a streaming console UTF-8 decoder: halt flushes a truncated
+sequence, and reset/destroy discard its tail. Other text decoding is stateless.
 HTTP block stores start with a 16 MiB in-memory cache limit that grows to
 cover a single request when needed.
 Rust owns every disk and share in the VM. `prepareResolved` and `prepareFromUrl`
@@ -321,6 +337,11 @@ Validation
 *   `make check` adds strict Clippy and Python type checks. The GitHub release
     workflow runs unit tests, type checks, Clippy, and builds without Chrome or
     full-guest tests.
+*   `make check-release` explicitly runs core checks, builds the archive, checks
+    named contents and documentation links, excludes development artifacts, and
+    instantiates its packaged WASM through its packaged client adapter. Typed
+    example consumers compile against deployable declarations in `js-check`.
+    GitHub remains release-only; ordinary push/PR checks are not automatic.
 *   `make test-demo` builds the optional release-only example and checks real
     Chrome/WASM boot, TinyCC games, explicit host/guest file transfers, lifecycle
     controls, image/share reset, and destroyed facade invalidation. Browser tests
@@ -346,8 +367,8 @@ Documentation is part of every development milestone, not a later cleanup:
 *   Update `AGENTS.md` when project scope, terminology, repository ownership,
     durable architecture decisions, workflow, or the current platform contract
     changes. Keep it sufficient to start a fresh task without rediscovery.
-*   Update `README.md` when users gain or lose a feature, option, public API,
-    setup step, image workflow, or supported use case.
+*   Update the owning distribution guide when users gain or lose a feature:
+    `README.md` for scope, `API.md` for contracts, `HOWTO.md` for workflows.
 *   Add completed user-visible work, compatibility changes, migrations,
     measurements worth preserving, and durable implementation decisions to the
     current `CHANGELOG.md` release section.

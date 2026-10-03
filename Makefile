@@ -26,6 +26,11 @@ check: test
 	cargo clippy --all-targets --workspace -- -D warnings
 	uvx --quiet ty check tools/splitimg.py
 
+check-release:
+	$(MAKE) check
+	$(MAKE) dist
+	node tools/check_release.mjs $(ARCHIVE)
+
 demo:
 	$(MAKE) -C demo
 
@@ -46,8 +51,9 @@ build/js/.built: js/tsconfig.json $(JS_SOURCES) js/riscbox.js tools/build_adapte
 	@mkdir -p build/js
 	@touch $@
 
-js-check: node_modules/.package-lock.json
+js-check: js
 	node_modules/.bin/tsc -p js/tsconfig.json --noEmit
+	node_modules/.bin/tsc --noEmit --strict --target ES2022 --module ES2022 --moduleResolution node --lib ES2023,DOM tests/adapter_client.ts
 
 $(RUSTBOX_WASM): Cargo.toml Cargo.lock build.rs riscbox-wasm/Cargo.toml $(RUST_SOURCES)
 	cargo build --release -p riscbox-wasm --target wasm32-unknown-unknown
@@ -69,7 +75,7 @@ dist:
 release-path:
 	@printf '%s\n' '$(abspath $(ARCHIVE))'
 
-$(ARCHIVE): Makefile $(RUSTBOX_WASM) build/js/.built js/riscbox.js kernel/.asset-name opensbi/.asset-name uboot/.asset-name .github/scripts/package-release.sh README.md STORAGE-ABI.md NINEP.md DEPLOYMENT.md CHANGELOG.md LICENSE tools/splitimg.py js/storage.ts js/network/README.md
+$(ARCHIVE): Makefile $(RUSTBOX_WASM) build/js/.built js/riscbox.js kernel/.asset-name opensbi/.asset-name uboot/.asset-name .github/scripts/package-release.sh README.md STORAGE-ABI.md NINEP.md API.md HOWTO.md CHANGELOG.md LICENSE tools/splitimg.py js/storage.ts js/network/README.md
 	.github/scripts/package-release.sh $@
 
 clean:
@@ -81,4 +87,4 @@ clean:
 
 clean-all: clean
 
-.PHONY: all release test-unit test check demo test-demo wasm js js-check kernel opensbi uboot dist release-path clean clean-all
+.PHONY: all release test-unit test check check-release demo test-demo wasm js js-check kernel opensbi uboot dist release-path clean clean-all

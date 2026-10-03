@@ -1,8 +1,10 @@
 (function (root) {
     "use strict";
 
-    const encoder = new TextEncoder();
-    const decoder = new TextDecoder();
+    // STORAGE_IMPLEMENTATION
+
+    const runtimeEncoder = new TextEncoder();
+    const textDecoder = new TextDecoder();
     // Guest timer deadlines use 10 MHz ticks; host wakeup delays use milliseconds.
     const GUEST_TICKS_PER_MILLISECOND = 10_000;
     const QUANTUM_BUDGET_REACHED = 0;
@@ -138,6 +140,10 @@
             rtc_local_time: optional("rtc_local_time", "boolean", false),
             cmdline: optional("cmdline", "string", ""),
         };
+        if (resolved.machine !== "riscv64") throw new RangeError("machine must be riscv64");
+        integer("memory_size", resolved.memory_size, 1, 0x7fff_ffff);
+        if (resolved.console !== "virtio" && resolved.console !== "uart")
+            throw new RangeError("console must be virtio or uart");
         if (commandLine) resolved.cmdline = commandLine.startsWith("!")
             ? commandLine.slice(1) : `${resolved.cmdline} ${commandLine}`;
         for (const name of ["bios", "kernel", "initrd"]) {
@@ -152,10 +158,21 @@
                 throw new RangeError(`too many ${prefix} entries`);
             for (let index = 0; index < limit; index++) {
                 const name = `${prefix}${index}`;
-                if (source[name] === undefined) break;
+                if (source[name] === undefined) {
+                    for (let following = index + 1; following < limit; following++) {
+                        if (source[`${prefix}${following}`] !== undefined)
+                            throw new RangeError(`${prefix} entries must be consecutive`);
+                    }
+                    break;
+                }
                 const entry = source[name];
                 if (!entry || typeof entry !== "object" || Array.isArray(entry))
                     throw new TypeError(`${name} must be an object`);
+                if (prefix === "fs" && (typeof entry.server !== "string" || !entry.server ||
+                    typeof entry.tag !== "string" || !entry.tag))
+                    throw new TypeError(`${name} needs nonempty server and tag strings`);
+                if (prefix === "eth" && entry.driver !== "user")
+                    throw new TypeError(`${name} driver must be user`);
                 resolved[name] = prefix === "drive"
                     ? (entry.capacity_sectors === undefined && entry.bytes === undefined && entry.provider === undefined
                         ? { ...entry, file: resolveConfigPath(entry.file, baseUrl) }
@@ -165,6 +182,13 @@
         }
         for (const name of ["display0", "input_device"]) {
             if (source[name] !== undefined) resolved[name] = source[name];
+        }
+        if (resolved.input_device !== undefined && resolved.input_device !== "virtio")
+            throw new RangeError("input_device must be virtio");
+        if (resolved.display0 !== undefined) {
+            if (resolved.display0?.device !== "simplefb") throw new TypeError("display0 device must be simplefb");
+            integer("display width", resolved.display0.width, 1, 0x7fff_ffff);
+            integer("display height", resolved.display0.height, 1, 0x7fff_ffff);
         }
         return resolved;
     }
@@ -177,7 +201,7 @@
     }
 
     function resolveArrayDrive(entry) {
-        if (entry.provider !== undefined) throw new TypeError("block providers were removed");
+        if (entry.provider !== undefined) throw new TypeError("unsupported array drive property provider");
         const bytes = entry.bytes;
         if (bytes !== undefined && (!(bytes instanceof Uint8Array) || bytes.length === 0 || bytes.length % 512 !== 0))
             throw new TypeError("array drives need a whole-sector Uint8Array");
@@ -189,10 +213,8 @@
         return { capacity_sectors: String(capacity), ...(bytes === undefined ? {} : { bytes }) };
     }
 
-    class Riscbox {
+    class RiscboxRuntime {
         constructor(exports, options = {}) {
-            if (Object.hasOwn(options, "p9Servers"))
-                throw new TypeError("p9Servers was removed; configure named shares and populate them after preparation");
             if (!(exports.memory instanceof WebAssembly.Memory))
                 throw new TypeError("Riscbox WASM must export memory");
             if (typeof exports.riscbox_configure_quantum !== "function" ||
@@ -203,13 +225,9 @@
                 typeof exports.riscbox_quantum_abort !== "function" ||
                 typeof exports.riscbox_timing_stat !== "function")
                 throw new TypeError("Riscbox WASM has an incompatible run interface");
-            if (Object.hasOwn(options, "timesliceMs"))
-                throw new TypeError("timesliceMs has been renamed to targetQuantumMs");
             const targetQuantumMs = options.targetQuantumMs ?? 20;
             if (!Number.isFinite(targetQuantumMs) || targetQuantumMs <= 0 || targetQuantumMs > 100)
                 throw new RangeError("targetQuantumMs must be greater than zero and at most 100");
-            if (Object.hasOwn(options, "guestClockSkew"))
-                throw new TypeError("guestClockSkew is now adaptive and cannot be configured");
             this.exports = exports;
             this.options = options;
             if (exports.riscbox_configure_quantum(targetQuantumMs, options.debugTiming ? 1 : 0) !== 0)
@@ -231,6 +249,8 @@
             this.wakeupToken = 0;
             this.wakeupChannel = null;
             this.started = false;
+            this.state = "empty";
+            this.consoleDecoder = new TextDecoder();
             this.pendingControls = [];
             this.disks = new Map();
             this.diskCount = 0;
@@ -261,8 +281,7 @@
                     }
                 },
                 console_write(ptr, len) {
-                    const data = bytes(ptr, len);
-                    options.consoleWrite?.(decoder.decode(data));
+                    runtime.writeConsole(bytes(ptr, len));
                 },
                 framebuffer_refresh(ptr, x, y, width, height, stride) {
                     options.framebufferRefresh?.(
@@ -277,14 +296,14 @@
             return {
                 imports,
                 attach(exports) {
-                    runtime = new Riscbox(exports, options);
+                    runtime = new RiscboxRuntime(exports, options);
                     return runtime;
                 },
             };
         }
 
         static async instantiate(source, options = {}) {
-            const host = Riscbox.hostImports(options);
+            const host = RiscboxRuntime.hostImports(options);
             const result = await WebAssembly.instantiate(source, {
                 riscbox_host: host.imports,
             });
@@ -302,7 +321,7 @@
         }
 
         withBytes(value, callback) {
-            const data = typeof value === "string" ? encoder.encode(value) : value;
+            const data = typeof value === "string" ? runtimeEncoder.encode(value) : value;
             if (!(data instanceof Uint8Array))
                 throw new TypeError("expected a string or Uint8Array");
             if (data.length === 0)
@@ -318,10 +337,6 @@
             }
         }
 
-        async start(configUrl, ramMiB, commandLine = "", width = 0, height = 0, hasNetwork = false) {
-            return this.startFromUrl(configUrl, ramMiB, commandLine, width, height, hasNetwork);
-        }
-
         async startResolved(config, ramMiB = 0, width = 0, height = 0, hasNetwork = false) {
             await this.prepareResolved(config, ramMiB, width, height, hasNetwork);
             await this.boot();
@@ -330,6 +345,8 @@
         prepareResolved(config, ramMiB = 0, width = 0, height = 0, hasNetwork = false) {
             if (this.preparation) throw new Error("VM preparation is already active");
             const resolved = resolveConfig(config, null);
+            this.config = resolved;
+            this.hasNetwork = hasNetwork;
             const initial = [];
             let diskCount = 0;
             for (let index = 0; index < 4; index++) {
@@ -354,17 +371,17 @@
 
         async prepareFromUrl(configUrl, ramMiB = 0, commandLine = "", width = 0, height = 0, hasNetwork = false) {
             const generation = this.httpGeneration;
-            const resolved = await Riscbox.loadResolvedConfig(configUrl, commandLine, this.options.fetch ?? globalThis.fetch);
+            const resolved = await RiscboxRuntime.loadResolvedConfig(configUrl, commandLine, this.options.fetch ?? globalThis.fetch);
             if (generation !== this.httpGeneration) throw new Error("VM preparation was cancelled");
             this.configUrl = configUrl;
             await this.prepareResolved(resolved, ramMiB, width, height, hasNetwork);
         }
 
-        filesystem(name) { return root.RiscboxStorage.Filesystem.open(this, name); }
+        filesystem(name) { return FilesystemHandle.open(this, name); }
 
         block(index) {
             if (!Number.isInteger(index) || index < 0 || index >= this.diskCount) throw new RangeError("unknown disk index");
-            if (!this.disks.has(index)) this.disks.set(index, new root.RiscboxStorage.BlockDisk(this, index));
+            if (!this.disks.has(index)) this.disks.set(index, new DiskHandle(this, index));
             return this.disks.get(index);
         }
 
@@ -380,7 +397,7 @@
             const response = await fetchRequest(configUrl, { cache: "no-store" });
             if (response.status < 200 || response.status >= 300)
                 throw new Error(`configuration HTTP status ${response.status}`);
-            const source = decoder.decode(await response.arrayBuffer());
+            const source = textDecoder.decode(await response.arrayBuffer());
             return resolveConfig(parseConfig(source), configUrl, commandLine);
         }
 
@@ -390,10 +407,12 @@
             await this.boot();
         }
 
-        control(name) {
+        control(name, allowedStates) {
             return new Promise((resolve, reject) => {
                 const run = () => {
                     try {
+                        if (allowedStates && !allowedStates.includes(this.state))
+                            throw new Error(`${name} requires ${allowedStates.join(" or ")} VM; current state is ${this.state}`);
                         const command = this.exports[`riscbox_${name}`];
                         if (typeof command !== "function" || command() !== 0)
                             throw new Error(`Riscbox could not ${name} the VM`);
@@ -401,6 +420,7 @@
                             name === "request_reboot") this.scheduleWakeup(0);
                         if (name === "cold_reset") {
                             this.httpGeneration++;
+                            this.consoleDecoder = new TextDecoder();
                             this.options.consoleReset?.();
                             this.options.framebufferClear?.();
                             this.serviceStorage();
@@ -412,6 +432,9 @@
                             this.filesystems.clear(); this.disks.clear(); this.diskCount = 0;
                             this.httpGeneration++;
                             this.started = false;
+                            this.state = "empty";
+                            this.consoleDecoder = new TextDecoder();
+                            this.config = null;
                             this.cancelWakeup();
                             this.options.onVmDestroyed?.();
                         }
@@ -629,11 +652,12 @@
                         this.diskCount = preparation.diskCount;
                         for (const [index, bytes] of preparation.initial) this.block(index).write(0n, bytes);
                         this.preparation = null;
+                        this.state = "halted";
                         preparation.resolve();
                     } catch (error) { this.failPreparation(error); }
                 } else if (kind === 1) {
                     const generation = this.httpGeneration;
-                    const url = decoder.decode(this.bytes(ptr, len));
+                    const url = textDecoder.decode(this.bytes(ptr, len));
                     const fetchRequest = this.options.fetch ?? globalThis.fetch;
                     if (typeof fetchRequest !== "function")
                         throw new Error("Riscbox HTTP fetch is not available");
@@ -677,10 +701,11 @@
                     });
                 } else if (kind === 2) {
                     this.started = true;
+                    this.state = "running";
                     this.options.onVmStarted?.();
                     this.scheduleWakeup(0);
                 } else if (kind === 3) {
-                    this.options.consoleWrite?.(decoder.decode(this.bytes(ptr, len)));
+                    this.writeConsole(this.bytes(ptr, len));
                 } else if (kind === 4) {
                     this.options.networkWrite?.(this.bytes(ptr, len));
                 } else if (kind === 6) {
@@ -702,7 +727,10 @@
                     if (cause === undefined)
                         throw new Error(`invalid VM halt cause ${value}`);
                     this.started = false;
+                    this.state = "halted";
                     this.cancelWakeup();
+                    const tail = this.consoleDecoder.decode();
+                    if (tail) this.options.consoleWrite?.(tail);
                     this.options.onVmHalted?.(cause);
                 } else if (kind === 11) {
                     this.httpGeneration++;
@@ -710,6 +738,8 @@
                     if (cause === undefined)
                         throw new Error(`invalid VM reset cause ${value}`);
                     this.started = true;
+                    this.state = "running";
+                    this.consoleDecoder = new TextDecoder();
                     this.options.consoleReset?.();
                     this.options.framebufferClear?.();
                     this.options.onVmReset?.(cause);
@@ -723,6 +753,12 @@
         reportFilesystemError(error) {
             if (this.options.onError) this.options.onError(error);
             else console.error(error);
+        }
+
+        // Console chunks share one decoder per VM; other strings decode independently.
+        writeConsole(bytes) {
+            const text = this.consoleDecoder.decode(bytes, { stream: true });
+            if (text) this.options.consoleWrite?.(text);
         }
 
         // Events and disk completions are serviced after WASM releases its borrows.
@@ -774,7 +810,147 @@
 
     }
 
+    // The embedding boundary owns its runtime privately; scheduling stays automatic.
+    class Riscbox {
+        #runtime;
+        static FilesystemError = FilesystemError;
+        static BlockError = BlockError;
+        constructor(runtime) {
+            if (!(runtime instanceof RiscboxRuntime)) throw new TypeError("use Riscbox.instantiate()");
+            this.#runtime = runtime;
+        }
+        static async instantiate(source, options = {}) {
+            const names = ["fetch", "fetchBlock", "targetQuantumMs", "debugTiming", "consoleWrite",
+                "consoleReset", "onVmStarted", "onVmHalted", "onVmReset", "onVmDestroyed",
+                "onError", "networkWrite", "framebufferClear", "framebufferRefresh"];
+            for (const name of Object.keys(options)) {
+                if (!names.includes(name)) throw new TypeError(`unknown Riscbox option ${name}`);
+                if (name !== "targetQuantumMs" && name !== "debugTiming" && typeof options[name] !== "function")
+                    throw new TypeError(`${name} must be a function`);
+            }
+            if (options.debugTiming !== undefined && typeof options.debugTiming !== "boolean")
+                throw new TypeError("debugTiming must be boolean");
+            return new Riscbox(await RiscboxRuntime.instantiate(source, { ...options }));
+        }
+        static async loadResolvedConfig(url, commandLine = "", fetchRequest = globalThis.fetch) {
+            if (typeof url !== "string" || !url) throw new TypeError("configuration URL must be nonempty string");
+            if (typeof commandLine !== "string") throw new TypeError("commandLine must be string");
+            return RiscboxRuntime.loadResolvedConfig(url, commandLine, fetchRequest);
+        }
+        get state() { return this.#runtime.state; }
+        get started() { return this.#runtime.started; }
+
+        // Preparation reserves the runtime before downloads and cleans up failed loads.
+        async #prepare(operation, ramMiB, width, height, hasNetwork) {
+            this.#requireState("prepare", ["empty"]);
+            integer("ramMiB", ramMiB, 0, 0xffff_ffff);
+            integer("width", width, 0, 0xffff_ffff);
+            integer("height", height, 0, 0xffff_ffff);
+            if (typeof hasNetwork !== "boolean") throw new TypeError("hasNetwork must be boolean");
+            const generation = this.#runtime.httpGeneration;
+            this.#runtime.state = "preparing";
+            try { await operation(); }
+            catch (error) {
+                if (generation === this.#runtime.httpGeneration) await this.destroy();
+                throw error;
+            }
+        }
+        prepareResolved(config, ramMiB = 0, width = 0, height = 0, hasNetwork = false) {
+            return this.#prepare(() => this.#runtime.prepareResolved(config, ramMiB, width, height, hasNetwork),
+                ramMiB, width, height, hasNetwork);
+        }
+        prepareFromUrl(url, ramMiB = 0, commandLine = "", width = 0, height = 0, hasNetwork = false) {
+            return this.#prepare(async () => {
+                if (typeof url !== "string" || !url) throw new TypeError("configuration URL must be nonempty string");
+                if (typeof commandLine !== "string") throw new TypeError("commandLine must be string");
+                await this.#runtime.prepareFromUrl(url, ramMiB, commandLine, width, height, hasNetwork);
+            }, ramMiB, width, height, hasNetwork);
+        }
+        async startResolved(config, ramMiB = 0, width = 0, height = 0, hasNetwork = false) {
+            await this.prepareResolved(config, ramMiB, width, height, hasNetwork);
+            await this.boot();
+        }
+        async startFromUrl(url, ramMiB = 0, commandLine = "", width = 0, height = 0, hasNetwork = false) {
+            await this.prepareFromUrl(url, ramMiB, commandLine, width, height, hasNetwork);
+            await this.boot();
+        }
+
+        // Controls check state again when queued execution reaches the WASM boundary.
+        boot() { return this.#runtime.control("reset", ["halted"]); }
+        reset() { return this.#runtime.control("reset", ["running"]); }
+        halt() { return this.#runtime.control("halt", ["running"]); }
+        coldReset() { return this.#runtime.control("cold_reset", ["halted"]); }
+        destroy() { return this.#runtime.control("destroy", ["empty", "preparing", "halted"]); }
+        requestShutdown() { return this.#runtime.control("request_shutdown", ["running"]); }
+        requestReboot() { return this.#runtime.control("request_reboot", ["running"]); }
+        filesystem(name) {
+            this.#requireState("filesystem", ["halted", "running"]);
+            if (typeof name !== "string" || !name) throw new TypeError("filesystem name must be nonempty string");
+            return this.#runtime.filesystem(name).client;
+        }
+        block(index) {
+            this.#requireState("block", ["halted", "running"]);
+            return this.#runtime.block(index).client;
+        }
+        #requireState(call, states) {
+            if (!states.includes(this.state))
+                throw new Error(`${call} requires ${states.join(" or ")} VM; current state is ${this.state}`);
+        }
+        #requireInput(call) {
+            this.#requireState(call, ["running"]);
+            if (this.#runtime.config.input_device !== "virtio") throw new Error(`${call} requires VirtIO input`);
+        }
+
+        // Input validates values before integer conversion; the console reports backpressure.
+        consoleInput(bytes) {
+            this.#requireState("consoleInput", ["running"]);
+            if (!(bytes instanceof Uint8Array)) throw new TypeError("consoleInput requires Uint8Array");
+            return this.#runtime.consoleInput(bytes);
+        }
+        consoleResize(columns, rows) {
+            this.#requireState("consoleResize", ["running"]);
+            if (this.#runtime.config.console !== "virtio") throw new Error("consoleResize requires VirtIO console");
+            integer("columns", columns, 1, 65535); integer("rows", rows, 1, 65535);
+            return this.#runtime.consoleResize(columns, rows);
+        }
+        keyEvent(down, code) {
+            this.#requireInput("keyEvent");
+            if (typeof down !== "boolean") throw new TypeError("down must be boolean");
+            integer("code", code, 0, 65535);
+            return this.#runtime.keyEvent(down, code);
+        }
+        pointerEvent(x, y, buttons) {
+            this.#requireInput("pointerEvent");
+            integer("x", x, 0, 0xffff_ffff); integer("y", y, 0, 0xffff_ffff);
+            integer("buttons", buttons, 0, 7);
+            return this.#runtime.pointerEvent(x, y, buttons);
+        }
+        wheelEvent(delta) {
+            this.#requireInput("wheelEvent");
+            integer("delta", delta, -0x8000_0000, 0x7fff_ffff);
+            return this.#runtime.wheelEvent(delta);
+        }
+
+        // Transport carrier can precede preparation; frames are dropped outside execution.
+        networkInput(packet) {
+            if (!(packet instanceof Uint8Array)) throw new TypeError("networkInput requires Uint8Array");
+            if (this.state !== "running" || packet.length === 0 || packet.length > 65535) return 1;
+            if (!this.#runtime.hasNetwork || !this.#runtime.config.eth0)
+                throw new Error("networkInput requires an enabled network device");
+            return this.#runtime.networkInput(packet);
+        }
+        networkCarrier(up) {
+            if (typeof up !== "boolean") throw new TypeError("up must be boolean");
+            return this.#runtime.networkCarrier(up);
+        }
+    }
+    function integer(name, value, minimum, maximum) {
+        if (!Number.isInteger(value) || value < minimum || value > maximum)
+            throw new RangeError(`${name} must be an integer from ${minimum} to ${maximum}`);
+    }
+
     root.Riscbox = Riscbox;
     if (typeof module === "object" && module.exports)
-        module.exports = { Riscbox, ...root.RiscboxStorage };
+        module.exports = { Riscbox, FilesystemError, BlockError };
+    // DEVELOPMENT_EXPORTS
 }(globalThis));

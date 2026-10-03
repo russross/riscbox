@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-test("9p namespace, protocol, and VirtIO execute on raw WASM without operating-system imports", async () => {
+test("9p namespace, protocol, VirtIO, and CPU probes execute on raw WASM without operating-system imports", async () => {
     const directory = await mkdtemp(join(tmpdir(), "riscbox-ninep-"));
     try {
         const wasm = join(directory, "namespace.wasm");
@@ -29,6 +29,7 @@ test("9p namespace, protocol, and VirtIO execute on raw WASM without operating-s
         const instance = await WebAssembly.instantiate(module, {});
         assert.equal(instance.exports.namespace_regression(), 1);
         assert.equal(instance.exports.protocol_regression(), 1);
+        assert.equal(instance.exports.cpu_hot_path_regression(), 1);
         try {
             assert.equal(instance.exports.transport_regression(), 1);
         } catch (error) {
@@ -45,6 +46,7 @@ test("9p namespace, protocol, and VirtIO execute on raw WASM without operating-s
                     const { instance } = await WebAssembly.instantiate(bytes, {});
                     if (instance.exports.namespace_regression() !== 1) throw Error("first call");
                     if (instance.exports.protocol_regression() !== 1) throw Error("protocol call");
+                    if (instance.exports.cpu_hot_path_regression() !== 1) throw Error("CPU call");
                     if (instance.exports.transport_regression() !== 1) throw Error("transport call");
                     await Promise.resolve();
                     if (instance.exports.namespace_regression() !== 1) throw Error("second call");

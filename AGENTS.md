@@ -81,9 +81,6 @@ Repository map and terminology
     are ignored. The shared image helpers use `opensbi/fw_dynamic.bin`, and
     Risclet uses `kernel/linux` as OpenSBI's S-mode next stage. OpenSBI's
     `defconfig` selects the one-hart Riscbox SBI services and FDT drivers.
-*   `c/` is a read-only historical TinyEMU-derived archive. It is not an
-    implementation source, compatibility target, build dependency, parity
-    requirement, or validation surface.
 *   `README.md` is user-facing documentation. `DEV.md` holds only active plans,
     future work, and deferred findings. `CHANGELOG.md` is the historical record.
 
@@ -107,6 +104,9 @@ intentionally absent. Advertise only implemented behavior.
 Production CPU runs enter the TinyEMU C instruction loop. C owns CPU state,
 TLB, physical mappings, and RAM; its setup and teardown allocations use the
 Rust global allocator. Rust owns platform devices and handles MMIO callbacks.
+The interpreter accumulates retired instructions locally and publishes the
+counter at CSR accesses and CPU-run exits. WASM RV64 high-half multiplication
+uses 32-bit limbs and signed corrections; native builds use wide arithmetic.
 Shared callback errors and run outcomes live at the TinyEMU boundary, while
 interrupt masks live with the platform and memory access types live with the
 TinyEMU RAM bridge. The C core is compiled without a C runtime, Emscripten, or

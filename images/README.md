@@ -19,15 +19,15 @@ Build either current image from its directory:
 The `xv6-profile` definition is an offline boot workload for performance
 measurement. It builds the current xv6 kernel, excluding `fs.img`, as the
 unprivileged `test` user and powers off. Build it once, then collect matching
-Node/V8 profiles for the Rust and
-historical C WebAssembly runtimes:
+Node/V8 profiles for the Riscbox WebAssembly runtime:
 
     make -C images/xv6-profile
     make -C images/xv6-profile profile
 
 The profiler writes `.cpuprofile` files and guest console logs under
-`images/xv6-profile/profiles/`. Use `make -C images/xv6-profile profile-tinyemu`
-for the historical C runtime.
+`images/xv6-profile/profiles/`. Set `PROFILE_NAME=baseline-1` or
+`PROFILE_DIR=profiles/baseline` to preserve separate captures. Keep the prepared
+guest disk fixed when comparing runtime changes.
 Set `RISCBOX_PROFILE_TIMING=1` to include periodic emulator timing diagnostics
 in the Riscbox profile log.
 

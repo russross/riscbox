@@ -92,7 +92,43 @@ static inline uintx_t glue(remu, XLEN)(uintx_t a, uintx_t b)
     }
 }
 
-#if defined(HAVE_INT128)
+#if defined(__wasm__)
+
+/* WASM has 64-bit multiplication but no wide product instruction. These
+   limb products retain only the carries needed by the upper 64 bits. */
+static inline uint64_t mulhu64(uint64_t a, uint64_t b)
+{
+    uint64_t a0 = (uint32_t)a, a1 = a >> 32;
+    uint64_t b0 = (uint32_t)b, b1 = b >> 32;
+    uint64_t low = a0 * b0;
+    uint64_t middle = a1 * b0 + (low >> 32);
+    uint64_t carry = middle >> 32;
+
+    middle = a0 * b1 + (uint32_t)middle;
+    return a1 * b1 + carry + (middle >> 32);
+}
+
+/* Signed products share the unsigned high half and subtract the opposite
+   operand for each sign extension beyond bit 63. */
+static inline uint64_t mulh64(int64_t a, int64_t b)
+{
+    uint64_t high = mulhu64((uint64_t)a, (uint64_t)b);
+    if (a < 0)
+        high -= (uint64_t)b;
+    if (b < 0)
+        high -= (uint64_t)a;
+    return high;
+}
+
+static inline uint64_t mulhsu64(int64_t a, uint64_t b)
+{
+    uint64_t high = mulhu64((uint64_t)a, b);
+    if (a < 0)
+        high -= b;
+    return high;
+}
+
+#elif defined(HAVE_INT128)
 
 static inline uint64_t mulh64(int64_t a, int64_t b)
 {
@@ -190,7 +226,7 @@ static inline uintx_t glue(mulhsu, XLEN)(intx_t a, uintx_t b)
 
 #define RETIRE_INSN do { \
         if (!minstret_write) \
-            s->minstret_counter++; \
+            minstret_counter++; \
         minstret_write = FALSE; \
     } while (0)
 #ifdef CONFIG_CPU_TEST_SINGLE_STEP
@@ -246,6 +282,7 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
 #endif
     uint64_t elapsed_cycles_addend;
     uint64_t cycle_counter_addend;
+    uint64_t minstret_counter;
     BOOL minstret_write;
 #if FLEN > 0
     uint32_t rs3;
@@ -256,6 +293,9 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
         return;
     elapsed_cycles_addend = s->elapsed_cycles + n_cycles1;
     cycle_counter_addend = s->cycle_counter + n_cycles1;
+    /* Retirement stays local until a CSR access or interpreter exit makes
+       the counter observable outside the instruction loop. */
+    minstret_counter = s->minstret_counter;
     minstret_write = FALSE;
     s->n_cycles = n_cycles1;
 
@@ -1273,6 +1313,7 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
             case 1: /* csrrw */
                 s->elapsed_cycles = GET_ELAPSED_CYCLES();
                 s->cycle_counter = GET_CYCLE_COUNTER();
+                s->minstret_counter = minstret_counter;
                 if (csr_read(s, &val2, imm, TRUE))
                     goto illegal_insn;
                 val2 = (intx_t)val2;
@@ -1281,6 +1322,7 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
                     goto illegal_insn;
                 cycle_counter_addend = s->cycle_counter + s->n_cycles;
                 if (err == CSR_WRITE_MINSTRET) {
+                    minstret_counter = s->minstret_counter;
                     minstret_write = TRUE;
                     err = CSR_WRITE_OK;
                 }
@@ -1300,6 +1342,7 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
             case 3: /* csrrc */
                 s->elapsed_cycles = GET_ELAPSED_CYCLES();
                 s->cycle_counter = GET_CYCLE_COUNTER();
+                s->minstret_counter = minstret_counter;
                 if (csr_read(s, &val2, imm, (rs1 != 0)))
                     goto illegal_insn;
                 val2 = (intx_t)val2;
@@ -1313,6 +1356,7 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
                         goto illegal_insn;
                     cycle_counter_addend = s->cycle_counter + s->n_cycles;
                     if (err == CSR_WRITE_MINSTRET) {
+                        minstret_counter = s->minstret_counter;
                         minstret_write = TRUE;
                         err = CSR_WRITE_OK;
                     }
@@ -1804,6 +1848,7 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
 the_end:
     s->elapsed_cycles = GET_ELAPSED_CYCLES();
     s->cycle_counter = GET_CYCLE_COUNTER();
+    s->minstret_counter = minstret_counter;
 #if 0
     printf("done interp %lx int=%x mstatus=%lx prv=%d\n",
            (uint64_t)s->elapsed_cycles, s->mip & s->mie, (uint64_t)s->mstatus,

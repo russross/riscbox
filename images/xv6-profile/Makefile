@@ -1,6 +1,8 @@
 ROOT := ../..
 BIN := ../bin
 WASM := $(ROOT)/target/wasm32-unknown-unknown/release/riscbox_wasm.wasm
+PROFILE_DIR ?= profiles
+PROFILE_NAME ?= riscbox
 WEB_SOURCES := $(shell find web -type f)
 JS_SOURCES := $(shell find $(ROOT)/js/network -name '*.ts' -type f) $(ROOT)/js/storage.ts $(ROOT)/js/riscbox.d.ts
 
@@ -20,23 +22,15 @@ dist/riscbox.cfg: Makefile build/rootfs.erofs riscbox.cfg $(WEB_SOURCES) $(JS_SO
 	$(BIN)/build-distribution . build/rootfs.ext4 --erofs
 
 profile: all
-	@mkdir -p profiles
-	@set -o pipefail; node --cpu-prof --cpu-prof-dir profiles --cpu-prof-name riscbox.cpuprofile \
+	@mkdir -p "$(PROFILE_DIR)"
+	@set -o pipefail; node --cpu-prof --cpu-prof-dir "$(PROFILE_DIR)" --cpu-prof-name "$(PROFILE_NAME).cpuprofile" \
 		profile-xv6.mjs riscbox dist/riscbox.cfg $(WASM) $${PROFILE_TIMEOUT_SECONDS:-1800} \
-		2>&1 | tee profiles/riscbox.log
-	@test -s profiles/riscbox.cpuprofile && test -s profiles/riscbox.log
-
-profile-tinyemu: all
-	$(MAKE) -C $(ROOT)/c -f Makefile.js
-	@mkdir -p profiles
-	@set -o pipefail; node --cpu-prof --cpu-prof-dir profiles --cpu-prof-name tinyemu.cpuprofile \
-		profile-xv6.mjs tinyemu dist/riscbox.cfg $(ROOT)/c/js/riscbox-wasm.js $${PROFILE_TIMEOUT_SECONDS:-1800} \
-		2>&1 | tee profiles/tinyemu.log
-	@test -s profiles/tinyemu.cpuprofile && test -s profiles/tinyemu.log
+		2>&1 | tee "$(PROFILE_DIR)/$(PROFILE_NAME).log"
+	@test -s "$(PROFILE_DIR)/$(PROFILE_NAME).cpuprofile" && test -s "$(PROFILE_DIR)/$(PROFILE_NAME).log"
 
 clean:
 	rm -rf build dist profiles
 
-.PHONY: all profile profile-tinyemu clean
+.PHONY: all profile clean
 SHELL := /bin/bash
 .DELETE_ON_ERROR:

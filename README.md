@@ -494,12 +494,11 @@ TinyEMU relationship and license
 
 Riscbox began as a focused fork of Fabrice Bellard's
 [TinyEMU](https://bellard.org/tinyemu/) and retains its MIT license and copyright
-notices. The repository preserves the former C fork under `c/` for historical
-reference.
+notices.
 
-The active `tinyemu-core/` contains a freestanding subset of the archived C
+The active `tinyemu-core/` contains a freestanding subset of TinyEMU's C
 CPU, SoftFP, and physical memory implementation. Rust owns the platform,
 devices, browser requests, and C allocations. An execution quantum may enter C
 multiple times to inject guest time at a timer deadline or process host work;
-C calls Rust for device accesses. The historical `c/` tree is not built.
+C calls Rust for device accesses.
 Project history is recorded in [CHANGELOG.md](CHANGELOG.md).

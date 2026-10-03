@@ -4,6 +4,23 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Kept instruction retirement accounting in a local C interpreter accumulator,
+    publishing it at CSR accesses and CPU-run exits. Optimized WASM has three
+    counter store sites instead of 55. RV64 WASM high-half multiplication now
+    uses 32-bit limbs rather than general 128-bit multiply helpers; native
+    builds retain wide arithmetic. Shared native and raw-WASM probes cover
+    counter writes, overflow, traps, handoffs, and 272 multiplication pairs.
+    Four fixed-image xv6 compile profiles per variant averaged 95.1825 seconds
+    before optimization, 92.3125 after retirement accounting, and 88.855 with
+    both changes, a 6.65% total reduction. Interpreter self samples averaged
+    84.937, 82.086, and 78.397 seconds. The multiply change's 3.75% incremental
+    reduction repeated with saved-artifact controls, but its cause is not
+    isolated: sampled multiply helper time was only a few milliseconds. The
+    optimized interpreter's linear-memory stack reservation fell from 80 to
+    32 bytes with limb multiplication.
+    Removed the historical C profiler path and added capture names and
+    directories for retaining Riscbox results.
+
 *   Updated the pinned Linux kernel to 6.18.55 LTS, OpenSBI to 1.9, and
     U-Boot to 2026.07. Disabled U-Boot's board-init hook to match the upstream
     QEMU RISC-V configuration; Alpine ISO EFI boot passes natively and in Chrome.

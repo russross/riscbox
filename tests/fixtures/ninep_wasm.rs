@@ -3,12 +3,22 @@
 pub use riscbox::{ninep, ninep_protocol};
 
 mod ninep_transport;
+mod cpu_hot_path;
 
 use ninep::{ChangeKind, Filesystem, Limits};
 use ninep_protocol::NinePSession;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 static PANIC_LINE: AtomicU32 = AtomicU32::new(0);
+
+// The same instruction streams validate native and raw-WASM CPU execution.
+#[unsafe(no_mangle)]
+pub extern "C" fn cpu_hot_path_regression() -> u32 {
+    cpu_hot_path::retirement();
+    cpu_hot_path::retirement_handoff();
+    cpu_hot_path::high_multiply();
+    1
+}
 
 #[unsafe(no_mangle)]
 pub extern "C" fn panic_line() -> u32 {

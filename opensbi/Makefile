@@ -1,7 +1,7 @@
 VERSION := $(strip $(shell cat version))
 BASE_URL := https://github.com/riscv-software-src/opensbi/archive/refs/tags
 ARCHIVE := downloads/opensbi-$(VERSION).tar.gz
-ARCHIVE_SHA256 := d11702103f177a2914e94eec57ce5ed820296d874f6b6525c4482e55d71a3667
+ARCHIVE_SHA256 := f6c4985843d6d878b5b511d7d7a930b6b541d3d9305371f2d9780765428f66f4
 VERIFIED := downloads/.opensbi-$(VERSION).verified
 SOURCE_DIR := sources/opensbi-$(VERSION)
 SOURCE_READY := sources/.opensbi-$(VERSION).ready

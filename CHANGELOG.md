@@ -4,6 +4,10 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Updated the pinned Linux kernel to 6.18.55 LTS, OpenSBI to 1.9, and
+    U-Boot to 2026.07. Disabled U-Boot's board-init hook to match the upstream
+    QEMU RISC-V configuration; Alpine ISO EFI boot passes natively and in Chrome.
+
 *   Updated Risclet for Exam's canonical read-only client-core mount and explicit
     VM transitions. Example switches retain snapshots and disk overlays; Reset
     uses the shared reset API to restore originals. Builds use local runtime

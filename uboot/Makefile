@@ -1,7 +1,7 @@
 VERSION := $(strip $(shell cat version))
 BASE_URL := https://ftp.denx.de/pub/u-boot
 ARCHIVE := downloads/u-boot-$(VERSION).tar.bz2
-ARCHIVE_SHA256 := cdef7d507c93f1bbd9f015ea9bc21fa074268481405501945abc6f854d5b686f
+ARCHIVE_SHA256 := 78e8bfc382fe388f9b55aa1daf8c563522a037779b5d4c349d1415e381f1243e
 VERIFIED := downloads/.u-boot-$(VERSION).verified
 SOURCE_DIR := sources/u-boot-$(VERSION)
 SOURCE_READY := sources/.u-boot-$(VERSION).ready

@@ -1,9 +1,0 @@
-*.o
-*.d
-build/
-build_filelist
-riscbox
-riscbox-debug
-splitimg
-js/riscbox-wasm.js
-js/riscbox-wasm.wasm

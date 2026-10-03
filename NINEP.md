@@ -1,8 +1,8 @@
 Rust 9P2000.L endpoint
 =====================
 
-The [session and endpoint](src/ninep_protocol.rs) implement the resident Rust
-server over [namespace state](src/ninep.rs). VirtIO owns a concrete endpoint
+The [session and endpoint](https://github.com/russross/riscbox/blob/main/src/ninep_protocol.rs) implement the resident Rust
+server over [namespace state](https://github.com/russross/riscbox/blob/main/src/ninep.rs). VirtIO owns a concrete endpoint
 with one independent session over a shared VM namespace. The synchronous
 browser facade uses the same Rust server. The [storage ABI](STORAGE-ABI.md)
 exposes copied host operations.
@@ -83,5 +83,5 @@ packet builders: malformed/truncated requests, bounded replies, partial walks,
 open modes, ownership, nanoseconds, cookies, locks, and reset lifetimes.
 Executable WASM probes exercise host packets, real guest rings, synchronous
 shared reads/writes, notifications, reboot, shutdown, and destroy invalidation.
-The deployed Risclet test additionally exercises Linux mounts and editor/guest
-sharing in Chrome.
+The opt-in `make test-demo` additionally exercises Linux mounts and explicit
+editor/guest sharing in Chrome.

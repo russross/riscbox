@@ -1,6 +1,0 @@
-# Shared image build artifacts.
-/build/
-
-# Per-image working files and deployable output.
-/*/build/
-/*/dist/

@@ -47,12 +47,10 @@ for retirement counters, CSR writes, overflow, traps, host handoffs, and signed
 and unsigned high-half multiplication. `tests/pmp.rs` shares native and raw-WASM
 probes for unrestricted memory accesses and PMP CSR masks and locks.
 Performance captures remain generated
-artifacts under `images/xv6-profile/profiles/`.
+artifacts in the separate image project's `xv6-profile/profiles/` directory.
 
 Active work
 -----------
-
-No active implementation plans are currently recorded.
 
 Candidate work
 --------------
@@ -60,8 +58,8 @@ Candidate work
 ### Framebuffer demonstration
 
 Add guest framebuffer and input demonstration programs, configure those devices
-in an image, and connect dirty-region callbacks to a canvas in the Risclet page.
-Validate the complete guest-to-page path together. The current Risclet demo is
+in an image, and connect dirty-region callbacks to a canvas in an embedding app.
+Validate the complete guest-to-page path together. The release demo is
 intentionally terminal-only.
 
 ### WASI integration

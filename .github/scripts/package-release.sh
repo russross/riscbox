@@ -21,7 +21,8 @@ for component in kernel opensbi uboot; do
     asset=$(cat "$component/.asset-name")
     install -m 644 "$component/$asset" "$package/$asset"
 done
-install -m 644 README.md CHANGELOG.md LICENSE "$package/"
+install -m 644 README.md STORAGE-ABI.md NINEP.md DEPLOYMENT.md CHANGELOG.md LICENSE "$package/"
+install -m 755 tools/splitimg.py "$package/splitimg.py"
 install -m 644 js/network/README.md "$package/network/README.md"
 
 # TypeScript output is pure ESM and includes its declarations for host authors.

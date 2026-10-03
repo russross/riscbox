@@ -12,47 +12,42 @@ release:
 test-unit: js
 	cargo test --workspace
 	uv run -q --script tests/test_splitimg.py
-	uv run -q --script tests/test_image_deployment.py
 	node --test js/network.test.mjs js/riscbox.test.cjs
-	node tools/test_client_core.mjs tests/input.test.mjs tests/sync.test.mjs tests/workspace.test.mjs
 	node --test tests/ninep_wasm.test.mjs
 	node --test tests/ninep_abi.test.mjs
 
 test: test-unit wasm
-	node tools/test_client_core.mjs
 	node --test tests/network_browser.test.mjs
-	node --test tests/alpine_iso_browser.test.mjs
 	RISCBOX_TEST_BROWSER=1 node --test tests/ninep_wasm.test.mjs
 	RISCBOX_TEST_BROWSER=1 node --test tests/ninep_abi.test.mjs
 
 check: test
 	$(MAKE) js-check
 	cargo clippy --all-targets --workspace -- -D warnings
-	uvx --quiet ty check tools/splitimg.py tools/image_deployment.py
+	uvx --quiet ty check tools/splitimg.py
 
-test-images:
-	$(MAKE) -C images/risclet
-	$(MAKE) -C images/alpine
-	$(MAKE) -C images/xv6-profile
-	cargo test --release --test platform_acceptance alpine_reaches_login_and_shuts_down -- --ignored
-	node --test tests/risclet_browser.test.mjs
-	node tools/test_client_core.mjs
+demo:
+	$(MAKE) -C demo
+
+test-demo:
+	$(MAKE) -C demo test
 
 wasm: $(RUSTBOX_WASM)
 
 js: build/js/.built
 
-build/js/.built: js/tsconfig.json $(JS_SOURCES) js/riscbox.js tools/build_adapter.mjs
+node_modules/.package-lock.json: package.json package-lock.json
+	npm ci
+
+build/js/.built: js/tsconfig.json $(JS_SOURCES) js/riscbox.js tools/build_adapter.mjs node_modules/.package-lock.json
 	rm -rf build/js/p9 build/js/block
-	images/risclet/ui/node_modules/.bin/tsc -p js/tsconfig.json
+	node_modules/.bin/tsc -p js/tsconfig.json
 	node tools/build_adapter.mjs
 	@mkdir -p build/js
 	@touch $@
 
-js-check:
-	images/risclet/ui/node_modules/.bin/tsc -p js/tsconfig.json --noEmit
-	images/risclet/ui/node_modules/.bin/tsc -p client-core/tsconfig.json --noEmit
-	npm --prefix images/risclet/ui run check
+js-check: node_modules/.package-lock.json
+	node_modules/.bin/tsc -p js/tsconfig.json --noEmit
 
 $(RUSTBOX_WASM): Cargo.toml Cargo.lock build.rs riscbox-wasm/Cargo.toml $(RUST_SOURCES)
 	cargo build --release -p riscbox-wasm --target wasm32-unknown-unknown
@@ -71,7 +66,10 @@ dist:
 	$(MAKE) wasm js kernel opensbi uboot
 	$(MAKE) $(ARCHIVE)
 
-$(ARCHIVE): Makefile $(RUSTBOX_WASM) build/js/.built js/riscbox.js kernel/.asset-name opensbi/.asset-name uboot/.asset-name .github/scripts/package-release.sh README.md CHANGELOG.md LICENSE js/storage.ts js/network/README.md
+release-path:
+	@printf '%s\n' '$(abspath $(ARCHIVE))'
+
+$(ARCHIVE): Makefile $(RUSTBOX_WASM) build/js/.built js/riscbox.js kernel/.asset-name opensbi/.asset-name uboot/.asset-name .github/scripts/package-release.sh README.md STORAGE-ABI.md NINEP.md DEPLOYMENT.md CHANGELOG.md LICENSE tools/splitimg.py js/storage.ts js/network/README.md
 	.github/scripts/package-release.sh $@
 
 clean:
@@ -83,4 +81,4 @@ clean:
 
 clean-all: clean
 
-.PHONY: all release test-unit test check test-images wasm js js-check kernel opensbi uboot dist clean clean-all
+.PHONY: all release test-unit test check demo test-demo wasm js js-check kernel opensbi uboot dist release-path clean clean-all

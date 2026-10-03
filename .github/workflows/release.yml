@@ -75,20 +75,19 @@ jobs:
         if: steps.version.outputs.build == 'true'
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang llvm lld gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu bc bison flex libssl-dev libelf-dev dwarves
+          sudo apt-get install -y clang llvm lld binaryen gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu bc bison flex libssl-dev libelf-dev dwarves
 
       - name: Install browser module compiler
         if: steps.version.outputs.build == 'true'
         run: |
-          npm --prefix images/risclet/ui ci
-          npm --prefix client-core ci
+          npm ci
 
       - name: Build and validate
         if: steps.version.outputs.build == 'true'
         run: |
           make test-unit js-check
           cargo clippy --all-targets --workspace -- -D warnings
-          uvx --quiet ty check tools/splitimg.py tools/image_deployment.py
+          uvx --quiet ty check tools/splitimg.py
           uvx --quiet ty check .github/scripts/release_version.py
           make wasm
           make
@@ -99,7 +98,10 @@ jobs:
         run: |
           archive=build/releases/riscbox-${{ steps.version.outputs.version }}.tar.gz
           tar -tzf "$archive" > /tmp/riscbox-archive-files
-          test "$(wc -l < /tmp/riscbox-archive-files)" -gt 15
+          prefix=riscbox-${{ steps.version.outputs.version }}
+          for asset in riscbox.wasm riscbox.js riscbox.d.ts splitimg.py README.md STORAGE-ABI.md NINEP.md DEPLOYMENT.md network/index.js; do
+            grep -Fx "$prefix/$asset" /tmp/riscbox-archive-files
+          done
           echo "archive=$archive" >> "$GITHUB_OUTPUT"
 
       - name: Publish release

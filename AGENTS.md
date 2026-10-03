@@ -68,23 +68,20 @@ Repository map and terminology
     is in `NINEP.md`; active coordination belongs in `DEV.md`.
     Keep Rust source modules flat and consolidate helpers with their owning
     architectural boundary instead of adding nested implementation modules.
-*   `images/` contains reproducible Makefile-driven image definitions and deployment tooling.
-    Generated downloads, images, boot assets, and distributions are not source.
-*   `client-core/` is a read-only sshfs mount of Exam's canonical shared browser
-    editor, terminal, file views, namespace snapshots, and VM lifecycle source.
-    Risclet compiles it directly. Keep application navigation, downloads,
-    submissions, grading, and clipboard policy outside it. Its README defines
-    the runtime/build contract; `EXAM-MIGRATION.md` is a self-contained handoff.
-    Shared fixes and dependency installation belong in Exam's canonical source.
-    Type-only Riscbox aliases resolve through the consumer's build configuration
-    to the locally built adapter declarations. Shared tests require a writable copy.
+*   `demo/` is a release-only embedding example with its own Alpine image and
+    plain browser app. Its Makefile stages the unchanged release tree and uses
+    only packaged runtime, boot payloads, and splitter assets. Historical image
+    projects and the shared application client live outside this repository.
+*   Root `package.json` owns the pinned build-only TypeScript compiler.
+    Core tests own their Chrome harness and require no mounted client source.
 *   `kernel/` owns the canonical custom Linux kernel consumed by image builds.
 *   `opensbi/` and `uboot/` own pinned firmware and bootloader builds. Each
     tracks its Makefile, version, and config; downloads, sources, and outputs
-    are ignored. The shared image helpers use `opensbi/fw_dynamic.bin`, and
-    Risclet uses `kernel/linux` as OpenSBI's S-mode next stage. OpenSBI's
+    are ignored. The release packages both firmware and the Linux next stage. OpenSBI's
     `defconfig` selects the one-hart Riscbox SBI services and FDT drivers.
-*   `README.md` is user-facing documentation. `DEV.md` holds only active plans,
+*   `README.md`, `DEPLOYMENT.md`, `STORAGE-ABI.md`, and `NINEP.md` are packaged
+    user documentation. `BUILDING.md` covers contributor setup and checks.
+    `DEV.md` holds only active plans,
     future work, and deferred findings. `CHANGELOG.md` is the historical record.
 
 In this repository, "native" means a Rust test or image-preparation execution
@@ -166,7 +163,7 @@ prepare another VM. Export consistency requires orderly guest shutdown.
 
 The host can deliver soft shutdown and reboot input events, force an immediate
 halt or reset, boot a halted machine, and destroy a halted machine. The prepared
-Alpine and Risclet guests use BusyBox `acpid` to turn the two input events into
+demo guest uses BusyBox `acpid` to turn the two input events into
 orderly userspace actions. Guest poweroff halts without teardown; guest reboot
 uses the QEMU `virt` syscon reset value. In-place reset restarts the C CPU,
 reloads boot images, and clears platform and VirtIO interface state while
@@ -178,35 +175,19 @@ Destroy also cancels config/asset startup, retires its pending HTTP response,
 and permits reuse of the runtime after invalidating its storage handles. Browser
 HTTP completions and errors are guarded by the VM lifecycle generation.
 
-The Risclet demo loads the custom Linux kernel directly through OpenSBI. Its
-single EROFS disk is the read-only root filesystem; tmpfs supplies `/tmp` and
-the writable overlay layers for `/var` and `/home`. The device tree model
-identifies the platform as `riscbox`; QEMU names remain in functional board
-bindings and build targets. Linux uses UART early and the VirtIO console for
-login.
-Risclet uses one VM and one share across examples. It downloads complete file
-bodies before boot and caches original bytes in the application. Switching
-flushes the editor, requests orderly guest shutdown, snapshots the outgoing
-namespace, restores the incoming example's snapshot or originals, and boots
-the same VM with retained disk overlays. Application-memory snapshots retain
-bytes, directories, symlinks, hard links, permissions, ownership, and access/
-modification times; restored inode identities and ctime are new. Reset forces
-halt, cold-resets, discards the HTTP overlay, restores current-example originals,
-and boots. Reset can interrupt pending orderly shutdown or reboot.
-Reboot requests an orderly guest reboot retaining edits and storage.
-Filesystem operations and subscriptions are synchronous with numeric
-origin filtering; notifications run after Rust borrows end.
-The editor buffers changes until blur, file selection, VM interaction, Sync,
-or a thirty-second fallback timer restarted by each edit. Writes acknowledge
-only their submitted revision; failures retain dirty text and retry. Conflicting
-filesystem changes require a discard decision before replacing dirty text.
-Instruction subscriptions track referenced images as well as the document.
-Terminal input batches copied bytes, retries partial FIFO acceptance, and
-retires queued and pending input on reset, halt, teardown, or runtime failure.
-The terminal uses pinned Wterm 0.5.4 with its Ghostty core, DOM rendering, 18px
-Latin Modern Mono, and a 64 KiB history budget. Guarded build loaders adapt
-viewport clipping and connected box strokes. Browser rendering tests cover
-fractional scaling, partial-row clearing, retained history, and idle rendering.
+The embedding demo loads the packaged Linux kernel through OpenSBI, mounts an
+EROFS root with tmpfs overlays for `/var` and `/home`, and autologins user `demo`
+on the VirtIO console. BusyBox acpid handles orderly power events. QEMU setup
+installs TinyCC, its static runtime, musl headers, make, doas, and small tools.
+Original BSD arithmetic, Wumpus, and number source trees compile with TinyCC.
+The host populates a resident `workspace` share owned by UID/GID 1000.
+The app uses pinned CDN Wterm and CodeMirror modules without an application
+build step. It exposes explicit preparation, boot, shutdown, reboot, cold/image
+reset, share replacement, directory listing, file copying, and saving controls.
+Selecting or editing a file never transfers bytes implicitly. Image reset
+preserves the share; share replacement requires halt and leaves the disk alone.
+Terminal input retries partial FIFO acceptance and retires on lifecycle changes;
+boot/reset messages remain in terminal history. Demo validation is opt-in.
 
 Rust sizes each execution quantum from a measured emulated cycle rate and a
 target duration, twenty milliseconds by default. Each quantum locks its rate
@@ -234,10 +215,7 @@ Runnable quanta continue through `MessageChannel` tasks to avoid browser
 clamping of repeated zero-delay timers; delayed wakeups still use `setTimeout`.
 The C interpreter may pass a requested cycle limit at a code-block boundary,
 and Rust accounts for the actual emulated cycles consumed.
-Risclet and xv6 profile image setup boots writable ext4 under QEMU, then
-converts the finished filesystem to a read-only EROFS disk.
-Their guests mount tmpfs at `/tmp` and session-local tmpfs-backed overlays at
-`/var` and `/home`. Split HTTP disks use 512 KiB chunks by default.
+Split HTTP disks use 512 KiB chunks by default.
 
 Timing and execution lexicon
 ----------------------------
@@ -297,8 +275,7 @@ Architecture rules
     `wasm-bindgen`, an async Rust runtime, or adapter runtime dependencies.
 *   Keep dependencies exceptional. Inspect the complete resolved graph before
     adding one. Prefer direct implementations for the configuration parser.
-    The narrowly configured RustCrypto crates
-    remain only for encrypted split HTTP block images.
+    Inspect `Cargo.lock` before changing the resolved dependency graph.
 *   Keep browser I/O explicit through request/completion and event queues.
     Never retain a JavaScript view across an await or reenter borrowed Rust
     runtime state from a host callback.
@@ -340,27 +317,20 @@ Validation
     and executable raw-WASM 9p namespace/protocol/transport, CPU, and deployed
     filesystem ABI probes in Node.
 *   `make test` adds real WASM/Chrome network integration and 9p server tests
-    for development, plus ISO boot coverage when `RISCBOX_ALPINE_ISO` is set.
+    for development, with small owned firmware probes.
 *   `make check` adds strict Clippy and Python type checks. The GitHub release
     workflow runs unit tests, type checks, Clippy, and builds without Chrome or
     full-guest tests.
-*   `make test-images` rebuilds Risclet, Alpine, and xv6 profile distributions,
-    runs native Alpine acceptance, and exercises the deployed Risclet UI and
-    guest in Chrome. It covers synchronous host/editor/guest changes, application
-    download failure/retry, notifications, retained reboot, clean reset, shutdown,
-    and switching during example downloads. Browser tests use temporary profiles and normal
-    event-loop timing; they use headed Chrome when a display is available.
+*   `make test-demo` builds the optional release-only example and checks real
+    Chrome/WASM boot, TinyCC games, explicit host/guest file transfers, lifecycle
+    controls, image/share reset, and destroyed facade invalidation. Browser tests
+    use temporary profiles, headed Chrome when a display is available, and
+    headless Chrome otherwise. `make demo` builds without running acceptance.
 *   `make wasm` builds the deployed Rust WebAssembly artifact.
-*   `RISCBOX_ALPINE_ISO=/path/to/alpine-standard-riscv64.iso cargo test --release
-    --test platform_acceptance alpine_iso_boots_through_efi_and_shuts_down --
-    --ignored` exercises the ISO's EFI loader, live userspace, ISO9660/FAT
-    reads, and shutdown. With the same environment variable, run
-    `node --test tests/alpine_iso_browser.test.mjs` for real Chrome/WASM coverage;
-    `RISCBOX_ISO_TRANSPORT=http` selects split HTTP rather than host-array media.
 *   `make kernel`, `make opensbi`, and `make uboot` build the pinned guest
     components and their hash-named gzip assets. The default `make` builds
     those with the core WASM and JavaScript and packages the release archive.
-    Image Makefiles build deployments by default and run profiles explicitly.
+    The optional demo has an independent make-driven image preparation workflow.
 
 For CPU or platform milestones, run `make check` and rebuild WASM from a clean
 tree. Current xv6 is the primary UART and supervisor-mode integration guest.

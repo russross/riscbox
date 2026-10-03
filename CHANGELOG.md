@@ -4,6 +4,19 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Separate historical guest images and shared client source from core builds,
+    tests, and release automation. Own the build-only TypeScript compiler and
+    Chrome probe harness here. Package the standalone image splitter and the
+    deployment, storage, and protocol guides; keep contributor setup separately
+    in `BUILDING.md` and validate archive contents by required filenames.
+
+*   Add `make demo`: a plain release-only embedding app with a QEMU-prepared
+    Alpine EROFS disk, tmpfs overlays, passwordless demo login/doas, and TinyCC
+    BSD game workspaces shared through resident 9p. CDN terminal/editor controls
+    expose explicit file transfers and VM, disk, and share lifecycles.
+    `RELEASE_ARCHIVE` builds from a downloaded archive without parent inputs;
+    `make test-demo` provides separate Chrome/WASM guest acceptance.
+
 *   Flatten Rust source modules around namespace, protocol, disk storage, and
     copied host ABI boundaries. Consolidate split helpers and inline their
     implementation tests; move storage and protocol guides to `STORAGE-ABI.md`

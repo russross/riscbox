@@ -32,12 +32,12 @@ and `network/` files are ready to serve as static browser assets. The configured
 Linux Image, OpenSBI firmware, and U-Boot binary are gzip-compressed under
 content-hash names (`linux-HASH.gz`, `fw_dynamic.bin-HASH.gz`, and
 `u-boot.bin-HASH.gz`). The archive also contains this API
-README, module documentation, the changelog, and the license. It contains no
-guest root filesystem, disk blocks, sample VM, or image build scripts.
+README, storage and protocol guides, deployment guide, the standalone
+`splitimg.py` executable, the changelog, and the license. It contains no guest
+root filesystem, disk blocks, sample VM, or image build scripts.
 
 To boot Linux directly, prepare a compatible RISC-V root filesystem image,
-split it into HTTP blocks using the repository's
-[`tools/splitimg.py`](https://github.com/russross/riscbox/blob/main/tools/splitimg.py),
+split it into HTTP blocks using the archive's `splitimg.py`,
 and place its block directory beside the runtime. Create `riscbox.cfg` there
 using the example in “VM configuration” below; replace `drive/blk.txt` with
 the path reported by the splitter. Serve the directory over HTTP or HTTPS and
@@ -54,7 +54,7 @@ loads Linux from the disk. Decompress the included `linux-HASH.gz` asset to
 supply that Image.
 
 To boot a RISC-V installation ISO, use OpenSBI as `bios`, U-Boot as `kernel`,
-and attach the ISO as `drive0`. Split the `.iso` with `tools/splitimg.py` and
+and attach the ISO as `drive0`. Split the `.iso` with `splitimg.py` and
 set `drive0.file` to its `drive-HASH/blk.txt`, or attach its bytes through a
 VM-owned byte array. Allocate 512 MiB of RAM for the Alpine standard ISO.
 U-Boot scans FAT EFI boot partitions, including El Torito boot images, for
@@ -69,66 +69,15 @@ and SquashFS with zlib, XZ, and Zstandard decompression. U-Boot reads the FAT
 boot image inside an ISO; an EFI application such as GRUB reads the ISO9660
 tree. Boot media must contain a RISC-V EFI loader compatible with this platform.
 
-To run the optional ISO acceptance tests after building OpenSBI, U-Boot,
-WASM, and JavaScript:
+Embedding demo
+--------------
 
-```sh
-RISCBOX_ALPINE_ISO=/path/to/alpine-standard-riscv64.iso \
-    cargo test --release --test platform_acceptance alpine_iso_boots_through_efi_and_shuts_down -- --ignored
-RISCBOX_ALPINE_ISO=/path/to/alpine-standard-riscv64.iso \
-    node --test tests/alpine_iso_browser.test.mjs
-```
-
-Set `RISCBOX_ISO_TRANSPORT=http` for the browser test to exercise split HTTP
-media instead of a host array. Both paths check ISO9660 and the embedded FAT
-image and require guest poweroff.
-
-Quick start
------------
-
-The root build requires Rust, Clang, `ar`, GNU Make, `uv`, Node.js, and the
-`wasm32-unknown-unknown` Rust target. Building the supplied Linux images also
-requires a RISC-V cross compiler, QEMU, ext4 tools, and `curl`. The image
-scripts build their pinned OpenSBI firmware from source:
-
-    sudo apt install curl e2fsprogs gcc-riscv64-linux-gnu qemu-system-misc
-    rustup target add wasm32-unknown-unknown
-
-Clone, build, and test the emulator:
-
-    git clone https://github.com/russross/riscbox.git
-    cd riscbox
-    make
-    make test
-
-The supplied Alpine definition is a complete example project:
-
-    cd images/alpine
-    make
-    cd dist
-    python3 -m http.server 8000
-
-Open <http://127.0.0.1:8000/>. The generated `dist/` directory is self-contained
-and can be copied to any static HTTP server. It contains the VM configuration,
-OpenSBI, Linux, a chunked disk, `riscbox.wasm`, `riscbox.js`, and a minimal
-console page.
-
-Build targets
--------------
-
-| Target              | Result                                                                 |
-| ------------------- | ---------------------------------------------------------------------- |
-| `make release`      | Optimized Rust workspace for development and native tests              |
-| `make test-unit`    | Rust, Python, JavaScript, and raw-WASM 9p server tests                 |
-| `make test`         | Unit tests and Chrome/WASM network and 9p server tests                 |
-| `make check`        | Full tests, strict Clippy, TypeScript, and Python type checks          |
-| `make test-images`  | Build image distributions; native Alpine and Chrome Risclet acceptance |
-| `make wasm`         | `target/wasm32-unknown-unknown/release/riscbox_wasm.wasm`              |
-| `make` / `make all` | Build the complete release archive in `build/releases/`                |
-| `make kernel`       | Canonical kernel and its `kernel/linux-HASH.gz` asset                  |
-| `make opensbi`      | OpenSBI and its `opensbi/fw_dynamic.bin-HASH.gz` asset                 |
-| `make uboot`        | U-Boot and its `uboot/u-boot.bin-HASH.gz` asset                        |
-| `make dist`         | Update the release archive from all build components                   |
+The [release-based demo](https://github.com/russross/riscbox/tree/main/demo)
+shows an Alpine VM, TinyCC source trees loaded through resident 9p, explicit file
+editing, and VM/storage lifecycle controls. It consumes only packaged runtime
+assets. Source build instructions are in
+[BUILDING.md](https://github.com/russross/riscbox/blob/main/BUILDING.md).
+See [DEPLOYMENT.md](DEPLOYMENT.md) for disk splitting and static hosting.
 
 Browser library
 ---------------
@@ -183,7 +132,7 @@ Framebuffer callbacks receive a zero-copy WASM view plus `x`, `y`, `width`,
 
 Lifecycle methods return promises. `requestShutdown()` and `requestReboot()`
 deliver guest input events and return before the guest has acted; the guest OS
-must handle those events. The prepared Alpine and Risclet images run BusyBox
+must handle those events. The embedding demo runs BusyBox
 `acpid` for them. `halt()` immediately stops CPU execution and retains the
 machine, attached devices, 9p servers, and disk contents. `boot()` starts a
 halted VM from its boot images; `reset()` immediately resets a running VM. A
@@ -350,81 +299,6 @@ can be supplied as `kernel` after OpenSBI. Riscbox does not parse ELF,
 PE/COFF, FIT, qcow2, or other compressed kernel formats. The runtime loads
 firmware and bootloader binaries supplied by the image; the repository builds
 its pinned OpenSBI and U-Boot binaries separately.
-
-Creating an image project
--------------------------
-
-Each directory under `images/` is an independent image definition. Start from
-`images/alpine/` for a general Linux VM or `images/risclet/` for a VM with a
-browser-backed workspace:
-
-```text
-images/my-image/
-├── Makefile       # tracks the shared image helpers and build inputs
-├── setup.sh       # runs as root inside the image under QEMU
-├── riscbox.cfg    # paths are relative to the deployed config
-└── web/           # optional replacement/additions for the browser page
-```
-
-Use `images/bin/create-alpine-ext4` to create the filesystem,
-`images/bin/run-image-setup` to customize it under QEMU, and
-`images/bin/build-distribution` to produce the browser deployment. Risclet
-converts the completed ext4 setup image to one EROFS disk. Its configuration
-loads the custom Linux Image directly through OpenSBI; Linux mounts the disk
-read-only at `/dev/vda`. The xv6 profile also uses the builder's `--erofs`
-mode. Both use session-local writable `/tmp`, `/var`,
-and `/home` mounts. Both browser pages attach their split disks through Rust. Other image
-definitions can continue distributing ext4. The image Makefiles show
-the exact call order. Keep downloads and generated files
-under `build/`; the final ignored output belongs in `dist/`.
-
-Risclet compiles the shared editor, terminal, file views, snapshots, and VM
-lifecycle from [`client-core/`](client-core/README.md), a read-only sshfs mount
-of Exam's canonical source and dependency installation. Update shared source
-and dependencies in Exam; Risclet builds consume the mount without writing to
-it. Its TypeScript configuration maps runtime types to the locally built
-`build/js/riscbox.d.ts`. Review the [shared changelog](client-core/CHANGELOG.md)
-when updating the demo. The Makefile's shared test targets create and remove a
-temporary writable copy of the mount through `tools/test_client_core.mjs`.
-
-Risclet uses one VM and one resident share. It downloads complete example
-files before boot and caches their original bytes in the application.
-Selecting an example flushes the editor, requests orderly guest shutdown,
-snapshots the outgoing share, restores the incoming example, and boots the same
-VM with retained disk changes. Snapshots preserve file bytes, empty directories,
-symlinks, hard links, permissions, ownership, and access/modification times.
-They live in application memory and are lost when the page reloads. Reboot
-requests an orderly guest reboot and retains the current share and disk changes.
-Reset forces halt, clears RAM and the HTTP overlay, restores the current
-example's original files, and boots. Reset remains available while orderly
-shutdown or reboot is pending.
-
-Editor changes flush on blur, file selection, VM interaction, Sync, or thirty
-seconds after the latest edit. Each edit restarts this fallback timer. Sync is
-enabled while the editor is dirty; it writes to 9p without server persistence.
-Failed writes retain text for retry. External
-changes to dirty files require a discard decision. Instruction images refresh
-when their shared files change; terminal pastes queue until accepted.
-
-The terminal uses Wterm's DOM renderer with its Ghostty core, 18px Latin Modern
-Mono, and a 64 KiB history budget. Screen clearing clips retained history at
-the live-screen boundary; Reset removes history and selection. Browser checks
-cover fractional scaling, partial-row viewport heights, connected box drawing,
-bracketed paste, idle rendering, and container resizing.
-
-The distribution builder splits the disk into HTTP-loadable blocks, compresses
-the next-stage payload with `gzip -9`, and gives boot and disk assets
-content-derived names. The `.gz` payload name uses the uncompressed payload's
-hash. Publish new assets
-first and `riscbox.cfg` last so each VM start sees one complete generation.
-The adapter fetches hash-named boot assets and disk chunks with `force-cache`
-and the configuration with `no-store`. Static hosting needs ordinary `GET`
-requests, the `application/wasm` MIME type,
-and CORS when assets cross origins; range requests and a server application are
-unnecessary.
-See the repository's [image build guide](https://github.com/russross/riscbox/blob/main/images/README.md)
-and [deployment guide](https://github.com/russross/riscbox/blob/main/images/DEPLOYMENT.md)
-for image layout and publishing details.
 
 9p file sharing
 ---------------

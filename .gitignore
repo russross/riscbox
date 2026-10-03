@@ -3,14 +3,12 @@ __pycache__/
 *.pyc
 target/
 build/
-!client-core/build/
 kernel/.asset-name
 kernel/linux-*.gz
 opensbi/.asset-name
 opensbi/fw_dynamic.bin-*.gz
 uboot/.asset-name
 uboot/u-boot.bin-*.gz
-images/*/profiles/
-images/risclet/ui/node_modules/
-client-core/node_modules/
-client-core/build/test-*/
+node_modules/
+demo/build/
+demo/dist/

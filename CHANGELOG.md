@@ -4,6 +4,22 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Decode PMP ranges and M-mode permissions when CSRs change instead of on
+    every access check, retaining CSR priority, partial-match faults, locks,
+    and TLB invalidation. Empty and inverted TOR ranges now match no addresses.
+    Shared native and raw-WASM probes cover these rules. The optimized WASM
+    interpreter and cached store helper remain unchanged apart from call
+    indices; the smaller permission checker is inlined into memory miss paths.
+    Four fixed-image xv6 compile profiles per variant averaged 89.055 seconds
+    before optimization, 85.7975 with cached PMP ranges, and 82.7725 in an
+    experimental build that bypassed all checks while retaining PMP CSRs.
+    Optimization reduced runtime by 3.66%; retaining optimized enforcement
+    still cost 3.025 seconds, or 3.65% relative to the unchecked build. Reverse
+    order saved-artifact controls reproduced the difference. Baseline PMP self
+    samples averaged 5.393 seconds; interpreter self samples stayed near
+    78.6–78.7 seconds across variants. Production retains PMP enforcement;
+    the unchecked build is a measurement artifact rather than a runtime option.
+
 *   Kept instruction retirement accounting in a local C interpreter accumulator,
     publishing it at CSR accesses and CPU-run exits. Optimized WASM has three
     counter store sites instead of 55. RV64 WASM high-half multiplication now

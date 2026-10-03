@@ -107,6 +107,8 @@ Rust global allocator. Rust owns platform devices and handles MMIO callbacks.
 The interpreter accumulates retired instructions locally and publishes the
 counter at CSR accesses and CPU-run exits. WASM RV64 high-half multiplication
 uses 32-bit limbs and signed corrections; native builds use wide arithmetic.
+PMP CSR writes rebuild an ordered list of nonempty decoded ranges. Permission
+checks run on translation and TLB-fill paths; cached TLB hits do not scan PMP.
 Shared callback errors and run outcomes live at the TinyEMU boundary, while
 interrupt masks live with the platform and memory access types live with the
 TinyEMU RAM bridge. The C core is compiled without a C runtime, Emscripten, or

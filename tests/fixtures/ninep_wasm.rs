@@ -4,6 +4,7 @@ pub use riscbox::{ninep, ninep_protocol};
 
 mod ninep_transport;
 mod cpu_hot_path;
+mod pmp;
 
 use ninep::{ChangeKind, Filesystem, Limits};
 use ninep_protocol::NinePSession;
@@ -17,6 +18,9 @@ pub extern "C" fn cpu_hot_path_regression() -> u32 {
     cpu_hot_path::retirement();
     cpu_hot_path::retirement_handoff();
     cpu_hot_path::high_multiply();
+    pmp::priority_and_permissions();
+    pmp::tor_and_locks();
+    pmp::invalidation();
     1
 }
 

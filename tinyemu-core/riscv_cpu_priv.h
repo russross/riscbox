@@ -133,6 +133,15 @@ typedef struct {
     uintptr_t mem_addend;
 } TLBEntry;
 
+/* Decoded ranges retain CSR priority and permissions for both privilege
+   classes without decoding address modes during memory access. */
+typedef struct {
+    target_ulong lower;
+    target_ulong upper;
+    uint8_t permissions;
+    uint8_t machine_permissions;
+} PMPRegion;
+
 struct RISCVCPUState {
     RISCVCPUCommonState common; /* must be first */
 
@@ -203,6 +212,10 @@ struct RISCVCPUState {
     TLBEntry tlb_read[TLB_SIZE];
     TLBEntry tlb_write[TLB_SIZE];
     TLBEntry tlb_code[TLB_SIZE];
+
+    /* CSR writes rebuild this compact list before cached translations resume. */
+    PMPRegion pmp_regions[PMP_ENTRY_COUNT];
+    uint32_t pmp_region_count;
 };
 
 #define target_read_slow glue(glue(riscv, MAX_XLEN), _read_slow)

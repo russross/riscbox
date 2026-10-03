@@ -198,17 +198,16 @@ static int get_effective_priv(RISCVCPUState *s, int access)
     return s->priv;
 }
 
-static BOOL pmp_access_ok(RISCVCPUState *s, target_ulong paddr,
-                          target_ulong size, int access, int priv)
+static void rebuild_pmp_regions(RISCVCPUState *s)
 {
-    target_ulong access_end, lower, upper, addr, mask, region_size;
+    target_ulong lower, upper, addr, mask, region_size;
     int i, mode, trailing_ones;
     uint8_t cfg;
+    PMPRegion *region;
 
-    access_end = paddr + size;
-    if (access_end < paddr)
-        return FALSE;
-
+    /* Disabled entries still supply the lower bound of a following TOR
+       entry, but only nonempty enabled ranges enter the access-time list. */
+    s->pmp_region_count = 0;
     for(i = 0; i < PMP_ENTRY_COUNT; i++) {
         cfg = s->pmpcfg[i];
         mode = cfg & PMP_CFG_A_MASK;
@@ -229,14 +228,43 @@ static BOOL pmp_access_ok(RISCVCPUState *s, target_ulong paddr,
             region_size = (target_ulong)1 << (trailing_ones + 3);
             upper = lower + region_size;
         }
-
-        if (paddr >= upper || access_end <= lower)
+        if (lower >= upper)
             continue;
-        if (paddr < lower || access_end > upper)
+
+        /* Appending in CSR order preserves the first matching entry's
+           priority, including its partial-match failure behavior. */
+        region = &s->pmp_regions[s->pmp_region_count++];
+        region->lower = lower;
+        region->upper = upper;
+        region->permissions = cfg & (PMP_CFG_R | PMP_CFG_W | PMP_CFG_X);
+        region->machine_permissions = (cfg & PMP_CFG_L) ?
+            region->permissions : (PMP_CFG_R | PMP_CFG_W | PMP_CFG_X);
+    }
+}
+
+static BOOL pmp_access_ok(RISCVCPUState *s, target_ulong paddr,
+                          target_ulong size, int access, int priv)
+{
+    target_ulong access_end;
+    uint32_t i;
+    uint8_t permissions;
+    const PMPRegion *region;
+
+    access_end = paddr + size;
+    if (access_end < paddr)
+        return FALSE;
+
+    /* The first overlapping range must contain the whole access. Unmatched
+       M-mode accesses succeed; unmatched lower-privilege accesses fail. */
+    for(i = 0; i < s->pmp_region_count; i++) {
+        region = &s->pmp_regions[i];
+        if (paddr >= region->upper || access_end <= region->lower)
+            continue;
+        if (paddr < region->lower || access_end > region->upper)
             return FALSE;
-        if (priv == PRV_M && !(cfg & PMP_CFG_L))
-            return TRUE;
-        return (cfg & (1 << access)) != 0;
+        permissions = priv == PRV_M ? region->machine_permissions :
+            region->permissions;
+        return (permissions & (1 << access)) != 0;
     }
     return priv == PRV_M;
 }
@@ -842,6 +870,8 @@ static BOOL set_pmpcfg(RISCVCPUState *s, int first_entry,
         s->pmpcfg[first_entry + i] = cfg;
         changed = TRUE;
     }
+    if (changed)
+        rebuild_pmp_regions(s);
     return changed;
 }
 
@@ -861,6 +891,7 @@ static BOOL set_pmpaddr(RISCVCPUState *s, int entry, target_ulong val)
     if (s->pmpaddr[entry] == val)
         return FALSE;
     s->pmpaddr[entry] = val;
+    rebuild_pmp_regions(s);
     return TRUE;
 }
 

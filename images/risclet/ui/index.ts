@@ -4,7 +4,7 @@ import { renderInstructions } from "../../../client-core/instructions";
 import { renderFileTree as renderSharedFileTree } from "../../../client-core/workspace-view";
 import { changeAffectsPath } from "../../../client-core/workspace";
 import { VmSession } from "../../../client-core/vm-session";
-import type { VmImage, VmTarget } from "../../../client-core/vm-session";
+import type { VmImage, VmTarget, VmTransition } from "../../../client-core/vm-session";
 import type { Riscbox } from "@riscbox/runtime";
 import type { P9Change } from "@riscbox/storage";
 import { loadExampleDescriptions, loadExampleFiles } from "./examples";
@@ -14,6 +14,9 @@ interface ExampleState extends VmTarget { readonly description: ExampleDescripti
 declare global { interface Window { Riscbox: typeof Riscbox; } }
 
 const DOC_PATH = "doc/doc.md";
+const switchTransition: VmTransition = {
+    workspace: "snapshot", poweroff: "orderly", discardDiskChanges: false, boot: true,
+};
 const image: VmImage = {
     configUrl: new URL("riscbox.cfg", window.location.href).href,
     runtimeUrl: new URL("riscbox.js", window.location.href).href,
@@ -148,7 +151,10 @@ function switchExample(example: ExampleState, reset = false): Promise<void> {
         editor.setReadOnly(true);
         let selected = false;
         try {
-            if (await vm.setTarget(example, reset, () => generation === viewGeneration)) {
+            const isCurrent = (): boolean => generation === viewGeneration;
+            const changed = reset ? await vm.reset(isCurrent)
+                : await vm.setTarget(example, switchTransition, isCurrent);
+            if (changed) {
                 await showExample(example, generation);
                 selected = true;
             }

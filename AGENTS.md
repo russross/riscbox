@@ -67,13 +67,14 @@ Repository map and terminology
     `src/ninep_protocol/README.md`; active coordination belongs in `DEV.md`.
 *   `images/` contains reproducible Makefile-driven image definitions and deployment tooling.
     Generated downloads, images, boot assets, and distributions are not source.
-*   `client-core/` owns shared browser editor, terminal, file views, namespace
-    snapshots, and VM lifecycle source. Risclet compiles it directly; Codegrinder
-    vendors the complete subtree. Keep application navigation, downloads,
+*   `client-core/` is a read-only sshfs mount of Exam's canonical shared browser
+    editor, terminal, file views, namespace snapshots, and VM lifecycle source.
+    Risclet compiles it directly. Keep application navigation, downloads,
     submissions, grading, and clipboard policy outside it. Its README defines
     the runtime/build contract; `EXAM-MIGRATION.md` is a self-contained handoff.
-    Shared fixes belong here rather than in consumer copies. Type-only Riscbox
-    aliases resolve through the consumer's build configuration.
+    Shared fixes and dependency installation belong in Exam's canonical source.
+    Type-only Riscbox aliases resolve through the consumer's build configuration
+    to the locally built adapter declarations. Shared tests require a writable copy.
 *   `kernel/` owns the canonical custom Linux kernel consumed by image builds.
 *   `opensbi/` and `uboot/` own pinned firmware and bootloader builds. Each
     tracks its Makefile, version, and config; downloads, sources, and outputs

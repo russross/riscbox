@@ -379,11 +379,13 @@ the exact call order. Keep downloads and generated files
 under `build/`; the final ignored output belongs in `dist/`.
 
 Risclet compiles the shared editor, terminal, file views, snapshots, and VM
-lifecycle from [`client-core/`](client-core/README.md). The subtree can be copied
-into another client without distributing the demo application. Its guarded
-sync tool detects local changes, and the
-[exam migration guide](client-core/EXAM-MIGRATION.md) documents Codegrinder's
-server-save, clipboard, and lifecycle integration independently of Risclet.
+lifecycle from [`client-core/`](client-core/README.md), a read-only sshfs mount
+of Exam's canonical source and dependency installation. Update shared source
+and dependencies in Exam; Risclet builds consume the mount without writing to
+it. Its TypeScript configuration maps runtime types to the locally built
+`build/js/riscbox.d.ts`. Review the [shared changelog](client-core/CHANGELOG.md)
+when updating the demo. The Makefile's shared test targets create and remove a
+temporary writable copy of the mount through `tools/test_client_core.mjs`.
 
 Risclet uses one VM and one resident share. It downloads complete example
 files before boot and caches their original bytes in the application.

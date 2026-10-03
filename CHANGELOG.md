@@ -4,6 +4,13 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Updated Risclet for Exam's canonical read-only client-core mount and explicit
+    VM transitions. Example switches retain snapshots and disk overlays; Reset
+    uses the shared reset API to restore originals. Builds use local runtime
+    declarations and report stale shared dependencies without installing them.
+    Shared test targets use temporary writable copies of the mounted source.
+    Assembly files inherit the shared teaching-dialect highlighter.
+
 *   Extracted shared browser client source into `client-core/` and migrated
     Risclet to its editor, terminal, file views, snapshots, and VM session.
     Added image replacement, final-snapshot persistence hooks, portable

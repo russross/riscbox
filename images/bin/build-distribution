@@ -49,9 +49,9 @@ if [ -d "$image_dir/ui" ]; then
     if [ "$image_dir" = "$IMAGES_DIR/risclet" ]; then
         if [ ! -d "$ROOT_DIR/client-core/node_modules" ] || \
             [ "$ROOT_DIR/client-core/package-lock.json" -nt "$ROOT_DIR/client-core/node_modules/.package-lock.json" ]; then
-            npm --prefix "$ROOT_DIR/client-core" ci
+            echo "client-core dependencies are missing or stale; update them in the canonical Exam client" >&2
+            exit 1
         fi
-        npm --prefix "$ROOT_DIR/client-core" run check
     fi
     if [ ! -d "$image_dir/ui/node_modules" ] || \
         [ "$image_dir/ui/package-lock.json" -nt "$image_dir/ui/node_modules/.package-lock.json" ]; then

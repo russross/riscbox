@@ -8,10 +8,7 @@ use crate::browser_runtime::{
 };
 use crate::config::VmConfig;
 
-#[path = "browser_abi/block.rs"]
-pub mod block;
-#[path = "browser_abi/ninep.rs"]
-pub mod ninep;
+use crate::{block_abi, filesystem_abi};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StartRequest {
@@ -24,18 +21,18 @@ pub struct StartRequest {
 }
 
 #[derive(Default)]
-struct AbiState {
+pub(crate) struct AbiState {
     allocations: Vec<Box<[u8]>>,
     input_queue: BrowserInputQueue,
     start: Option<StartRequest>,
-    runtime: BrowserRuntime,
+    pub(crate) runtime: BrowserRuntime,
     action: Option<HostAction>,
-    filesystems: ninep::FilesystemAbi,
-    blocks: block::BlockAbi,
+    pub(crate) filesystems: filesystem_abi::FilesystemAbi,
+    pub(crate) blocks: block_abi::BlockAbi,
 }
 
 thread_local! {
-    static STATE: RefCell<AbiState> = RefCell::new(AbiState::default());
+    pub(crate) static STATE: RefCell<AbiState> = RefCell::new(AbiState::default());
 }
 
 pub fn set_entropy_callback(callback: EntropyCallback) {
@@ -503,14 +500,14 @@ fn allocated_bytes(state: &AbiState, address: u32, length: u32) -> Option<&[u8]>
         .and_then(|allocation| allocation.get(..length as usize))
 }
 
-fn allocated_string(state: &AbiState, address: u32, length: u32) -> Option<String> {
+pub(crate) fn allocated_string(state: &AbiState, address: u32, length: u32) -> Option<String> {
     if length == 0 {
         return Some(String::new());
     }
     String::from_utf8(allocated_bytes(state, address, length)?.to_vec()).ok()
 }
 
-fn completion_bytes(state: &AbiState, address: u32, length: u32) -> Option<Vec<u8>> {
+pub(crate) fn completion_bytes(state: &AbiState, address: u32, length: u32) -> Option<Vec<u8>> {
     if length == 0 {
         Some(Vec::new())
     } else {

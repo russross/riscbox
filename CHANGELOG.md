@@ -4,6 +4,16 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Flatten Rust source modules around namespace, protocol, disk storage, and
+    copied host ABI boundaries. Consolidate split helpers and inline their
+    implementation tests; move storage and protocol guides to `STORAGE-ABI.md`
+    and `NINEP.md`. Replace the 9p backend trait with a concrete resident
+    endpoint and remove unused asynchronous transport, pending descriptors,
+    generations, and completion polling. Rust callers now use
+    `ninep::SharedFilesystem`, `ninep_protocol::NinePEndpoint`, `block_storage`,
+    `block_abi`, and `filesystem_abi`. Guest behavior and scalar WASM exports
+    remain unchanged.
+
 *   Removed PMP enforcement from memory accesses, page walks, and TLB fills.
     PMP CSRs retain read/write masks and locks for firmware compatibility;
     stored PMP permissions have no effect. Removed decoded range storage and

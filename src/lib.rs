@@ -1,17 +1,17 @@
 //! Rust implementation of the browser-focused Riscbox virtual machine.
 
+pub mod block_abi;
 pub mod block_storage;
 pub mod browser_abi;
 pub mod browser_input;
 pub mod browser_runtime;
-pub mod browser_storage;
 pub mod config;
 pub mod entropy;
 pub mod fdt;
+pub mod filesystem_abi;
 pub mod guest_memory;
 pub mod machine;
 pub mod ninep;
-pub mod ninep_backend;
 pub mod ninep_protocol;
 pub mod platform;
 pub mod tinyemu_core;

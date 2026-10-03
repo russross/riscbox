@@ -2,10 +2,9 @@
 
 use std::collections::BTreeMap;
 
-use super::{STATE, completion_bytes};
-use crate::block_storage::{BlockDiskId, BlockStore};
+use crate::block_storage::{BlockDiskId, BlockStore, StorageError};
+use crate::browser_abi::{STATE, completion_bytes};
 use crate::browser_runtime::BrowserRuntime;
-use crate::browser_storage::StorageError;
 use crate::virtio_devices::BlockBackend;
 
 struct Read {
@@ -15,18 +14,18 @@ struct Read {
 }
 
 #[derive(Default)]
-pub(super) struct BlockAbi {
+pub(crate) struct BlockAbi {
     next_read: u32,
     pending: BTreeMap<u32, Read>,
     output: Vec<u8>,
 }
 
 impl BlockAbi {
-    pub(super) fn has_pending(&self) -> bool {
+    pub(crate) fn has_pending(&self) -> bool {
         !self.pending.is_empty()
     }
 
-    pub(super) fn retire(&mut self, disk: Option<BlockDiskId>) {
+    pub(crate) fn retire(&mut self, disk: Option<BlockDiskId>) {
         self.pending
             .retain(|_, read| disk.is_some_and(|disk| disk != read.disk));
         self.output.clear();

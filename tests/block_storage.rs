@@ -1,4 +1,4 @@
-use riscbox::browser_storage::{HttpBlockStore, StorageError};
+use riscbox::block_storage::{HttpBlockStore, StorageError};
 
 #[test]
 fn split_image_requests_relative_blocks_and_reads_across_them() {

@@ -57,14 +57,17 @@ Repository map and terminology
 *   `js/storage.ts` supplies synchronous filesystem and copied disk facades.
     `tools/build_adapter.mjs` combines it with `js/riscbox.js` into the single
     deployable `build/js/riscbox.js` and declaration file. `src/block_storage.rs`
-    unifies Rust-owned array and split HTTP stores; `src/browser_storage.rs`
-    owns HTTP requests, bounded clean cache, and sparse sector overlays.
-*   `src/ninep.rs` and `src/ninep/` own the standalone Rust namespace;
-    `src/ninep_protocol.rs` and `src/ninep_protocol/` own its 9P2000.L session.
-    `src/ninep_backend.rs` connects VM-owned trees to VirtIO. The raw copied
-    storage APIs live in `src/browser_abi/ninep.rs` and `block.rs`; their guide
-    is `src/browser_abi/ninep/README.md`. The protocol contract is in
-    `src/ninep_protocol/README.md`; active coordination belongs in `DEV.md`.
+    unifies Rust-owned array and split HTTP stores, HTTP requests, bounded
+    clean cache, and sparse sector overlays.
+*   `src/ninep.rs` owns the resident namespace and `SharedFilesystem` ownership;
+    `src/ninep_protocol.rs` owns wire parsing, 9P2000.L sessions, and concrete
+    `NinePEndpoint` device ownership. VirtIO 9p holds that endpoint directly:
+    no backend trait, asynchronous completions, or host transport actions.
+    Copied host storage APIs live in `src/filesystem_abi.rs` and
+    `src/block_abi.rs`; their guide is `STORAGE-ABI.md`. The protocol contract
+    is in `NINEP.md`; active coordination belongs in `DEV.md`.
+    Keep Rust source modules flat and consolidate helpers with their owning
+    architectural boundary instead of adding nested implementation modules.
 *   `images/` contains reproducible Makefile-driven image definitions and deployment tooling.
     Generated downloads, images, boot assets, and distributions are not source.
 *   `client-core/` is a read-only sshfs mount of Exam's canonical shared browser

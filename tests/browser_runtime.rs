@@ -1,10 +1,10 @@
 use riscbox::block_storage::BlockDiskId;
+use riscbox::block_storage::StorageError;
 use riscbox::browser_input::BrowserInputQueue;
 use riscbox::browser_runtime::{
     BrowserRuntime, HostAction, LifecycleCause, QuantumOutcome, QuantumStart, RuntimeError,
     RuntimeStart,
 };
-use riscbox::browser_storage::StorageError;
 use riscbox::config::VmConfig;
 use riscbox::ninep::Filesystem;
 use riscbox::virtio_devices::BlockBackend;

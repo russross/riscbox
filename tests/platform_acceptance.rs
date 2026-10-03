@@ -3,8 +3,8 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use riscbox::machine::{BootImages, Machine, MachineConfig};
-use riscbox::ninep::{Filesystem, Limits};
-use riscbox::ninep_backend::{RustFilesystem, RustNineP};
+use riscbox::ninep::{Filesystem, Limits, SharedFilesystem};
+use riscbox::ninep_protocol::NinePEndpoint;
 use riscbox::virtio_devices::{BlockBackend, DeviceError};
 
 struct ImageBlock {
@@ -144,10 +144,10 @@ fn alpine_reaches_login_and_shuts_down() {
     filesystem
         .write_file("resident", b"ready")
         .expect("resident file");
-    let share = RustFilesystem::new(filesystem);
+    let share = SharedFilesystem::new(filesystem);
     machine
         .add_ninep_device(
-            Box::new(RustNineP::new(share.clone()).expect("Rust session")),
+            NinePEndpoint::new(share.clone()).expect("Rust session"),
             b"shared",
         )
         .expect("9p device");

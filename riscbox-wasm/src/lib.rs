@@ -3,8 +3,8 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use riscbox::browser_abi;
 use riscbox::entropy::EntropyError;
+use riscbox::{block_abi, browser_abi, filesystem_abi};
 
 #[cfg(target_arch = "wasm32")]
 #[link(wasm_import_module = "riscbox_host")]
@@ -42,27 +42,27 @@ pub extern "C" fn riscbox_free(address: u32, length: u32) {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn riscbox_fs_call(handle: u32, address: u32, length: u32) -> i32 {
-    browser_abi::ninep::riscbox_fs_call(handle, address, length)
+    filesystem_abi::riscbox_fs_call(handle, address, length)
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn riscbox_fs_next_change(handle: u32) -> i32 {
-    browser_abi::ninep::riscbox_fs_next_change(handle)
+    filesystem_abi::riscbox_fs_next_change(handle)
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn riscbox_fs_status() -> i32 {
-    browser_abi::ninep::riscbox_fs_status()
+    filesystem_abi::riscbox_fs_status()
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn riscbox_fs_data_address() -> u32 {
-    browser_abi::ninep::riscbox_fs_data_address()
+    filesystem_abi::riscbox_fs_data_address()
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn riscbox_fs_data_length() -> u32 {
-    browser_abi::ninep::riscbox_fs_data_length()
+    filesystem_abi::riscbox_fs_data_length()
 }
 
 #[unsafe(no_mangle)]
@@ -265,7 +265,7 @@ pub extern "C" fn riscbox_http_complete(id: u32, status: u32, address: u32, leng
 // Share lookup does not require a separate construction or binding phase.
 #[unsafe(no_mangle)]
 pub extern "C" fn riscbox_fs_get(address: u32, length: u32) -> u32 {
-    browser_abi::ninep::riscbox_fs_get(address, length)
+    filesystem_abi::riscbox_fs_get(address, length)
 }
 
 // Platform storage and preparation use the same copied raw ABI boundary.
@@ -301,12 +301,12 @@ pub extern "C" fn riscbox_action_disk() -> u32 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn riscbox_disk_read(disk: u32, low: u32, high: u32, length: u32) -> i32 {
-    browser_abi::block::riscbox_disk_read(disk, low, high, length)
+    block_abi::riscbox_disk_read(disk, low, high, length)
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn riscbox_disk_finish(id: u32) -> i32 {
-    browser_abi::block::riscbox_disk_finish(id)
+    block_abi::riscbox_disk_finish(id)
 }
 
 #[unsafe(no_mangle)]
@@ -317,25 +317,25 @@ pub extern "C" fn riscbox_disk_write(
     address: u32,
     length: u32,
 ) -> i32 {
-    browser_abi::block::riscbox_disk_write(disk, low, high, address, length)
+    block_abi::riscbox_disk_write(disk, low, high, address, length)
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn riscbox_disk_discard(disk: u32) -> i32 {
-    browser_abi::block::riscbox_disk_discard(disk)
+    block_abi::riscbox_disk_discard(disk)
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn riscbox_disk_capacity(disk: u32, high: u32) -> u32 {
-    browser_abi::block::riscbox_disk_capacity(disk, high)
+    block_abi::riscbox_disk_capacity(disk, high)
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn riscbox_disk_data_address() -> u32 {
-    browser_abi::block::riscbox_disk_data_address()
+    block_abi::riscbox_disk_data_address()
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn riscbox_disk_data_length() -> u32 {
-    browser_abi::block::riscbox_disk_data_length()
+    block_abi::riscbox_disk_data_length()
 }

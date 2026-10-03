@@ -1,7 +1,7 @@
 use flate2::Compression;
 use flate2::write::GzEncoder;
 use riscbox::block_storage::BlockStore;
-use riscbox::browser_storage::HttpBlockStore;
+use riscbox::block_storage::HttpBlockStore;
 use riscbox::entropy::{EntropyError, EntropySource};
 use riscbox::guest_memory::{AccessWidth, GuestAddress};
 use riscbox::machine::{

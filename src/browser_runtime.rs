@@ -5,17 +5,16 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::rc::Rc;
 
-use crate::block_storage::{BlockDiskId, BlockStore};
+use crate::block_storage::{BlockDiskId, BlockStore, HttpBlockStore};
 use crate::browser_input::{BrowserEvent, BrowserInputQueue};
-use crate::browser_storage::HttpBlockStore;
 use crate::config::{Console, DriveConfig, VmConfig, resolve_asset_path};
 use crate::entropy::{EntropyError, EntropySource, SharedEntropy};
 use crate::machine::{
     BootAddresses, BootImages, FramebufferConfig, FramebufferUpdate, Machine, MachineConfig,
     MachineError,
 };
-use crate::ninep::{Filesystem, FilesystemError, Limits};
-use crate::ninep_backend::{RustFilesystem, RustNineP};
+use crate::ninep::{Filesystem, FilesystemError, Limits, SharedFilesystem};
+use crate::ninep_protocol::NinePEndpoint;
 use crate::platform::FinishStatus;
 use crate::tinyemu_core::CpuRunExitReason;
 use crate::virtio_devices::{DeviceError, InputKind, NetworkBackend};
@@ -435,7 +434,7 @@ enum State {
 
 pub struct BrowserRuntime {
     state: State,
-    filesystems: BTreeMap<String, RustFilesystem>,
+    filesystems: BTreeMap<String, SharedFilesystem>,
     next_request_id: u32,
     actions: VecDeque<HostAction>,
     retired_http: BTreeSet<u32>,
@@ -544,25 +543,14 @@ impl BrowserRuntime {
     }
     /// Returns a share owned by the currently prepared VM platform.
     #[must_use]
-    pub fn filesystem_handle(&self, name: &str) -> Option<RustFilesystem> {
+    pub fn filesystem_handle(&self, name: &str) -> Option<SharedFilesystem> {
         self.filesystems.get(name).cloned()
     }
 
-    /// Publishes host namespace changes after its borrow has ended.
+    /// Mutates a registered tree between CPU activations.
     ///
     /// # Errors
-    /// Returns an error for invalid backend results or guest descriptors.
-    pub fn poll_filesystems(&mut self) -> Result<(), RuntimeError> {
-        if let State::Running(running) | State::Halted(running) = &mut self.state {
-            running.machine.poll_ninep()?;
-        }
-        Ok(())
-    }
-
-    /// Mutates a registered tree, then publishes any newly satisfied guest I/O.
-    ///
-    /// # Errors
-    /// Returns an error for unknown keys, failed host operations, or guest I/O.
+    /// Returns an error for unknown keys or failed host operations.
     pub fn with_filesystem<T>(
         &mut self,
         key: &str,
@@ -1410,7 +1398,7 @@ impl BrowserRuntime {
             filesystems.entry(entry.server.clone()).or_insert_with(|| {
                 let mut filesystem = Filesystem::new(Limits::default(), 0);
                 filesystem.set_change_tracking(false);
-                RustFilesystem::new(filesystem)
+                SharedFilesystem::new(filesystem)
             });
         }
         let ram_size = u64::from(loading.start.ram_mib)
@@ -1522,7 +1510,7 @@ impl BrowserRuntime {
     fn add_filesystems(
         machine: &mut Machine,
         config: &VmConfig,
-        filesystems: &BTreeMap<String, RustFilesystem>,
+        filesystems: &BTreeMap<String, SharedFilesystem>,
     ) -> Result<(), RuntimeError> {
         for filesystem in &config.filesystems {
             let tree = filesystems.get(&filesystem.server).ok_or_else(|| {
@@ -1531,8 +1519,8 @@ impl BrowserRuntime {
                     filesystem.server
                 ))
             })?;
-            let backend = Box::new(RustNineP::new(tree.clone()).map_err(RuntimeError::Filesystem)?);
-            machine.add_ninep_device(backend, filesystem.tag.as_bytes())?;
+            let endpoint = NinePEndpoint::new(tree.clone()).map_err(RuntimeError::Filesystem)?;
+            machine.add_ninep_device(endpoint, filesystem.tag.as_bytes())?;
         }
         Ok(())
     }

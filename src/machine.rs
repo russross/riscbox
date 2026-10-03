@@ -5,8 +5,7 @@ use std::io::Read;
 
 use flate2::read::MultiGzDecoder;
 
-use crate::block_storage::BlockStore;
-use crate::browser_storage::{HttpRequest, StorageError};
+use crate::block_storage::{BlockStore, HttpRequest, StorageError};
 use crate::entropy::{EntropyError, SharedEntropy, SystemEntropy};
 use crate::fdt::{FdtConfig, FramebufferDescription, build as build_fdt};
 use crate::guest_memory::GuestMemory;
@@ -14,6 +13,7 @@ use crate::guest_memory::{
     AccessWidth, ArenaOffset, DeviceWidths, GuestAddress, MemoryAccess, MemoryError, RamFlags,
     RegionId,
 };
+use crate::ninep_protocol::NinePEndpoint;
 use crate::platform::{
     Aclint, FinishStatus, Finisher, GoldfishRtc, MIP_MSIP, MIP_MTIP, Plic, Uart16550,
 };
@@ -21,8 +21,7 @@ use crate::tinyemu_core::{BusError, Core, CpuRunExitReason, CpuRunResult, Platfo
 use crate::virtio::{MMIO_SIZE, VirtioTransport};
 use crate::virtio_devices::{
     BlockBackend, BlockDevice, ConsoleDevice, DeviceError, EntropyDevice, InputDevice, InputKind,
-    NetworkBackend, NetworkDevice, NetworkIngress, NinePBackend, NinePDevice, NinePGeneration,
-    NinePOutcome, NinePRequestId, NinePTransportAction, VirtioMmioDevice,
+    NetworkBackend, NetworkDevice, NetworkIngress, NinePDevice, VirtioMmioDevice,
 };
 
 pub const RAM_BASE: u64 = 0x8000_0000;
@@ -175,14 +174,14 @@ struct Framebuffer {
 type DynBlock = VirtioMmioDevice<BlockDevice<Box<dyn BlockBackend>>>;
 type StorageBlock = VirtioMmioDevice<BlockDevice<BlockStore>>;
 type DynNetwork = VirtioMmioDevice<NetworkDevice<Box<dyn NetworkBackend>>>;
-type DynNineP = VirtioMmioDevice<NinePDevice<Box<dyn NinePBackend>>>;
+type ResidentNineP = VirtioMmioDevice<NinePDevice>;
 
 enum VirtioSlot {
     Block(DynBlock),
     StorageBlock(StorageBlock),
     Console(VirtioMmioDevice<ConsoleDevice>),
     Network(DynNetwork),
-    NineP(DynNineP),
+    NineP(ResidentNineP),
     Input(VirtioMmioDevice<InputDevice>),
     Entropy(VirtioMmioDevice<EntropyDevice>),
 }
@@ -204,7 +203,6 @@ impl VirtioSlot {
         // Queue notifications handled entirely in Rust leave these queues empty.
         match self {
             Self::StorageBlock(device) => device.device.backend().has_outgoing(),
-            Self::NineP(device) => device.device.backend().has_transport_action(),
             _ => false,
         }
     }
@@ -415,12 +413,6 @@ impl PlatformBus {
                 .write(&mut self.memory, device_offset, value32, width)
                 .map_err(|_| BusError::AccessFault)?;
             self.host_service_requested |= device.needs_host();
-            // Generic backends may expose queued completions at this boundary.
-            // Resident Rust sessions have already replied within this call.
-            if matches!(device, VirtioSlot::NineP(_)) {
-                self.drain_ninep_completions()
-                    .map_err(|_| BusError::AccessFault)?;
-            }
         } else {
             return Err(BusError::AccessFault);
         }
@@ -430,17 +422,6 @@ impl PlatformBus {
 }
 
 impl PlatformBus {
-    fn drain_ninep_completions(&mut self) -> Result<(), DeviceError> {
-        for slot in &mut self.virtio {
-            if let VirtioSlot::NineP(device) = slot {
-                device
-                    .device
-                    .drain_completions(&mut device.transport, &mut self.memory)?;
-            }
-        }
-        Ok(())
-    }
-
     /// Reads a physical RAM or device address.
     ///
     /// # Errors
@@ -677,12 +658,12 @@ impl Machine {
     /// Returns an error after the 32 available PLIC sources are exhausted.
     pub fn add_ninep_device(
         &mut self,
-        backend: Box<dyn NinePBackend>,
+        endpoint: NinePEndpoint,
         tag: &[u8],
     ) -> Result<usize, MachineError> {
         self.add_virtio(VirtioSlot::NineP(VirtioMmioDevice::new(
             VirtioTransport::new(9, 1, &[128]),
-            NinePDevice::new(backend, tag),
+            NinePDevice::new(endpoint, tag),
         )))
     }
 
@@ -1113,67 +1094,6 @@ impl Machine {
         if resume_guest {
             device.device.resume(&mut device.transport, memory)?;
         }
-        self.bus.update_device_irqs();
-        Ok(())
-    }
-
-    /// Returns the next generic browser 9p transport action.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when `slot` does not identify a 9p device.
-    pub fn next_ninep_transport_action(
-        &mut self,
-        slot: usize,
-    ) -> Result<Option<NinePTransportAction>, MachineError> {
-        let VirtioSlot::NineP(device) = self
-            .bus
-            .virtio
-            .get_mut(slot)
-            .ok_or(MachineError::WrongVirtioDevice)?
-        else {
-            return Err(MachineError::WrongVirtioDevice);
-        };
-        Ok(device.device.backend_mut().next_transport_action())
-    }
-
-    /// Polls shared Rust filesystems after host mutations or load completion.
-    ///
-    /// # Errors
-    /// Returns an error for invalid backend results or guest descriptors.
-    pub fn poll_ninep(&mut self) -> Result<(), MachineError> {
-        self.bus.drain_ninep_completions()?;
-        self.bus.update_device_irqs();
-        Ok(())
-    }
-
-    /// Completes one generic browser 9p transport request.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error for an invalid slot, generation, request, response, or
-    /// guest descriptor.
-    pub fn complete_ninep_transport_request(
-        &mut self,
-        slot: usize,
-        generation: NinePGeneration,
-        request_id: NinePRequestId,
-        outcome: NinePOutcome,
-    ) -> Result<(), MachineError> {
-        let PlatformBus { memory, virtio, .. } = &mut self.bus;
-        let VirtioSlot::NineP(device) = virtio
-            .get_mut(slot)
-            .ok_or(MachineError::WrongVirtioDevice)?
-        else {
-            return Err(MachineError::WrongVirtioDevice);
-        };
-        device.device.complete(
-            &mut device.transport,
-            memory,
-            generation,
-            request_id,
-            outcome,
-        )?;
         self.bus.update_device_irqs();
         Ok(())
     }

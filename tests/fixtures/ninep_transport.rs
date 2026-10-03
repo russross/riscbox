@@ -3,8 +3,8 @@
 use riscbox::entropy::{EntropyError, EntropySource};
 use riscbox::guest_memory::{AccessWidth, GuestAddress};
 use riscbox::machine::{Machine, MachineConfig, VIRTIO_BASE};
-use riscbox::ninep::{Filesystem, Limits};
-use riscbox::ninep_backend::{RustFilesystem, RustNineP};
+use riscbox::ninep::{Filesystem, Limits, SharedFilesystem};
+use riscbox::ninep_protocol::NinePEndpoint;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -50,9 +50,9 @@ fn word(machine: &mut Machine, address: u64) -> u32 {
 }
 
 impl Ring {
-    fn new(machine: &mut Machine, tree: &RustFilesystem, index: u32) -> Self {
+    fn new(machine: &mut Machine, tree: &SharedFilesystem, index: u32) -> Self {
         let slot = machine
-            .add_ninep_device(Box::new(RustNineP::new(tree.clone()).unwrap()), b"share")
+            .add_ninep_device(NinePEndpoint::new(tree.clone()).unwrap(), b"share")
             .unwrap();
         let ring = Self {
             slot,
@@ -206,7 +206,7 @@ fn read(fid: u32) -> Vec<u8> {
 
 // Resident requests complete inside queue notification, with independent sessions.
 pub fn regression() {
-    let tree = RustFilesystem::new(Filesystem::new(Limits::default(), 100));
+    let tree = SharedFilesystem::new(Filesystem::new(Limits::default(), 100));
     tree.with_filesystem(|fs| fs.write_file("file", b"abc"))
         .unwrap();
     let mut machine = new_machine();

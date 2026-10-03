@@ -1,10 +1,11 @@
 Rust 9P2000.L endpoint
 =====================
 
-The [session](../ninep_protocol.rs) implements the standalone Rust server
-profile over [namespace state](../ninep.rs). The [Rust backend](../ninep_backend.rs)
-connects it to VirtIO and the prepared VM. The synchronous browser facade uses the same Rust server. The
-[storage ABI](../browser_abi/ninep/README.md) exposes copied host operations.
+The [session and endpoint](src/ninep_protocol.rs) implement the resident Rust
+server over [namespace state](src/ninep.rs). VirtIO owns a concrete endpoint
+with one independent session over a shared VM namespace. The synchronous
+browser facade uses the same Rust server. The [storage ABI](STORAGE-ABI.md)
+exposes copied host operations.
 
 Wire behavior follows the [9P2000.L reference](https://github.com/chaos/diod/blob/master/protocol.md)
 and its linked Plan 9 operation specifications.

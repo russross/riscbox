@@ -229,7 +229,7 @@ The crate is not published on crates.io. Its stable deployment boundary is the
 raw WASM ABI wrapped by the generated `build/js/riscbox.js` adapter.
 
 The raw WASM exports provide VM-owned filesystem and disk handles for advanced
-embedding. The [storage ABI guide](src/browser_abi/ninep/README.md) documents
+embedding. The [storage ABI guide](STORAGE-ABI.md) documents
 copied packets, buffer lifetimes, and powered-off disk access.
 
 VM configuration
@@ -471,8 +471,8 @@ filesystem creation/binding, and source tickets are removed: applications fetch
 their own content and insert it through the regular API.
 
 Default quotas are 256 MiB per file, 1 GiB of logical file data, and 2^20 inodes
-and directory entries. The [storage ABI](src/browser_abi/ninep/README.md) and
-[protocol profile](src/ninep_protocol/README.md) describe the native contracts.
+and directory entries. The [storage ABI](STORAGE-ABI.md) and
+[protocol profile](NINEP.md) describe the native contracts.
 
 Platform summary
 ----------------

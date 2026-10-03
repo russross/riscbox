@@ -1,11 +1,12 @@
-use riscbox::block_storage::BlockStore;
-use riscbox::browser_storage::HttpBlockStore;
+use riscbox::block_storage::{BlockStore, HttpBlockStore};
 use riscbox::entropy::{EntropyError, EntropySource};
 use riscbox::guest_memory::{AccessWidth, GuestAddress};
 use riscbox::machine::{Machine, MachineConfig, VIRTIO_BASE};
+use riscbox::ninep::{Filesystem, Limits, SharedFilesystem};
+use riscbox::ninep_protocol::NinePEndpoint;
 use riscbox::virtio_devices::{
     BlockBackend, DeviceError, InputKind, MAX_NETWORK_FRAME_SIZE, MAX_PENDING_NETWORK_FRAMES,
-    NetworkBackend, NetworkIngress, NinePBackend, NinePGeneration, NinePOutcome, NinePRequestId,
+    NetworkBackend, NetworkIngress,
 };
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -15,7 +16,6 @@ const DESC: u64 = RAM + 0x1000;
 const AVAIL: u64 = RAM + 0x2000;
 const USED: u64 = RAM + 0x3000;
 const DATA: u64 = RAM + 0x4000;
-type PendingRequest = (NinePRequestId, Vec<u8>, u32);
 
 fn test_machine() -> Machine {
     Machine::new(MachineConfig {
@@ -585,287 +585,114 @@ fn network_drops_frames_that_do_not_fit_and_rejects_offload_headers() {
     assert!(packets.borrow().is_empty());
 }
 
-#[derive(Clone)]
-struct Pending9p {
-    requests: Rc<RefCell<Vec<PendingRequest>>>,
-    generation: Rc<RefCell<NinePGeneration>>,
-}
-
-impl Default for Pending9p {
-    fn default() -> Self {
-        Self {
-            requests: Rc::new(RefCell::new(Vec::new())),
-            generation: Rc::new(RefCell::new(NinePGeneration(1))),
-        }
-    }
-}
-
-impl NinePBackend for Pending9p {
-    fn submit(
-        &mut self,
-        request_id: NinePRequestId,
-        request: Vec<u8>,
-        reply_capacity: u32,
-    ) -> Option<NinePOutcome> {
-        self.requests
-            .borrow_mut()
-            .push((request_id, request, reply_capacity));
-        None
-    }
-
-    fn reset(&mut self, generation: NinePGeneration) {
-        *self.generation.borrow_mut() = generation;
-    }
-}
-
-struct Immediate9p;
-
-impl NinePBackend for Immediate9p {
-    fn submit(&mut self, _: NinePRequestId, request: Vec<u8>, _: u32) -> Option<NinePOutcome> {
-        Some(NinePOutcome::Reply(
-            p9_message(request[4] + 1, u16::from_le_bytes([request[5], request[6]])).to_vec(),
-        ))
-    }
-}
-
-fn p9_message(kind: u8, tag: u16) -> [u8; 7] {
-    let [tag_low, tag_high] = tag.to_le_bytes();
-    [7, 0, 0, 0, kind, tag_low, tag_high]
-}
-
-fn pending_p9() -> (Machine, usize, [u8; 7], Pending9p) {
-    let backend = Pending9p::default();
+fn resident_p9() -> (Machine, usize) {
+    let tree = SharedFilesystem::new(Filesystem::new(Limits::default(), 100));
     let mut machine = test_machine();
     let slot = machine
-        .add_ninep_device(Box::new(backend.clone()), b"root")
-        .expect("9p slot");
+        .add_ninep_device(NinePEndpoint::new(tree).unwrap(), b"root")
+        .unwrap();
     machine_configure(&mut machine, slot, 0);
-    let request = p9_message(100, 0x1111);
-    machine_bytes(&mut machine, DATA, &request);
-    machine_descriptor(&mut machine, 0, DATA, 7, 1, 1);
-    machine_descriptor(&mut machine, 1, DATA + 0x100, 7, 2, 0);
-    machine_available(&mut machine, 0);
-    machine_kick(&mut machine, slot, 0);
-    (machine, slot, request, backend)
+    (machine, slot)
+}
+
+fn version_request(tag: u16) -> Vec<u8> {
+    let mut request = 21_u32.to_le_bytes().to_vec();
+    request.push(100);
+    request.extend(tag.to_le_bytes());
+    request.extend(4096_u32.to_le_bytes());
+    request.extend(8_u16.to_le_bytes());
+    request.extend(b"9P2000.L");
+    request
+}
+
+fn enqueue_p9(machine: &mut Machine, request: &[u8], capacity: u32) {
+    machine_bytes(machine, DATA, request);
+    machine_descriptor(
+        machine,
+        0,
+        DATA,
+        u32::try_from(request.len()).unwrap(),
+        1,
+        1,
+    );
+    machine_descriptor(machine, 1, DATA + 0x100, capacity, 2, 0);
+    machine_available(machine, 0);
 }
 
 #[test]
 fn ninep_resident_reply_completes_descriptor_during_notify() {
-    let mut machine = test_machine();
-    let slot = machine
-        .add_ninep_device(Box::new(Immediate9p), b"root")
-        .unwrap();
-    machine_configure(&mut machine, slot, 0);
-    let request = p9_message(100, 0x1234);
-    machine_bytes(&mut machine, DATA, &request);
-    machine_descriptor(&mut machine, 0, DATA, 7, 1, 1);
-    machine_descriptor(&mut machine, 1, DATA + 0x100, 7, 2, 0);
-    machine_available(&mut machine, 0);
+    let (mut machine, slot) = resident_p9();
+    let mut expected = version_request(u16::MAX);
+    enqueue_p9(&mut machine, &expected, 64);
     machine_kick(&mut machine, slot, 0);
+    expected[4] = 101;
     assert_eq!(
-        machine.read_ram(DATA + 0x100, 7).unwrap(),
-        p9_message(101, 0x1234)
+        machine.read_ram(DATA + 0x100, expected.len()).unwrap(),
+        expected
     );
     assert_eq!(
         machine_read(&mut machine, USED + 2, AccessWidth::HalfWord),
         1
     );
-    assert_eq!(machine.next_ninep_transport_action(slot).unwrap(), None);
-    assert_eq!(machine_read(&mut machine, USED + 8, AccessWidth::Word), 7);
-}
-
-#[test]
-fn ninep_reset_blocks_old_queue_writes_even_when_request_id_is_reused() {
-    let (mut machine, slot, old_request, backend) = pending_p9();
-    let old_generation = *backend.generation.borrow();
-    let response_before = machine.read_ram(DATA + 0x100, 7).unwrap().to_vec();
-    let used_before = machine.read_ram(USED, 20).unwrap().to_vec();
-    machine_write(&mut machine, VIRTIO_BASE + 0x70, AccessWidth::Word, 0);
-
-    // A completed reset relinquishes every old queue. A late provider reply
-    // cannot write a response or publish a used element before initialization.
-    let mut old_reply = old_request;
-    old_reply[4] += 1;
-    machine
-        .complete_ninep_transport_request(
-            slot,
-            old_generation,
-            NinePRequestId(1),
-            NinePOutcome::Reply(old_reply.to_vec()),
-        )
-        .unwrap();
-    assert_eq!(machine.read_ram(DATA + 0x100, 7).unwrap(), response_before);
-    assert_eq!(machine.read_ram(USED, 20).unwrap(), used_before);
-
-    // Reinitialization may reuse an ID, but the endpoint generation separates
-    // the new descriptor from work retained by the previous device instance.
-    machine_configure(&mut machine, slot, 0);
-    let request = p9_message(100, 0x2222);
-    machine_bytes(&mut machine, DATA, &request);
-    machine_kick(&mut machine, slot, 0);
-    machine
-        .complete_ninep_transport_request(
-            slot,
-            old_generation,
-            NinePRequestId(1),
-            NinePOutcome::Reply(old_reply.to_vec()),
-        )
-        .unwrap();
-    assert_eq!(machine.read_ram(DATA + 0x100, 7).unwrap(), response_before);
+    assert_eq!(machine_read(&mut machine, USED + 8, AccessWidth::Word), 21);
     assert_eq!(
-        machine_read(&mut machine, USED + 2, AccessWidth::HalfWord),
-        0
-    );
-    let mut reply = request;
-    reply[4] += 1;
-    machine
-        .complete_ninep_transport_request(
-            slot,
-            *backend.generation.borrow(),
-            NinePRequestId(1),
-            NinePOutcome::Reply(reply.to_vec()),
-        )
-        .unwrap();
-    assert_eq!(machine.read_ram(DATA + 0x100, 7).unwrap(), reply);
-    assert_eq!(
-        machine_read(&mut machine, USED + 2, AccessWidth::HalfWord),
-        1
+        machine_read(&mut machine, VIRTIO_BASE + 0x102, AccessWidth::Word),
+        u64::from(u32::from_le_bytes(*b"root"))
     );
 }
 
 #[test]
-fn ninep_pending_completion_rejects_malformed_mismatched_and_oversized_replies() {
-    for reply in [
-        vec![6, 0, 0, 0, 101, 0x11, 0x11],
-        p9_message(101, 0x2222).to_vec(),
-        [p9_message(101, 0x1111).as_slice(), &[0]].concat(),
-    ] {
-        let (mut machine, slot, _, backend) = pending_p9();
-        let generation = *backend.generation.borrow();
-        assert_eq!(
-            machine.complete_ninep_transport_request(
-                slot,
-                generation,
-                NinePRequestId(1),
-                NinePOutcome::Reply(reply),
-            ),
-            Err(riscbox::machine::MachineError::Virtio(
-                DeviceError::InvalidRequest
-            ))
+fn ninep_rejects_invalid_envelopes_without_publishing_a_reply() {
+    for request in [vec![6, 0, 0, 0, 100, 0, 0], vec![7, 0, 0, 0, 100, 0]] {
+        let (mut machine, _) = resident_p9();
+        enqueue_p9(&mut machine, &request, 64);
+        assert!(
+            machine
+                .bus_mut()
+                .write(GuestAddress(VIRTIO_BASE + 0x50), AccessWidth::Word, 0)
+                .is_err()
         );
+        assert_eq!(
+            machine_read(&mut machine, USED + 2, AccessWidth::HalfWord),
+            0
+        );
+        assert_eq!(machine.read_ram(DATA + 0x100, 64).unwrap(), &[0; 64]);
     }
-
-    let (mut machine, slot, _, backend) = pending_p9();
-    let generation = *backend.generation.borrow();
-    assert_eq!(
-        machine.complete_ninep_transport_request(
-            slot,
-            generation,
-            NinePRequestId(1),
-            NinePOutcome::EndpointFailure,
-        ),
-        Err(riscbox::machine::MachineError::Virtio(DeviceError::Backend))
-    );
-    assert_eq!(
-        machine.complete_ninep_transport_request(
-            slot,
-            generation,
-            NinePRequestId(1),
-            NinePOutcome::Suppressed,
-        ),
-        Err(riscbox::machine::MachineError::Virtio(DeviceError::Backend))
-    );
 }
 
 #[test]
-fn ninep_pending_requests_complete_out_of_order_and_reset_retires_generation() {
-    let backend = Pending9p::default();
+fn ninep_reset_recovers_failed_endpoint_without_changing_namespace() {
+    let tree = SharedFilesystem::new(Filesystem::new(Limits::default(), 100));
+    tree.with_filesystem(|fs| fs.write_file("retained", b"bytes"))
+        .unwrap();
     let mut machine = test_machine();
     let slot = machine
-        .add_ninep_device(Box::new(backend.clone()), b"root")
+        .add_ninep_device(NinePEndpoint::new(tree.clone()).unwrap(), b"root")
         .unwrap();
     machine_configure(&mut machine, slot, 0);
-
-    let first = p9_message(100, 0x1111);
-    let second = p9_message(108, 0x2222);
-    machine_bytes(&mut machine, DATA, &first);
-    machine_bytes(&mut machine, DATA + 0x200, &second);
-    machine_descriptor(&mut machine, 0, DATA, 7, 1, 1);
-    machine_descriptor(&mut machine, 1, DATA + 0x100, 7, 2, 0);
-    machine_descriptor(&mut machine, 2, DATA + 0x200, 7, 1, 3);
-    machine_descriptor(&mut machine, 3, DATA + 0x300, 7, 2, 0);
-    machine_write(&mut machine, AVAIL + 2, AccessWidth::HalfWord, 2);
-    machine_write(&mut machine, AVAIL + 4, AccessWidth::HalfWord, 0);
-    machine_write(&mut machine, AVAIL + 6, AccessWidth::HalfWord, 2);
-    machine_kick(&mut machine, slot, 0);
-
-    assert_eq!(
-        *backend.requests.borrow(),
-        [
-            (NinePRequestId(1), first.to_vec(), 7),
-            (NinePRequestId(2), second.to_vec(), 7),
-        ]
-    );
-    let generation = *backend.generation.borrow();
-    let mut second_reply = second;
-    second_reply[4] += 1;
-    machine
-        .complete_ninep_transport_request(
-            slot,
-            generation,
-            NinePRequestId(2),
-            NinePOutcome::Reply(second_reply.to_vec()),
-        )
-        .unwrap();
-    machine
-        .complete_ninep_transport_request(
-            slot,
-            generation,
-            NinePRequestId(1),
-            NinePOutcome::Suppressed,
-        )
-        .unwrap();
-    assert_eq!(
-        u16::from_le_bytes(machine.read_ram(USED + 2, 2).unwrap().try_into().unwrap()),
-        2
+    enqueue_p9(&mut machine, &version_request(u16::MAX), 7);
+    assert!(
+        machine
+            .bus_mut()
+            .write(GuestAddress(VIRTIO_BASE + 0x50), AccessWidth::Word, 0)
+            .is_err()
     );
     assert_eq!(
-        u32::from_le_bytes(machine.read_ram(USED + 4, 4).unwrap().try_into().unwrap()),
-        2
-    );
-    assert_eq!(
-        u32::from_le_bytes(machine.read_ram(USED + 8, 4).unwrap().try_into().unwrap()),
-        7
-    );
-    assert_eq!(
-        u32::from_le_bytes(machine.read_ram(USED + 12, 4).unwrap().try_into().unwrap()),
-        0
-    );
-    assert_eq!(
-        u32::from_le_bytes(machine.read_ram(USED + 16, 4).unwrap().try_into().unwrap()),
+        machine_read(&mut machine, USED + 2, AccessWidth::HalfWord),
         0
     );
 
-    assert_eq!(
-        machine.complete_ninep_transport_request(
-            slot,
-            generation,
-            NinePRequestId(1),
-            NinePOutcome::Suppressed,
-        ),
-        Err(riscbox::machine::MachineError::Virtio(DeviceError::Backend))
-    );
+    // Reset relinquishes the old ring and restores protocol negotiation.
     machine_write(&mut machine, VIRTIO_BASE + 0x70, AccessWidth::Word, 0);
-    assert_eq!(*backend.generation.borrow(), NinePGeneration(2));
+    machine_configure(&mut machine, slot, 0);
+    enqueue_p9(&mut machine, &version_request(u16::MAX), 64);
+    machine_kick(&mut machine, slot, 0);
     assert_eq!(
-        machine.complete_ninep_transport_request(
-            slot,
-            generation,
-            NinePRequestId(2),
-            NinePOutcome::Suppressed,
-        ),
-        Ok(())
+        machine_read(&mut machine, USED + 2, AccessWidth::HalfWord),
+        1
     );
+    assert_eq!(machine.read_ram(DATA + 0x104, 3).unwrap(), &[101, 255, 255]);
+    tree.with_filesystem(|fs| assert_eq!(fs.read_file("retained").unwrap(), b"bytes"));
 }
 
 #[test]
@@ -905,37 +732,7 @@ fn receive_notifications_drain_buffered_console_network_and_input_data() {
 }
 
 #[test]
-fn ninep_validates_messages_and_input_emits_events() {
-    let backend = Pending9p::default();
-    let mut p9 = test_machine();
-    let p9_slot = p9
-        .add_ninep_device(Box::new(backend.clone()), b"root")
-        .unwrap();
-    machine_configure(&mut p9, p9_slot, 0);
-    let request = [7, 0, 0, 0, 100, 0x34, 0x12];
-    machine_bytes(&mut p9, DATA, &request);
-    machine_descriptor(&mut p9, 0, DATA, 7, 1, 1);
-    machine_descriptor(&mut p9, 1, DATA + 0x100, 7, 2, 0);
-    machine_available(&mut p9, 0);
-    machine_kick(&mut p9, p9_slot, 0);
-    let mut reply = request;
-    reply[4] += 1;
-    p9.complete_ninep_transport_request(
-        p9_slot,
-        *backend.generation.borrow(),
-        NinePRequestId(1),
-        NinePOutcome::Reply(reply.to_vec()),
-    )
-    .unwrap();
-    assert_eq!(
-        p9.read_ram(DATA + 0x100, 7).unwrap(),
-        &[7, 0, 0, 0, 101, 0x34, 0x12]
-    );
-    assert_eq!(
-        machine_read(&mut p9, VIRTIO_BASE + 0x102, AccessWidth::Word),
-        u64::from(u32::from_le_bytes(*b"root"))
-    );
-
+fn input_emits_events() {
     let mut input = test_machine();
     let input_slot = input.add_input_device(InputKind::Keyboard).unwrap();
     machine_configure(&mut input, input_slot, 0);

@@ -104,7 +104,7 @@ fn slli(rd: u32, amount: u32) -> u32 {
 }
 
 #[test]
-fn tinyemu_enforces_pmp_on_supervisor_data_access() {
+fn tinyemu_ignores_pmp_on_supervisor_data_access() {
     let mut core = core();
     put(&mut core, 0x3000, &[0x1050_0073]);
     put(
@@ -123,11 +123,12 @@ fn tinyemu_enforces_pmp_on_supervisor_data_access() {
             addi(3, 3, -2048),
             csrrw(CSR_MSTATUS, 3),
             store(2, 5, 3, 0),
+            0x1050_0073, // wfi
         ],
     );
     core.run_cpu(20);
-    assert_eq!(core.machine_cause(), 7);
-    assert_eq!(core.machine_trap_value(), 0x8000);
+    assert_eq!(core.machine_cause(), 0);
+    assert_eq!(core.ram_range(0x8000, 8, false).unwrap(), &7_u64.to_le_bytes());
 }
 
 #[test]

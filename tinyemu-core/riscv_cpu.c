@@ -198,84 +198,11 @@ static int get_effective_priv(RISCVCPUState *s, int access)
     return s->priv;
 }
 
-static void rebuild_pmp_regions(RISCVCPUState *s)
-{
-    target_ulong lower, upper, addr, mask, region_size;
-    int i, mode, trailing_ones;
-    uint8_t cfg;
-    PMPRegion *region;
-
-    /* Disabled entries still supply the lower bound of a following TOR
-       entry, but only nonempty enabled ranges enter the access-time list. */
-    s->pmp_region_count = 0;
-    for(i = 0; i < PMP_ENTRY_COUNT; i++) {
-        cfg = s->pmpcfg[i];
-        mode = cfg & PMP_CFG_A_MASK;
-        if (mode == 0)
-            continue;
-
-        addr = s->pmpaddr[i];
-        if (mode == PMP_CFG_A_TOR) {
-            lower = i == 0 ? 0 : s->pmpaddr[i - 1] << 2;
-            upper = addr << 2;
-        } else if (mode == PMP_CFG_A_NA4) {
-            lower = addr << 2;
-            upper = lower + 4;
-        } else {
-            trailing_ones = __builtin_ctzll(~addr);
-            mask = ((target_ulong)1 << trailing_ones) - 1;
-            lower = (addr & ~mask) << 2;
-            region_size = (target_ulong)1 << (trailing_ones + 3);
-            upper = lower + region_size;
-        }
-        if (lower >= upper)
-            continue;
-
-        /* Appending in CSR order preserves the first matching entry's
-           priority, including its partial-match failure behavior. */
-        region = &s->pmp_regions[s->pmp_region_count++];
-        region->lower = lower;
-        region->upper = upper;
-        region->permissions = cfg & (PMP_CFG_R | PMP_CFG_W | PMP_CFG_X);
-        region->machine_permissions = (cfg & PMP_CFG_L) ?
-            region->permissions : (PMP_CFG_R | PMP_CFG_W | PMP_CFG_X);
-    }
-}
-
-static BOOL pmp_access_ok(RISCVCPUState *s, target_ulong paddr,
-                          target_ulong size, int access, int priv)
-{
-    target_ulong access_end;
-    uint32_t i;
-    uint8_t permissions;
-    const PMPRegion *region;
-
-    access_end = paddr + size;
-    if (access_end < paddr)
-        return FALSE;
-
-    /* The first overlapping range must contain the whole access. Unmatched
-       M-mode accesses succeed; unmatched lower-privilege accesses fail. */
-    for(i = 0; i < s->pmp_region_count; i++) {
-        region = &s->pmp_regions[i];
-        if (paddr >= region->upper || access_end <= region->lower)
-            continue;
-        if (paddr < region->lower || access_end > region->upper)
-            return FALSE;
-        permissions = priv == PRV_M ? region->machine_permissions :
-            region->permissions;
-        return (permissions & (1 << access)) != 0;
-    }
-    return priv == PRV_M;
-}
-
 static BOOL phys_ram_access_ok(RISCVCPUState *s, PhysMemoryRange **ppr,
-                               target_ulong paddr, size_t size, int access)
+                               target_ulong paddr, size_t size)
 {
     PhysMemoryRange *pr;
 
-    if (!pmp_access_ok(s, paddr, size, access, PRV_S))
-        return FALSE;
     pr = get_phys_mem_range(s->mem_map, paddr);
     if (!pr || !pr->is_ram || size > pr->size ||
         paddr - pr->addr > pr->size - size)
@@ -289,7 +216,7 @@ static BOOL phys_read_pte(RISCVCPUState *s, uint64_t *pval,
 {
     PhysMemoryRange *pr;
 
-    if (!phys_ram_access_ok(s, &pr, paddr, sizeof(*pval), ACCESS_READ))
+    if (!phys_ram_access_ok(s, &pr, paddr, sizeof(*pval)))
         return FALSE;
     *pval = *(uint64_t *)(pr->phys_mem + (uintptr_t)(paddr - pr->addr));
     return TRUE;
@@ -300,7 +227,7 @@ static BOOL phys_write_pte(RISCVCPUState *s, target_ulong paddr,
 {
     PhysMemoryRange *pr;
 
-    if (!phys_ram_access_ok(s, &pr, paddr, sizeof(val), ACCESS_WRITE) ||
+    if (!phys_ram_access_ok(s, &pr, paddr, sizeof(val)) ||
         (pr->devram_flags & DEVRAM_FLAG_ROM))
         return FALSE;
     phys_mem_set_dirty_bit(pr, paddr - pr->addr);
@@ -312,7 +239,7 @@ static BOOL phys_write_pte(RISCVCPUState *s, target_ulong paddr,
 static TranslationResult get_phys_addr(RISCVCPUState *s,
                                        target_ulong *ppaddr,
                                        target_ulong vaddr,
-                                       int size, int access)
+                                       int access)
 {
     int pte_idx, xwr, priv;
     int need_write, vaddr_shift, i;
@@ -322,12 +249,12 @@ static TranslationResult get_phys_addr(RISCVCPUState *s,
 
     if (priv == PRV_M) {
         paddr = vaddr;
-        goto pmp_check;
+        goto translated;
     }
     if ((s->satp >> SATP_MODE_SHIFT) == SATP_MODE_BARE) {
         /* bare: no translation */
         paddr = vaddr;
-        goto pmp_check;
+        goto translated;
     }
 
     vaddr_high = vaddr >> (SV39_VADDR_BITS - 1);
@@ -389,7 +316,7 @@ static TranslationResult get_phys_addr(RISCVCPUState *s,
             if (need_write && !phys_write_pte(s, pte_addr, pte))
                 return TRANSLATE_ACCESS_FAULT;
             paddr = (vaddr & vaddr_mask) | (paddr & ~vaddr_mask);
-            goto pmp_check;
+            goto translated;
         } else {
             if (pte & PTE_NONLEAF_RESERVED_MASK)
                 return TRANSLATE_PAGE_FAULT;
@@ -398,9 +325,7 @@ static TranslationResult get_phys_addr(RISCVCPUState *s,
     }
     return TRANSLATE_PAGE_FAULT;
 
-pmp_check:
-    if (!pmp_access_ok(s, paddr, size, access, priv))
-        return TRANSLATE_ACCESS_FAULT;
+translated:
     *ppaddr = paddr;
     return TRANSLATE_OK;
 }
@@ -463,8 +388,7 @@ int target_read_slow(RISCVCPUState *s, mem_uint_t *pval,
             tinyemu_abort();
         }
     } else {
-        translation_result = get_phys_addr(s, &paddr, addr, size,
-                                           ACCESS_READ);
+        translation_result = get_phys_addr(s, &paddr, addr, ACCESS_READ);
         if (translation_result != TRANSLATE_OK) {
             s->pending_tval = addr;
             s->pending_exception =
@@ -485,12 +409,8 @@ int target_read_slow(RISCVCPUState *s, mem_uint_t *pval,
         } else if (pr->is_ram) {
             tlb_idx = (addr >> PG_SHIFT) & (TLB_SIZE - 1);
             ptr = pr->phys_mem + (uintptr_t)(paddr - pr->addr);
-            if (pmp_access_ok(s, paddr & ~PG_MASK, PG_MASK + 1,
-                              ACCESS_READ,
-                              get_effective_priv(s, ACCESS_READ))) {
-                s->tlb_read[tlb_idx].vaddr = addr & ~PG_MASK;
-                s->tlb_read[tlb_idx].mem_addend = (uintptr_t)ptr - addr;
-            }
+            s->tlb_read[tlb_idx].vaddr = addr & ~PG_MASK;
+            s->tlb_read[tlb_idx].mem_addend = (uintptr_t)ptr - addr;
             switch(size_log2) {
             case 0:
                 ret = *(uint8_t *)ptr;
@@ -563,8 +483,7 @@ int target_write_slow(RISCVCPUState *s, target_ulong addr,
                 return err;
         }
     } else {
-        translation_result = get_phys_addr(s, &paddr, addr, size,
-                                           ACCESS_WRITE);
+        translation_result = get_phys_addr(s, &paddr, addr, ACCESS_WRITE);
         if (translation_result != TRANSLATE_OK) {
             s->pending_tval = addr;
             s->pending_exception =
@@ -586,12 +505,8 @@ int target_write_slow(RISCVCPUState *s, target_ulong addr,
             phys_mem_set_dirty_bit(pr, paddr - pr->addr);
             tlb_idx = (addr >> PG_SHIFT) & (TLB_SIZE - 1);
             ptr = pr->phys_mem + (uintptr_t)(paddr - pr->addr);
-            if (pmp_access_ok(s, paddr & ~PG_MASK, PG_MASK + 1,
-                              ACCESS_WRITE,
-                              get_effective_priv(s, ACCESS_WRITE))) {
-                s->tlb_write[tlb_idx].vaddr = addr & ~PG_MASK;
-                s->tlb_write[tlb_idx].mem_addend = (uintptr_t)ptr - addr;
-            }
+            s->tlb_write[tlb_idx].vaddr = addr & ~PG_MASK;
+            s->tlb_write[tlb_idx].mem_addend = (uintptr_t)ptr - addr;
             switch(size_log2) {
             case 0:
                 *(uint8_t *)ptr = val;
@@ -640,12 +555,12 @@ device_write_fault:
 }
 
 static __exception int target_write_check(RISCVCPUState *s,
-                                          target_ulong addr, int size)
+                                          target_ulong addr)
 {
     target_ulong paddr;
     TranslationResult translation_result;
 
-    translation_result = get_phys_addr(s, &paddr, addr, size, ACCESS_WRITE);
+    translation_result = get_phys_addr(s, &paddr, addr, ACCESS_WRITE);
     if (translation_result != TRANSLATE_OK) {
         s->pending_tval = addr;
         s->pending_exception =
@@ -682,8 +597,7 @@ static no_inline __exception int target_read_insn_slow(RISCVCPUState *s,
     uint8_t *ptr;
     PhysMemoryRange *pr;
 
-    translation_result = get_phys_addr(s, &paddr, addr, sizeof(uint16_t),
-                                       ACCESS_CODE);
+    translation_result = get_phys_addr(s, &paddr, addr, ACCESS_CODE);
     if (translation_result != TRANSLATE_OK) {
         s->pending_tval = addr;
         s->pending_exception =
@@ -700,13 +614,9 @@ static no_inline __exception int target_read_insn_slow(RISCVCPUState *s,
     }
     tlb_idx = (addr >> PG_SHIFT) & (TLB_SIZE - 1);
     ptr = pr->phys_mem + (uintptr_t)(paddr - pr->addr);
-    *pspan = sizeof(uint16_t);
-    if (pmp_access_ok(s, paddr & ~PG_MASK, PG_MASK + 1, ACCESS_CODE,
-                      get_effective_priv(s, ACCESS_CODE))) {
-        s->tlb_code[tlb_idx].vaddr = addr & ~PG_MASK;
-        s->tlb_code[tlb_idx].mem_addend = (uintptr_t)ptr - addr;
-        *pspan = (PG_MASK + 1) - (addr & PG_MASK);
-    }
+    s->tlb_code[tlb_idx].vaddr = addr & ~PG_MASK;
+    s->tlb_code[tlb_idx].mem_addend = (uintptr_t)ptr - addr;
+    *pspan = (PG_MASK + 1) - (addr & PG_MASK);
     *pptr = ptr;
     return 0;
 }
@@ -838,6 +748,8 @@ static BOOL counter_access_enabled(RISCVCPUState *s, uint32_t counter_index)
     return TRUE;
 }
 
+/* Firmware can retain PMP configuration and locks in CSRs, but these stored
+   permissions do not participate in address translation or memory access. */
 static target_ulong get_pmpcfg(RISCVCPUState *s, int first_entry)
 {
     target_ulong val;
@@ -870,8 +782,6 @@ static BOOL set_pmpcfg(RISCVCPUState *s, int first_entry,
         s->pmpcfg[first_entry + i] = cfg;
         changed = TRUE;
     }
-    if (changed)
-        rebuild_pmp_regions(s);
     return changed;
 }
 
@@ -891,7 +801,6 @@ static BOOL set_pmpaddr(RISCVCPUState *s, int entry, target_ulong val)
     if (s->pmpaddr[entry] == val)
         return FALSE;
     s->pmpaddr[entry] = val;
-    rebuild_pmp_regions(s);
     return TRUE;
 }
 

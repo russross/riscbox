@@ -1505,7 +1505,7 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
                     val = s->reg[rs1];
                     addr = val & ~(target_ulong)63;
                     access = imm == 4 ? ACCESS_WRITE : ACCESS_READ;
-                    translation_result = get_phys_addr(s, &val2, addr, 64,
+                    translation_result = get_phys_addr(s, &val2, addr,
                                                        access);
                     if (translation_result != TRANSLATE_OK) {
                         s->pending_exception =
@@ -1569,7 +1569,7 @@ static void no_inline glue(riscv_cpu_interp_x, XLEN)(RISCVCPUState *s,
                         STORE_INSN(size, s->reg[rs2], 4);              \
                         val = 0;                                        \
                     } else {                                            \
-                        if (target_write_check(s, addr, size / 8))       \
+                        if (target_write_check(s, addr))                 \
                             goto mmu_exception;                         \
                         val = 1;                                        \
                     }                                                   \

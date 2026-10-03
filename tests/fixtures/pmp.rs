@@ -80,100 +80,85 @@ fn put(core: &mut Core, address: u64, instructions: &[u32]) {
     }
 }
 
-pub fn priority_and_permissions() {
-    // A lower-priority permissive region cannot override a denial or a
-    // partial match from the first region that overlaps the access.
-    for cfg in [0x10_u64, 0x11] {
+pub fn memory_accesses() {
+    // PMP configurations, including locked denials and partial ranges, do
+    // not restrict effective S-mode loads or stores.
+    for cfg in [0, 0x98, 0x90] {
         let mut probe = Probe::new();
         probe.csr_write(PMPADDR0, TARGET >> 2);
-        probe.csr_write(PMPADDR0 + 1, ALL_MEMORY);
-        probe.csr_write(PMPCFG0, cfg | 0x1f00);
+        probe.csr_write(PMPCFG0, cfg);
         probe.supervisor_data();
         probe.load();
-        let core = probe.run();
-        assert_eq!(core.machine_cause(), 5);
-        assert_eq!(core.machine_trap_value(), TARGET);
+        probe.instructions.extend([0x0070_0593, 0x00b2_b023]);
+        let mut core = probe.run();
+        assert_eq!(core.machine_cause(), 0);
+        assert_eq!(core.register(10), 0x1050_0073);
+        assert_eq!(
+            core.ram_range(TARGET, 8, false).unwrap(),
+            &7_u64.to_le_bytes()
+        );
     }
 
-    // Unmatched S-mode accesses fail, while unlocked regions cannot deny M.
-    for (cfg, supervisor, cause) in [
-        (0, true, 5),
-        (0, false, 0),
-        (0x18, false, 0),
-        (0x98, false, 5),
-    ] {
-        let mut probe = Probe::new();
-        probe.csr_write(PMPADDR0, (TARGET >> 2) | 0x1ff);
-        probe.csr_write(PMPCFG0, cfg);
-        if supervisor {
-            probe.supervisor_data();
-        }
-        probe.load();
-        assert_eq!(probe.run().machine_cause(), cause);
-    }
-
-    // Locked regions enforce execute permission on instruction fetches too.
+    // Locked execute denials do not restrict instruction fetches, and a
+    // locked write denial does not restrict cache-block zeroing.
     let mut probe = Probe::new();
     probe.csr_write(PMPADDR0, (TARGET >> 2) | 0x1ff);
-    probe.csr_write(PMPCFG0, 0x99);
+    probe.csr_write(PMPCFG0, 0x98);
     probe.instructions.extend([0x0000_62b7, 0x0002_8067]);
-    assert_eq!(probe.run().machine_cause(), 1);
-}
+    let core = probe.run();
+    assert_eq!(core.machine_cause(), 0);
+    assert_eq!(core.pc(), TARGET + 4);
 
-pub fn tor_and_locks() {
-    // An inverted TOR range matches no bytes, including large cache-block
-    // accesses that straddle both encoded bounds.
     let mut probe = Probe::new();
-    probe.csr_write(PMPADDR0, (TARGET + 8) >> 2);
-    probe.csr_write(PMPADDR0 + 1, (TARGET + 4) >> 2);
-    probe.csr_write(PMPADDR0 + 2, ALL_MEMORY);
-    probe.csr_write(PMPCFG0, 0x001f_0f00);
+    probe.csr_write(PMPADDR0, (TARGET >> 2) | 0x1ff);
+    probe.csr_write(PMPCFG0, 0x98);
     probe.supervisor_data();
-    probe.instructions.extend([0x0000_62b7, 0x0042_a00f]); // cbo.zero (x5)
+    probe.instructions.extend([0x0000_62b7, 0x0042_a00f]);
     let mut core = probe.run();
     assert_eq!(core.machine_cause(), 0);
     assert_eq!(core.ram_range(TARGET, 64, false).unwrap(), &[0; 64]);
-
-    // Changing an OFF entry's address changes the next TOR region's lower
-    // bound. A locked TOR entry freezes that predecessor address as well.
-    for locked in [false, true] {
-        let mut probe = Probe::new();
-        probe.csr_write(PMPADDR0, TARGET >> 2);
-        probe.csr_write(PMPADDR0 + 1, (TARGET + 0x1000) >> 2);
-        probe.csr_write(PMPCFG0, if locked { 0x8900 } else { 0x0900 });
-        probe.csr_write(PMPADDR0, (TARGET + 0x1000) >> 2);
-        if locked {
-            probe.csr_write(PMPADDR0 + 1, 0);
-            probe.csr_write(PMPCFG0, 0);
-        }
-        probe.supervisor_data();
-        probe.load();
-        let core = probe.run();
-        assert_eq!(core.machine_cause(), if locked { 0 } else { 5 });
-    }
 }
 
-pub fn invalidation() {
-    // Populate a read TLB entry, then revoke the region's permission. The
-    // second load must fault despite the previous cached translation.
+pub fn csr_handlers() {
+    // Address width and reserved configuration bits retain their WARL
+    // behavior even though the stored permissions do not restrict memory.
     let mut probe = Probe::new();
-    probe.csr_write(PMPADDR0, ALL_MEMORY);
-    probe.csr_write(PMPCFG0, 0x1f);
-    probe.supervisor_data();
-    probe.load();
-    probe.csr_write(0x300, 0); // restore M-mode data accesses for literal loads
-    probe.csr_write(PMPCFG0, 0x18);
-    probe.supervisor_data();
-    probe.load();
+    probe.csr_write(PMPADDR0, u64::MAX);
+    probe.csr_write(PMPCFG0, 0x66);
+    probe.instructions.extend([0x3b00_2573, 0x3a00_25f3]);
     let core = probe.run();
-    assert_eq!(core.register(10), 0x1050_0073);
-    assert_eq!(core.machine_cause(), 5);
+    assert_eq!(core.register(10), ALL_MEMORY);
+    assert_eq!(core.register(11), 4);
 
-    // Changes in the upper configuration CSR rebuild the same ordered list.
+    // Locks preserve both configuration CSRs and the addresses they protect.
+    for entry in [0, 8] {
+        let mut probe = Probe::new();
+        let cfg_csr = PMPCFG0 + if entry == 0 { 0 } else { 2 };
+        probe.csr_write(PMPADDR0 + entry, TARGET >> 2);
+        probe.csr_write(cfg_csr, 0x98);
+        probe.csr_write(PMPADDR0 + entry, 0);
+        probe.csr_write(cfg_csr, 0);
+        probe
+            .instructions
+            .push((PMPADDR0 + entry) << 20 | 2 << 12 | 10 << 7 | 0x73);
+        probe
+            .instructions
+            .push(cfg_csr << 20 | 2 << 12 | 11 << 7 | 0x73);
+        let core = probe.run();
+        assert_eq!(core.register(10), TARGET >> 2);
+        assert_eq!(core.register(11), 0x98);
+    }
+
+    // A locked TOR entry also freezes the preceding address register,
+    // including when that predecessor's own configuration is OFF.
     let mut probe = Probe::new();
-    probe.csr_write(PMPADDR0 + 8, ALL_MEMORY);
-    probe.csr_write(PMPCFG0 + 2, 0x1f);
-    probe.supervisor_data();
-    probe.load();
-    assert_eq!(probe.run().machine_cause(), 0);
+    probe.csr_write(PMPADDR0, TARGET >> 2);
+    probe.csr_write(PMPADDR0 + 1, (TARGET + 0x1000) >> 2);
+    probe.csr_write(PMPCFG0, 0x8900);
+    probe.csr_write(PMPADDR0, 0);
+    probe.csr_write(PMPADDR0 + 1, 0);
+    probe.instructions.extend([0x3b00_2573, 0x3b10_25f3]);
+    let core = probe.run();
+    assert_eq!(core.register(10), TARGET >> 2);
+    assert_eq!(core.register(11), (TARGET + 0x1000) >> 2);
 }

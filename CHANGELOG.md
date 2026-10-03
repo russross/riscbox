@@ -4,6 +4,14 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Removed PMP enforcement from memory accesses, page walks, and TLB fills.
+    PMP CSRs retain read/write masks and locks for firmware compatibility;
+    stored PMP permissions have no effect. Removed decoded range storage and
+    rebuilding. Native and raw-WASM probes cover unrestricted loads, stores,
+    instruction fetches, cache-block zeroing, and retained CSR behavior.
+    The prior fixed-image xv6 compile experiment measured a 3.53% runtime
+    reduction without checks (85.7975 to 82.7725 seconds).
+
 *   Decode PMP ranges and M-mode permissions when CSRs change instead of on
     every access check, retaining CSR priority, partial-match faults, locks,
     and TLB invalidation. Empty and inverted TOR ranges now match no addresses.

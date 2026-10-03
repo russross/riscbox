@@ -45,8 +45,8 @@ backends.
 `tests/cpu_hot_path.rs` and the raw-WASM CPU probe share instruction streams
 for retirement counters, CSR writes, overflow, traps, host handoffs, and signed
 and unsigned high-half multiplication. `tests/pmp.rs` shares native and raw-WASM
-probes for range priority, partial matches, permissions, TOR bounds, locks,
-and permission changes after TLB fills. Performance captures remain generated
+probes for unrestricted memory accesses and PMP CSR masks and locks.
+Performance captures remain generated
 artifacts under `images/xv6-profile/profiles/`.
 
 Active work

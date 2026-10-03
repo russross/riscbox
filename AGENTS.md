@@ -95,7 +95,7 @@ Current contract
 
 The CPU implements RV64 I, M, A, F, D, C, and the advertised scalar extensions
 needed by the target guests. This includes the implemented B subsets, current
-counter and supervisor guarantees, PMP, Sstc, Svadu, Svinval, Svnapot, Svpbmt,
+counter and supervisor guarantees, Sstc, Svadu, Svinval, Svnapot, Svpbmt,
 cache-block operations, conditional operations, hints, may-be-operations, and
 wait-on-reservation. It is moving toward RVA23 where that is useful, but it is
 not RVA23 compliant because vectors and several other required extensions are
@@ -107,8 +107,8 @@ Rust global allocator. Rust owns platform devices and handles MMIO callbacks.
 The interpreter accumulates retired instructions locally and publishes the
 counter at CSR accesses and CPU-run exits. WASM RV64 high-half multiplication
 uses 32-bit limbs and signed corrections; native builds use wide arithmetic.
-PMP CSR writes rebuild an ordered list of nonempty decoded ranges. Permission
-checks run on translation and TLB-fill paths; cached TLB hits do not scan PMP.
+PMP CSRs retain read/write masks and lock behavior for guest firmware, but
+PMP permissions do not restrict memory accesses, page walks, or TLB fills.
 Shared callback errors and run outcomes live at the TinyEMU boundary, while
 interrupt masks live with the platform and memory access types live with the
 TinyEMU RAM bridge. The C core is compiled without a C runtime, Emscripten, or

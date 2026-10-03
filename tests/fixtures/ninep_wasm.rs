@@ -18,9 +18,8 @@ pub extern "C" fn cpu_hot_path_regression() -> u32 {
     cpu_hot_path::retirement();
     cpu_hot_path::retirement_handoff();
     cpu_hot_path::high_multiply();
-    pmp::priority_and_permissions();
-    pmp::tor_and_locks();
-    pmp::invalidation();
+    pmp::memory_accesses();
+    pmp::csr_handlers();
     1
 }
 

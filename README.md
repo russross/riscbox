@@ -484,6 +484,8 @@ Riscbox implements RV64 I, M, A, F, D, C, the advertised Zba/Zbb/Zbs subsets,
 and selected current supervisor and scalar extensions used by its guests. It
 uses TinyEMU's bit-exact integer SoftFP lineage. Riscbox is not RVA23 compliant;
 vectors and other deliberately omitted requirements are never advertised.
+PMP CSRs retain masks and locks for firmware compatibility, but PMP permissions
+do not restrict memory accesses.
 
 The platform follows QEMU `virt` addresses for RAM, reset, UART, VirtIO MMIO,
 ACLINT MSWI and MTIMER, PLIC, and the test finisher, and adds the QEMU-compatible Goldfish RTC.

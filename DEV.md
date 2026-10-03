@@ -72,56 +72,12 @@ No active implementation plans are currently recorded.
 Candidate work
 --------------
 
-### Exam client synchronization at its next development window
-
-The read-only `exam/` mount remains a reference deployment. Migrate the
-Codegrinder development client using `client-core/EXAM-MIGRATION.md`, the complete
-shared subtree, and a matching current Riscbox build. The guide covers the
-synchronous filesystem upgrade, separate editor/server acknowledgements, final
-shutdown writes, snapshot/image transitions, Reset recovery, clipboard and
-server-action policies, build integration, and future source updates. Exam's
-migration and real server/guest acceptance remain work for its development
-window.
-
-### Interrupt-controller modernization
-
-The platform now describes its machine-local interrupt registers as ACLINT
-MSWI and MTIMER. The PLIC remains the QEMU `virt` default and is used by the
-current Linux and xv6 guests. Replacing it with APLIC or APLIC plus IMSIC would
-add controller state, CPU interrupt-architecture support, and firmware and
-guest compatibility work without a demonstrated one-hart benefit. Revisit only
-if a target guest requires AIA. ACLINT SSWI similarly adds no useful IPI target
-for the current single-hart machine.
-
 ### Framebuffer demonstration
 
 Add guest framebuffer and input demonstration programs, configure those devices
 in an image, and connect dirty-region callbacks to a canvas in the Risclet page.
 Validate the complete guest-to-page path together. The current Risclet demo is
 intentionally terminal-only.
-
-### Non-CPU performance
-
-Measure HTTP block request latency, 9p request/reply copy volume, concurrent
-request latency, resident and logical 9p tree sizes, and disk cache memory
-only when those paths become a demonstrated bottleneck. Keep that work separate
-from the CPU interpreter optimization baseline.
-
-### WASM build rules
-
-Apply and test various standard tweaks to the Rust WASM build rules to shrink
-the binary and check for performance differences (including optimizing for
-size).
-
-### Bootloader and installation media
-
-Installation media can boot through the supplied U-Boot EFI path using existing
-split HTTP or host-array drives. Direct HTTP attachment of plain image assets
-and installer target-disk policies remain a separate storage milestone. Extend
-the resolved drive configuration and VM-owned block stores for
-plain image assets or installation media. Select read-only, session CoW, or
-mutable behavior explicitly. Validate multiple attached drives, failed reads,
-and write behavior before documenting an installation-to-disk workflow.
 
 ### WASI integration
 

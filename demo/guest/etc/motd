@@ -1,13 +1,10 @@
 
-Riscbox embedding demo
+Riscbox demo
 
-The browser owns /workspace through 9p. Choose a source tree and click Load tree.
-Then try:
+This VM shares files in /workspace with the web app, and
+updates in both direction are visible live.
 
-    cd /workspace
-    make
-    make run
+Use `make` to build a game or `make run` to run it.
 
-Use the file browser to copy a file into the editor, then explicitly Save to 9p.
-The file tree updates automatically. No editor changes are saved automatically.
-The base disk is EROFS; /tmp, /var, and /home are temporary. doas needs no password.
+You have doas access: try `doas poweroff`
+

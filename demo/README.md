@@ -1,5 +1,5 @@
-Release-based embedding demo
-============================
+Release-based demo
+==================
 
 The [published demo](https://russross.github.io/riscbox/) updates after successful
 releases. The Release workflow builds this directory against the release archive

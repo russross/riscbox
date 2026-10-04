@@ -50,6 +50,34 @@ and require no guest root filesystem, QEMU, mounted source, or UI framework.
 The optional demo build needs QEMU, fakeroot, cpio, and erofs-utils; see
 [demo/README.md](demo/README.md).
 
+Release automation
+------------------
+
+A version increase in the workspace `Cargo.toml` pushed to `main` runs the
+Release workflow. It validates the core, builds the archive, prepares the demo
+image in QEMU, and runs Chrome demo acceptance before creating the version tag
+and GitHub release. A separate deployment job publishes `demo/dist/` to
+<https://russross.github.io/riscbox/>. Generated assets remain workflow artifacts
+and Pages content, outside Git; the release archive still excludes the demo.
+
+For manual runs, open **Actions → Release → Run workflow**:
+
+1. Select a branch and leave **mode** as **test** to exercise the same build and
+    validation without publishing. Download the runtime archive and
+    `riscbox-demo.tar.gz` from the run's artifacts. Extract the demo archive and
+    serve its directory with `python3 -m http.server` to try it locally.
+2. Select **main** and **publish** to release its current version and deploy the
+    demo. An existing version tag must point to the selected commit. When the
+    release already exists, the workflow downloads its original runtime archive
+    for demo assembly, skips release creation, and retries Pages deployment.
+
+Enable **Settings → Pages → Build and deployment → Source → GitHub Actions**
+once in the repository. The `github-pages` environment must allow deployment
+from `main`. GitHub's built-in workflow token supplies publication permissions;
+manual test builds have read-only repository access. Publication and deployment
+receive their required write permissions in separate jobs. Only one workflow
+run publishes at a time.
+
 Repository boundaries
 ---------------------
 

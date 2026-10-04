@@ -19,7 +19,9 @@ export async function runChromePage(html, directory, options = {}) {
         if (url.pathname === "/probe.html") {
             response.setHeader("Content-Type", "text/html"); response.end(html); return;
         }
-        const path = resolve(root, `.${decodeURIComponent(url.pathname)}`);
+        const basePath = options.basePath ?? "";
+        if (!url.pathname.startsWith(`${basePath}/`)) { response.writeHead(404).end(); return; }
+        const path = resolve(root, `.${decodeURIComponent(url.pathname.slice(basePath.length))}`);
         if (!path.startsWith(`${root}/`)) { response.writeHead(403).end(); return; }
         try {
             const override = await options.response?.(url);

@@ -8,7 +8,7 @@ import { runChromePage } from "./chrome.mjs";
 test("release demo boots, shares files, compiles games, and exercises lifecycle controls", { timeout: 300_000 }, async () => {
     const directory = await mkdtemp(join(tmpdir(), "riscbox-demo-"));
     try {
-        await runChromePage(`<!doctype html><iframe src="/index.html"></iframe><script type="module">
+        await runChromePage(`<!doctype html><iframe src="/riscbox/index.html"></iframe><script type="module">
 const frame = document.querySelector('iframe');
 const sleep = () => new Promise(resolve => setTimeout(resolve, 100));
 const check = (condition, message) => { if (!condition) throw new Error(message); };
@@ -22,7 +22,7 @@ async function until(condition, message) {
 }
 try {
     await until(() => frame.contentDocument?.getElementById('state')?.textContent === 'running', 'startup');
-    app = await frame.contentWindow.eval('import("./app.js")');
+    app = await frame.contentWindow.eval('import("/riscbox/app.js")');
     const doc = frame.contentDocument;
     let captured = '';
     async function text() {
@@ -116,6 +116,6 @@ try {
     try { output = await app?.terminal.readText(); } catch {}
     await fetch('/result?status=' + encodeURIComponent((error?.stack ?? String(error)) + '\\n' + output));
 }
-</script>`, directory, { root: resolve(import.meta.dirname, "../demo/dist"), timeoutMs: 290_000 });
+</script>`, directory, { root: resolve(import.meta.dirname, "../demo/dist"), basePath: "/riscbox", timeoutMs: 290_000 });
     } finally { await rm(directory, { recursive: true, force: true }); }
 });

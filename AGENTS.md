@@ -52,6 +52,13 @@ Repository map and terminology
     release archive with the WASM runtime, browser modules, canonical Linux
     Image, OpenSBI firmware, U-Boot binary, and API documentation. The release
     archive excludes guest images and image build scripts.
+    The same workflow builds and Chrome-tests the demo against that archive
+    before publication, then deploys it to GitHub Pages. Manual `test` runs on
+    any branch upload runtime/demo artifacts with no publication; manual
+    `publish` requires main and verifies existing tags before reusing a release
+    archive to retry demo deployment. Pages uses the GitHub Actions source and
+    the `github-pages` environment. Builds have read-only repository access;
+    separate publication and deployment jobs receive their write permissions.
 *   `js/riscbox.js` owns the dependency-free client adapter and its private
     runtime. The client factory exposes checked lifecycle/input calls and owned
     storage facades; raw exports, scheduling, and buffer helpers are internal.
@@ -334,14 +341,15 @@ Validation
     filesystem ABI probes in Node.
 *   `make test` adds real WASM/Chrome network integration and 9p server tests
     for development, with small owned firmware probes.
-*   `make check` adds strict Clippy and Python type checks. The GitHub release
-    workflow runs unit tests, type checks, Clippy, and builds without Chrome or
-    full-guest tests.
+*   `make check` adds strict Clippy and Python type checks. The GitHub Release
+    workflow runs unit tests, type checks, Clippy, package validation, and
+    builds, plus QEMU demo image preparation and real Chrome demo acceptance.
 *   `make check-release` explicitly runs core checks, builds the archive, checks
     named contents and documentation links, excludes development artifacts, and
     instantiates its packaged WASM through its packaged client adapter. Typed
     example consumers compile against deployable declarations in `js-check`.
-    GitHub remains release-only; ordinary push/PR checks are not automatic.
+    GitHub runs these checks for releases and manual tests; ordinary push/PR
+    checks are not automatic.
 *   `make test-demo` builds the optional release-only example and checks real
     Chrome/WASM boot, TinyCC games, explicit host/guest file transfers, lifecycle
     controls, image/share reset, and destroyed facade invalidation. Browser tests

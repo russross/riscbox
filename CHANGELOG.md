@@ -4,6 +4,12 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Build and test the Alpine demo against the exact release archive before
+    publication, then deploy it to GitHub Pages. Add manual Release modes:
+    `test` produces downloadable runtime/demo artifacts without publication;
+    `publish` releases from main and can retry Pages using an existing release's
+    archive after verifying its tag's commit. Link the hosted demo from README.
+
 *   Define the current JavaScript embedding boundary with private runtime and
     storage internals, checked VM states/device inputs, and client-only generated
     declarations. Remove the redundant `start()` alias and unused raw startup

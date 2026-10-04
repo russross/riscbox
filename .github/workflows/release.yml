@@ -9,9 +9,15 @@ on:
       - .github/workflows/release.yml
       - .github/scripts/**
   workflow_dispatch:
+    inputs:
+      mode:
+        description: Test builds artifacts; publish releases and deploys the demo from main
+        type: choice
+        default: test
+        options: [test, publish]
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release
@@ -19,63 +25,45 @@ concurrency:
 
 jobs:
   release:
-    if: github.ref == 'refs/heads/main'
+    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
+    outputs:
+      publish: ${{ steps.version.outputs.publish }}
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+      tag_exists: ${{ steps.version.outputs.tag_exists }}
+      release_exists: ${{ steps.version.outputs.release_exists }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
 
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
           components: clippy
 
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v10
 
       - name: Check version transition
         id: version
         env:
           BEFORE_SHA: ${{ github.event.before }}
           EVENT_NAME: ${{ github.event_name }}
+          RELEASE_MODE: ${{ inputs.mode || 'publish' }}
           GH_TOKEN: ${{ github.token }}
-        run: |
-          set -eu
-          current=$(cargo metadata --locked --no-deps --format-version 1 | jq -er '.packages[] | select(.name == "riscbox") | .version')
-          wasm=$(cargo metadata --locked --no-deps --format-version 1 | jq -er '.packages[] | select(.name == "riscbox-wasm") | .version')
-          test "$current" = "$wasm" || { echo 'Rust package versions differ' >&2; exit 1; }
-          tag="v$current"
-          if [ "$EVENT_NAME" = push ]; then
-            test "$BEFORE_SHA" != 0000000000000000000000000000000000000000 || { echo 'Previous push revision is unavailable' >&2; exit 1; }
-            previous=$(git show "$BEFORE_SHA:Cargo.toml" | python3 -c 'import sys, tomllib; data=tomllib.loads(sys.stdin.read()); print(data.get("workspace", {}).get("package", {}).get("version", data["package"].get("version", "")))')
-            if [ "$current" = "$previous" ]; then
-              echo 'No package version change'
-              echo 'build=false' >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-            .github/scripts/release_version.py "$previous" "$current"
-          fi
-          if git rev-parse --verify "refs/tags/$tag^{commit}" >/dev/null 2>&1; then
-            tagged=$(git rev-parse "refs/tags/$tag^{commit}")
-            test "$tagged" = "$GITHUB_SHA" || { echo "Tag $tag points to another commit" >&2; exit 1; }
-            echo 'tag_exists=true' >> "$GITHUB_OUTPUT"
-            if gh release view "$tag" >/dev/null 2>&1; then
-              echo "Release $tag already exists"
-              echo 'build=false' >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-          else
-            echo 'tag_exists=false' >> "$GITHUB_OUTPUT"
-          fi
-          echo 'build=true' >> "$GITHUB_OUTPUT"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "version=$current" >> "$GITHUB_OUTPUT"
+        run: .github/scripts/release-plan.sh
 
       - name: Install build tools
         if: steps.version.outputs.build == 'true'
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang llvm lld binaryen gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu bc bison flex libssl-dev libelf-dev dwarves
+          sudo apt-get install -y clang llvm lld binaryen gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu bc bison flex libssl-dev libelf-dev dwarves qemu-system-misc fakeroot cpio erofs-utils
+          command -v google-chrome
 
       - name: Install browser module compiler
         if: steps.version.outputs.build == 'true'
@@ -92,28 +80,86 @@ jobs:
           make wasm
           make
 
-      - name: Package release
-        if: steps.version.outputs.build == 'true'
-        id: package
-        run: |
-          archive=build/releases/riscbox-${{ steps.version.outputs.version }}.tar.gz
-          tar -tzf "$archive" > /tmp/riscbox-archive-files
-          prefix=riscbox-${{ steps.version.outputs.version }}
-          for asset in riscbox.wasm riscbox.js riscbox.d.ts splitimg.py README.md STORAGE-ABI.md NINEP.md API.md HOWTO.md network/index.js; do
-            grep -Fx "$prefix/$asset" /tmp/riscbox-archive-files
-          done
-          echo "archive=$archive" >> "$GITHUB_OUTPUT"
-
-      - name: Publish release
-        if: steps.version.outputs.build == 'true'
+      # Deployment retries consume the published bytes rather than rebuilt payloads.
+      - name: Download existing release archive
+        if: steps.version.outputs.release_exists == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ steps.version.outputs.tag }}
           VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh release download "$TAG" --pattern "riscbox-$VERSION.tar.gz" --dir build/releases --clobber
+
+      - name: Package release
+        if: steps.version.outputs.build == 'true'
+        id: package
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          archive=build/releases/riscbox-$VERSION.tar.gz
+          tar -tzf "$archive" > /tmp/riscbox-archive-files
+          prefix=riscbox-$VERSION
+          for asset in riscbox.wasm riscbox.js riscbox.d.ts splitimg.py README.md STORAGE-ABI.md NINEP.md API.md HOWTO.md network/index.js; do
+            grep -Fx "$prefix/$asset" /tmp/riscbox-archive-files
+          done
+          node tools/check_release.mjs "$archive"
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+
+      - name: Build and validate demo
+        if: steps.version.outputs.build == 'true'
+        env:
           ARCHIVE: ${{ steps.package.outputs.archive }}
-          TAG_EXISTS: ${{ steps.version.outputs.tag_exists }}
+        run: |
+          make -C demo test RELEASE_ARCHIVE="$GITHUB_WORKSPACE/$ARCHIVE"
+          tar -czf build/releases/riscbox-demo.tar.gz -C demo/dist .
+
+      - name: Upload build artifacts
+        if: steps.version.outputs.build == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: riscbox-${{ steps.version.outputs.version }}-${{ github.run_id }}
+          path: build/releases/*.tar.gz
+          if-no-files-found: error
+
+      - name: Upload demo diagnostics
+        if: failure() && steps.version.outputs.build == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: demo-diagnostics-${{ github.run_id }}
+          path: demo/build/image-setup.log
+          if-no-files-found: warn
+
+      - name: Upload Pages artifact
+        if: steps.version.outputs.publish == 'true'
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: demo/dist
+
+  # Publication alone receives repository write access; test builds stay read-only.
+  publish:
+    needs: release
+    if: needs.release.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v8
+        with:
+          name: riscbox-${{ needs.release.outputs.version }}-${{ github.run_id }}
+          path: build/releases
+      - name: Publish release
+        if: needs.release.outputs.release_exists != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.release.outputs.tag }}
+          VERSION: ${{ needs.release.outputs.version }}
+          TAG_EXISTS: ${{ needs.release.outputs.tag_exists }}
         run: |
           set -eu
+          archive="build/releases/riscbox-$VERSION.tar.gz"
           if [ "$TAG_EXISTS" != true ]; then
             git config user.name 'github-actions[bot]'
             git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
@@ -121,6 +167,24 @@ jobs:
             git push origin "$TAG"
           fi
           case "${VERSION%%+*}" in
-            *-*) gh release create "$TAG" "$ARCHIVE" --title "Riscbox $VERSION" --generate-notes --verify-tag --prerelease ;;
-            *) gh release create "$TAG" "$ARCHIVE" --title "Riscbox $VERSION" --generate-notes --verify-tag ;;
+            *-*) gh release create "$TAG" "$archive" --title "Riscbox $VERSION" --generate-notes --verify-tag --prerelease ;;
+            *) gh release create "$TAG" "$archive" --title "Riscbox $VERSION" --generate-notes --verify-tag ;;
           esac
+
+  # Only successful publication runs can replace the public demo.
+  deploy:
+    needs: [release, publish]
+    if: needs.release.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+      - name: Deploy demo
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,6 +1,12 @@
 Release-based embedding demo
 ============================
 
+The [published demo](https://russross.github.io/riscbox/) updates after successful
+releases. The Release workflow builds this directory against the release archive
+and runs Chrome acceptance before publishing. Manual test runs provide a
+downloadable `riscbox-demo.tar.gz` without replacing the public site; see
+[release automation](../BUILDING.md#release-automation).
+
     make
     python3 -m http.server --directory dist 8000
 

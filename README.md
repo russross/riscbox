@@ -9,8 +9,10 @@ supported native emulator.
 Start with [HOWTO.md](HOWTO.md) for narrated embedding, storage, shutdown,
 recovery, and deployment workflows. [API.md](API.md) defines the current
 JavaScript calls, options, types, and enforced VM-state contracts. The
-[embedding demo](https://github.com/russross/riscbox/tree/main/demo) builds a
-plain Alpine app around exactly the assets in a release. Contributor setup and
+[live demo](https://russross.github.io/riscbox/) runs a plain Alpine app around
+exactly the assets in a release; its
+[source and build instructions](https://github.com/russross/riscbox/tree/main/demo)
+are in `demo/`. Contributor setup and
 explicit local validation commands are in
 [BUILDING.md](https://github.com/russross/riscbox/blob/main/BUILDING.md).
 

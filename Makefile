@@ -13,6 +13,7 @@ test-unit: js
 	cargo test --workspace
 	uv run -q --script tests/test_splitimg.py
 	node --test js/network.test.mjs js/riscbox.test.cjs
+	node --test tests/release_plan.test.mjs
 	node --test tests/ninep_wasm.test.mjs
 	node --test tests/ninep_abi.test.mjs
 

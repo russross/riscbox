@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Riscbox embedding demo</title>
+    <title>Riscbox demo</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@wterm/dom@0.5.4/src/terminal.css">
     <link rel="stylesheet" href="style.css">
     <script type="importmap">
@@ -21,8 +21,8 @@
     <script type="module" src="app.js"></script>
 </head>
 <body>
-    <h1>Riscbox embedding demo</h1>
-    <p>Generic Alpine disk + a host-owned 9p workspace. All file transfers and lifecycle actions are explicit.</p>
+    <h1>Riscbox demo</h1>
+    <p>A small Alpine Linux image that shares a 9p file system with the host. Controls are deliberately minimal and explicit so the embedding model is clear.</p>
     <p>VM: <output id="state">loading app</output> · <output id="message" aria-live="polite"></output></p>
 
     <fieldset id="vm-controls" disabled>
@@ -39,15 +39,15 @@
 
     <main>
         <section>
-            <h2>Console · 80×25</h2>
-            <p>At the prompt: <code>make</code>, then <code>make run</code>. <code>doas</code> needs no password.</p>
+            <h2>Console · (wterm at 80×25)</h2>
+            <p>At the prompt: <code>make</code>, then <code>make run</code>.</p>
             <div id="terminal" aria-label="Guest terminal"></div>
             <button id="clear-terminal" disabled>Clear terminal</button>
         </section>
         <section>
-            <h2>Host-owned 9p · guest /workspace</h2>
+            <h2>9p file system mounted as /workspace and shared with the host</h2>
             <fieldset id="share-controls" disabled>
-                <legend>Replace the namespace while halted</legend>
+                <legend>Replace the entire file tree (only while halted) </legend>
                 <label for="source-tree">Source tree</label>
                 <select id="source-tree">
                     <option value="arithmetic">Arithmetic practice</option>
@@ -58,7 +58,7 @@
                 <button id="share-reset">Reload current tree</button>
                 <button id="share-clear">Clear 9p</button>
             </fieldset>
-            <p>These actions preserve the disk and editor buffer. Boot separately after replacing a tree.</p>
+            <p>The file system is live and shared with the guest. This demo makes copying back and forth explicit, but it can also be trigger based and automatic.</p>
             <div class="files">
                 <div>
                     <button id="refresh-tree" disabled>Refresh tree</button>
@@ -78,12 +78,10 @@
 
     <details>
         <summary>Storage and lifecycle behavior</summary>
-        <p>Soft controls request guest action and return immediately. Hard controls stop or restart execution.
-        Boot restarts from the boot payloads. Reset image halts, cold-resets RAM, discards the HTTP disk overlay,
-        and boots; it preserves 9p. Clear/reload 9p preserves the disk. Destroy releases both stores.</p>
-        <p>The EROFS base is read-only. Files in the tmpfs-backed home and temporary directories disappear
+        <p>Soft shutdown and reboot just send a request to guest OS and return immediately. Hard shutdown and reboot stop the guest instantly.</p>
+        <p>The demo uses a read-only EROFS base image and Linux is set up with a tmpfs overlay to capture writes. The system also support writable ext4 file systems that capture changes with a copy-on-write overlay. Reboots normally preserve the overlay but reset clears it for a clean restart.</p>
+        <p>The 9p file system also survives reboots normally, but the host can reset it while the guest is stopped. The host can also make arbitrary changes on the fly through individual file operations.</p>
         on every boot, including reboot. Files in 9p and the HTTP disk overlay survive reboot until explicitly reset.</p>
-        <p>Selecting a file does not read it. Copy to editor reads its current bytes. Save to 9p replaces the file
         with the editor text. Refresh tree lists the current namespace. Nothing saves automatically or checks for lost edits.</p>
     </details>
     <h2>Host actions and VM notifications</h2>

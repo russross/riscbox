@@ -65,7 +65,7 @@ fn uart_models_fifo_interrupts_loopback_and_transmit() {
     assert_eq!(uart.receive_space(), 0);
     uart.write(0, b'z');
     assert_eq!(uart.read(0), b'b');
-    assert!(uart.take_transmitted().is_empty());
+    assert_eq!(uart.take_transmitted(), b"");
     uart.write(4, 0);
     uart.write(0, b'!');
     assert_eq!(uart.take_transmitted(), b"!");

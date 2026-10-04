@@ -517,11 +517,9 @@ fn framebuffer_dirty_rows_are_merged_and_consumed() {
     assert_eq!(spans.len(), 1);
     assert_eq!(spans[0].y, 16);
     assert_eq!(spans[0].height, 2);
-    assert!(
-        machine
-            .take_redraw_spans()
-            .expect("consumed snapshot")
-            .is_empty()
+    assert_eq!(
+        machine.take_redraw_spans().expect("consumed snapshot"),
+        vec![]
     );
 
     machine
@@ -583,11 +581,9 @@ fn framebuffer_snapshot_invalidates_cached_cpu_write_translation() {
         machine.take_redraw_spans().expect("first dirty snapshot"),
         [RedrawSpan { y: 0, height: 2 }]
     );
-    assert!(
-        machine
-            .take_redraw_spans()
-            .expect("consumed snapshot")
-            .is_empty()
+    assert_eq!(
+        machine.take_redraw_spans().expect("consumed snapshot"),
+        vec![]
     );
 
     machine.run_cpu(1_000);

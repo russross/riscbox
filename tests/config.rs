@@ -68,7 +68,7 @@ fn applies_defaults_and_reports_schema_errors() {
         VmConfig::parse("{version:1,machine:\"riscv64\",memory_size:128}").expect("minimal config");
     assert_eq!(config.console, Console::Virtio);
     assert!(!config.uart_output);
-    assert!(config.drives.is_empty());
+    assert_eq!(config.drives, vec![]);
     config.apply_command_line("console=hvc0");
     assert_eq!(config.command_line.as_deref(), Some(" console=hvc0"));
     config.apply_command_line("!console=ttyS0");
@@ -112,7 +112,7 @@ fn numbered_entries_stop_at_gaps_and_enforce_limits() {
         "{version:1,machine:\"riscv64\",memory_size:128,drive1:{file:\"ignored\"}}",
     )
     .expect("gap is accepted");
-    assert!(config.drives.is_empty());
+    assert_eq!(config.drives, vec![]);
 
     let too_many = "{version:1,machine:\"riscv64\",memory_size:128,drive0:{file:\"0\"},drive1:{file:\"1\"},drive2:{file:\"2\"},drive3:{file:\"3\"},drive4:{file:\"4\"}}";
     assert!(VmConfig::parse(too_many).is_err());

@@ -1751,7 +1751,7 @@ mod tests {
         assert_eq!(fs.next_change().unwrap().source, ChangeSource::Guest);
         assert_eq!(fs.paths_of(id), vec!["moved/file"]);
         fs.remove("moved/file").unwrap();
-        assert!(fs.paths_of(id).is_empty());
+        assert_eq!(fs.paths_of(id), Vec::<String>::new());
     }
 
     #[test]

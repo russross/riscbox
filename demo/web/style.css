@@ -5,6 +5,8 @@ h2 { font-size: 1rem; }
 fieldset { margin: .75rem 0; }
 button, select { margin: .2rem; }
 main { display: flex; flex-wrap: wrap; gap: 1.5rem; align-items: start; }
+/* Widgets set each panel's width; explanatory text wraps within that width. */
+main > section { width: min-content; }
 #terminal { width: 700px; height: 425px; }
 .files { display: flex; gap: 1rem; }
 .files label, .files p { margin: 0 0 .5rem; }

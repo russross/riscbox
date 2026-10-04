@@ -4,6 +4,9 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Size demo panels from their widgets so explanatory text does not force the
+    file tree and editor below the console before the widgets run out of room.
+
 *   Replace the demo's three small BSD examples with all 18 vendored,
     self-contained BSD-GAMES 3.3 TinyCC projects. Add ncurses development files,
     terminal data, and Hangman's dictionary to Alpine. Build every game during

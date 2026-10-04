@@ -4,6 +4,10 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Link the demo to rendered HTML guides and source provenance. Build these
+    pages with Pandoc, styled like `view-markdown` with pinned CDN-hosted CMU
+    fonts, and keep local documentation links within the rendered pages.
+
 *   Align the demo file viewer and editor with matching heights and aligned
     labels and transfer controls.
 

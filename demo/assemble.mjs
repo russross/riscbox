@@ -12,6 +12,25 @@ try {
     await cp("web", "dist", { recursive: true, force: true });
     await cp("examples", "dist/examples", { recursive: true, force: true });
     const assets = await readdir(release);
+    // Render packaged guides separately so the copied runtime release remains unchanged.
+    await rm("dist/docs", { recursive: true, force: true });
+    for (const [source, destination, documents] of [
+        [release, "dist/docs/riscbox", assets.filter(asset => asset.endsWith(".md"))],
+        ["examples", "dist/docs/examples", ["README.md"]],
+    ]) {
+        await mkdir(destination, { recursive: true });
+        for (const document of documents) {
+            execFileSync("pandoc", [
+                "--from=commonmark_x", "--to=html5", "--standalone", "--wrap=none",
+                `--metadata=pagetitle:${document.replace(/\.md$/, "")}`,
+                "--include-in-header=docs/header.html", "--lua-filter=docs/links.lua",
+                `--output=${join(destination, document.replace(/\.md$/, ".html"))}`,
+                "--", join(source, document),
+            ], { stdio: "inherit" });
+        }
+    }
+
+    // Boot assets and the disk splitter come exclusively from the selected release.
     const bios = assets.find(asset => /^fw_dynamic\.bin-.*\.gz$/.test(asset));
     const kernel = assets.find(asset => /^linux-.*\.gz$/.test(asset));
     if (!bios || !kernel) throw new Error("release has no boot payloads");
@@ -44,6 +63,8 @@ try {
     }
     await writeFile("dist/examples.json", JSON.stringify(trees, null, 2) + "\n");
 } catch (error) {
-    console.error(`Demo assembly failed: ${error.message}`);
+    const message = error.code === "ENOENT" && error.path === "pandoc"
+        ? "pandoc is required but was not found" : error.message;
+    console.error(`Demo assembly failed: ${message}`);
     process.exitCode = 1;
 }

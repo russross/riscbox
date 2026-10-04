@@ -4,6 +4,53 @@ import { join, resolve } from "node:path";
 import test from "node:test";
 import { runChromePage } from "./chrome.mjs";
 
+// Documentation stays navigable as rendered HTML, with the reference typography.
+test("demo documentation renders styled HTML and links between guides", { timeout: 60_000 }, async () => {
+    const directory = await mkdtemp(join(tmpdir(), "riscbox-demo-docs-"));
+    try {
+        await runChromePage(`<!doctype html><iframe src="/riscbox/docs/riscbox/API.html" style="width:1000px;height:700px"></iframe><script type="module">
+const frame = document.querySelector('iframe');
+const check = (condition, message) => { if (!condition) throw new Error(message); };
+try {
+    await new Promise(resolve => frame.addEventListener('load', resolve));
+    const doc = frame.contentDocument;
+    await doc.fonts.ready;
+    check(doc.querySelector('h1')?.textContent.includes('API'), 'rendered API heading');
+    check(frame.contentWindow.getComputedStyle(doc.body).fontSize === '17px', 'reference body typography');
+    check(frame.contentWindow.getComputedStyle(doc.querySelector('h1')).color === 'rgb(0, 77, 0)', 'reference heading color');
+    for (const family of ['CMU Serif', 'CMU Sans Serif', 'CMU Typewriter Text']) {
+        check([...doc.fonts].some(font => font.family === family && font.status === 'loaded'), 'CDN font loaded: ' + family);
+    }
+    frame.style.width = '350px';
+    check(frame.contentWindow.getComputedStyle(doc.documentElement).fontSize === '17px', 'reference root typography on mobile');
+    check(doc.body.getBoundingClientRect().width <= 350, 'mobile document fits viewport');
+
+    // Follow every local guide link from the app and from its rendered documents.
+    const index = new DOMParser().parseFromString(await (await fetch('/riscbox/index.html')).text(), 'text/html');
+    const pending = [...index.querySelectorAll('a[href]')].map(link => new URL(link.getAttribute('href'), location.origin + '/riscbox/'));
+    const visited = new Set();
+    while (pending.length) {
+        const url = pending.pop();
+        check(!url.pathname.endsWith('.md'), 'local link still targets Markdown: ' + url);
+        if (visited.has(url.pathname)) continue;
+        visited.add(url.pathname);
+        const response = await fetch(url);
+        check(response.ok, 'missing documentation: ' + url);
+        const page = new DOMParser().parseFromString(await response.text(), 'text/html');
+        check(page.querySelector('h1'), 'missing rendered content: ' + url);
+        for (const link of page.querySelectorAll('a[href]')) {
+            const target = new URL(link.getAttribute('href'), url);
+            if (target.origin === location.origin && target.pathname.startsWith('/riscbox/docs/')) pending.push(target);
+        }
+    }
+    check(visited.has('/riscbox/docs/examples/README.html'), 'rendered provenance');
+    check(visited.has('/riscbox/docs/riscbox/STORAGE-ABI.html'), 'linked storage guide');
+    await fetch('/result?status=pass');
+} catch (error) { await fetch('/result?status=' + encodeURIComponent(error.stack ?? String(error))); }
+</script>`, directory, { root: resolve(import.meta.dirname, "../demo/dist"), basePath: "/riscbox", timeoutMs: 50_000 });
+    } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
 // The page serves only the assembled application, including its unchanged release tree.
 test("release demo boots, shares files, compiles games, and exercises lifecycle controls", { timeout: 300_000 }, async () => {
     const directory = await mkdtemp(join(tmpdir(), "riscbox-demo-"));

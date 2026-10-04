@@ -1,6 +1,6 @@
 RELEASE_ARCHIVE ?=
 IMAGE_SOURCES := $(shell find guest examples -type f) build-image.sh
-APP_SOURCES := $(shell find web examples -type f) assemble.mjs
+APP_SOURCES := $(shell find web examples docs -type f) assemble.mjs
 
 all: release
 	$(MAKE) dist/.built

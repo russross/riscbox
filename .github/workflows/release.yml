@@ -62,7 +62,7 @@ jobs:
         if: steps.version.outputs.build == 'true'
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang llvm lld binaryen gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu bc bison flex libssl-dev libelf-dev dwarves qemu-system-misc fakeroot cpio erofs-utils
+          sudo apt-get install -y clang llvm lld binaryen gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu bc bison flex libssl-dev libelf-dev dwarves qemu-system-misc fakeroot cpio erofs-utils pandoc
           command -v google-chrome
 
       - name: Install browser module compiler

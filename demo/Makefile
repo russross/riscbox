@@ -1,8 +1,9 @@
 RELEASE_ARCHIVE ?=
+DOCUMENTATION_REF ?= $(if $(RELEASE_ARCHIVE),,$(shell git rev-parse HEAD))
 # Source-only prerequisites keep local game builds out of image and app assembly.
 GAME_SOURCES := $(shell find bsd-games-3.3 -type f \( -name '*.c' -o -name '*.h' -o -name '*.6' -o -name '*.md' -o -name Makefile -o -name LICENSE \))
 IMAGE_SOURCES := $(shell find guest -type f) $(GAME_SOURCES) build-image.sh Makefile
-APP_SOURCES := $(shell find web docs -type f) $(GAME_SOURCES) assemble.mjs Makefile
+APP_SOURCES := $(shell find web -type f) $(GAME_SOURCES) assemble.mjs Makefile
 
 all: release
 	$(MAKE) dist/.built
@@ -21,8 +22,8 @@ release:
 build/rootfs.erofs: $(IMAGE_SOURCES) build/release.sha256
 	./build-image.sh "build/release/$$(cat build/release.name)"
 
-dist/.built: build/rootfs.erofs build/release.sha256 $(APP_SOURCES)
-	node assemble.mjs
+dist/.built: build/rootfs.erofs build/release.sha256 $(APP_SOURCES) FORCE
+	DOCUMENTATION_REF="$(DOCUMENTATION_REF)" node assemble.mjs
 	touch $@
 
 test: all
@@ -31,5 +32,7 @@ test: all
 clean:
 	rm -rf build dist
 
-.PHONY: all release test clean
+FORCE:
+
+.PHONY: all release test clean FORCE
 .DELETE_ON_ERROR:

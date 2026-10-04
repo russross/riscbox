@@ -12,7 +12,7 @@ downloadable `riscbox-demo.tar.gz` without replacing the public site; see
 
 Open <http://localhost:8000/>. From the repository root, `make demo` performs the
 same build. Install QEMU's RISC-V system emulator, fakeroot, cpio, erofs-utils,
-`curl`, Node.js, Pandoc, and `uv`, plus the core build prerequisites in
+`curl`, Node.js, and `uv`, plus the core build prerequisites in
 [BUILDING.md](../BUILDING.md). No sudo or host filesystem mounts are needed.
 
 The default build runs `make -C ..`, extracts the resulting release archive
@@ -26,11 +26,11 @@ The image builder consumes only the release's compressed Linux and OpenSBI
 payloads. Assembly invokes its packaged `splitimg.py`. No application code or
 image helper reads the repository's runtime source or internal ABI.
 
-Assembly renders the packaged Markdown guides and example provenance with
-Pandoc into `dist/docs/`. The demo links to these HTML pages, whose local guide
-links also use HTML. Styling follows `view-markdown`, with CMU serif, sans, and
-typewriter fonts loaded from the pinned jsDelivr CDN package. The copied release
-under `dist/riscbox/` remains unchanged.
+Assembly links guides and example provenance to GitHub at the archive
+version tag. Local source builds and manual workflow tests use their source
+commit instead. Override the revision with `DOCUMENTATION_REF=TAG_OR_COMMIT`
+when building against an unpublished archive. The copied release under
+`dist/riscbox/` remains unchanged.
 
 Guest image
 -----------

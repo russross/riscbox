@@ -14,9 +14,9 @@ Unreleased
     Copy Drop4 score rows before formatting to avoid an RV64 TinyCC warning.
     End Wumpus's prompt line when quitting or reaching end of input.
 
-*   Link the demo to rendered HTML guides and source provenance. Build these
-    pages with Pandoc, styled like `view-markdown` with pinned CDN-hosted CMU
-    fonts, and keep local documentation links within the rendered pages.
+*   Link demo guides and source provenance to GitHub at the release tag, or
+    source commit for local and manual test builds. Remove Pandoc and the
+    separate documentation rendering setup.
 
 *   Align the demo file viewer and editor with matching heights and aligned
     labels and transfer controls.

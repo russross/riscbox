@@ -17,23 +17,13 @@ try {
             /(?:\.(?:c|h|6|md)|\/(?:Makefile|LICENSE))$/.test(source),
     });
     const assets = await readdir(release);
-    // Render packaged guides separately so the copied runtime release remains unchanged.
+    // Published archives use their release tag; test builds supply their source commit.
+    const documentationRef = process.env.DOCUMENTATION_REF || `v${name.slice("riscbox-".length)}`;
+    const documentationBase = `https://github.com/russross/riscbox/blob/${encodeURIComponent(documentationRef)}/`;
+    const indexPath = "dist/index.html";
+    const index = await readFile(indexPath, "utf8");
+    await writeFile(indexPath, index.replaceAll("{{DOCUMENTATION_BASE}}", documentationBase));
     await rm("dist/docs", { recursive: true, force: true });
-    for (const [source, destination, documents] of [
-        [release, "dist/docs/riscbox", assets.filter(asset => asset.endsWith(".md"))],
-        ["bsd-games-3.3", "dist/docs/examples", ["README.md"]],
-    ]) {
-        await mkdir(destination, { recursive: true });
-        for (const document of documents) {
-            execFileSync("pandoc", [
-                "--from=commonmark_x", "--to=html5", "--standalone", "--wrap=none",
-                `--metadata=pagetitle:${document.replace(/\.md$/, "")}`,
-                "--include-in-header=docs/header.html", "--lua-filter=docs/links.lua",
-                `--output=${join(destination, document.replace(/\.md$/, ".html"))}`,
-                "--", join(source, document),
-            ], { stdio: "inherit" });
-        }
-    }
 
     // Boot assets and the disk splitter come exclusively from the selected release.
     const bios = assets.find(asset => /^fw_dynamic\.bin-.*\.gz$/.test(asset));
@@ -70,8 +60,6 @@ try {
     }
     await writeFile("dist/examples.json", JSON.stringify(trees, null, 2) + "\n");
 } catch (error) {
-    const message = error.code === "ENOENT" && error.path === "pandoc"
-        ? "pandoc is required but was not found" : error.message;
-    console.error(`Demo assembly failed: ${message}`);
+    console.error(`Demo assembly failed: ${error.message}`);
     process.exitCode = 1;
 }

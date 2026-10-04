@@ -62,7 +62,7 @@ jobs:
         if: steps.version.outputs.build == 'true'
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang llvm lld binaryen gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu bc bison flex libssl-dev libelf-dev dwarves qemu-system-misc fakeroot cpio erofs-utils pandoc
+          sudo apt-get install -y clang llvm lld binaryen gcc-riscv64-linux-gnu binutils-riscv64-linux-gnu bc bison flex libssl-dev libelf-dev dwarves qemu-system-misc fakeroot cpio erofs-utils
           command -v google-chrome
 
       - name: Install browser module compiler
@@ -109,6 +109,7 @@ jobs:
         if: steps.version.outputs.build == 'true'
         env:
           ARCHIVE: ${{ steps.package.outputs.archive }}
+          DOCUMENTATION_REF: ${{ steps.version.outputs.publish == 'true' && steps.version.outputs.tag || github.sha }}
         run: |
           make -C demo test RELEASE_ARCHIVE="$GITHUB_WORKSPACE/$ARCHIVE"
           tar -czf build/releases/riscbox-demo.tar.gz -C demo/dist .

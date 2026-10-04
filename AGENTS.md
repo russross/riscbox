@@ -84,8 +84,8 @@ Repository map and terminology
     plain browser app. Its Makefile stages the unchanged release tree and uses
     only packaged runtime, boot payloads, and splitter assets. Historical image
     projects and the shared application client live outside this repository.
-    Assembly uses Pandoc to render packaged guides and example provenance into
-    a separate `docs/` tree with CDN fonts and local HTML documentation links.
+    Assembly links to GitHub-rendered guides and example provenance at the
+    archive version tag; local and manual test builds use their source commit.
 *   Root `package.json` owns the pinned build-only TypeScript compiler.
     Core tests own their Chrome harness and require no mounted client source.
 *   `kernel/` owns the canonical custom Linux kernel consumed by image builds.

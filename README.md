@@ -1,85 +1,57 @@
-Riscbox virtual platform
-========================
+Riscbox
+=======
 
-Riscbox is an emulator that runs a RISC-V 64 VM in a browser. The runtime is
-WebAssembly (WASM) with a small JavaScript adapter.
+Riscbox is an emulator that runs a RISC-V 64 VM in a browser. The runtime is WebAssembly (WASM) with a small JavaScript adapter.
 
-This is a fork of Fabrice Bellard's TinyEMU, but there are so many forks out
-there that a name change seemed like a good idea. The core emulation loop is
-written in C and is an evolution of TinyEMU, but the surrounding platform is
-written in Rust and adds more device support and some modernization.
+This is a fork of Fabrice Bellard's TinyEMU, but there are so many forks out there that a name change seemed like a good idea. The inner emulation loop is from TinyEMU with some bug fixes and added instructions, while the surrounding platform is written in Rust and adds more device support and modernization.
 
-Start with [HOWTO.md](HOWTO.md) for narrated embedding, storage, shutdown,
-recovery, and deployment workflows. [API.md](API.md) defines the current
-JavaScript calls, options, types, and enforced VM-state contracts. The
-[live demo](https://russross.github.io/riscbox/) runs a plain Alpine app around
-exactly the assets in a release; its
-[source and build instructions](https://github.com/russross/riscbox/tree/main/demo)
-are in `demo/`. Contributor setup and
-explicit local validation commands are in
-[BUILDING.md](https://github.com/russross/riscbox/blob/main/BUILDING.md).
+I recommend starting here with a [live demo](https://russross.github.io/riscbox/)
 
-Release contents
-----------------
+It runs a small Alpine Linux instance and exposes some of the main VM lifecycle controls. The demo's [source and build instructions](https://github.com/russross/riscbox/tree/main/demo) are part of the repo and show how to embed a VM in your page.
 
-Each release has one `riscbox-VERSION.tar.gz` archive containing `riscbox.js`,
-`riscbox.wasm`, `riscbox.d.ts`, the optional `network/` modules, the standalone
-`splitimg.py`, and hash-named gzip Linux/OpenSBI/U-Boot payloads. It includes this
-README, API/HOWTO guides, implementation storage/protocol references, changelog,
-and license. Guest root filesystems, example apps, and image build scripts are
-separate application assets.
+The docs for using riscbox are split into two parts:
 
-Embedding applications use the JavaScript adapter. Raw WASM exports, scheduling,
-packet buffers, and internal storage handles are implementation details. The
-source's native configuration parser remains for development tests. Documentation
-and declarations describe the current release; no legacy entry points or
-cross-release stability guarantees are provided.
+* [HOWTO.md](HOWTO.md) that walks through common setup and workflow scenarios
+* [API.md](API.md) defines the current JavaScript calls, options, types, and enforced VM-state contracts
 
-Supported platform
-------------------
+Most users will just a [packaged release from github](https://github.com/russross/riscbox/releases) that includes riscbox assets, plus a Linux kernel image, OpenSBI firmware, and a U-boot bootloader, all customized and pre-built.
 
-The target is one little-endian RV64 hart with M/S/U modes and Sv39, following
-QEMU `virt` sufficiently to boot current xv6 and deliberately prepared Alpine.
-Devices include a 16550A UART, optional VirtIO console, Goldfish RTC, PLIC,
-ACLINT MSWI/MTIMER, SiFive test finisher, simple framebuffer, and VirtIO MMIO
-block, resident 9p, Ethernet, entropy, keyboard, and tablet devices.
+See [BUILDING.md](https://github.com/russross/riscbox/blob/main/BUILDING.md) if you want to build from source, run tests, etc.
 
-Rust owns platform devices, VM storage, boot loading, and browser requests.
-HTTP disks combine bounded clean caching with sparse session-local overlays;
-resident 9p trees support synchronous copied host operations while the guest
-runs. Applications own persistence. Destroy or page reload loses VM storage.
 
-RV32, multiple harts, vectors, hypervisor support, PCIe, AIA, a native UI,
-SLIRP/TAP, and native filesystem/socket backends are outside scope. Networking
-requires a host-selected WebSocket origin; no production origin is supplied.
+The platform
+------------
 
-Platform summary
-----------------
+Riscbox emulates:
 
-The compatibility references are the
-[RVA23 profiles](https://docs.riscv.org/reference/rva23/rva23-profiles.html) and
-QEMU's [`virt` machine](https://www.qemu.org/docs/master/system/riscv/virt.html).
-Riscbox implements RV64 I, M, A, F, D, C, the advertised Zba/Zbb/Zbs subsets,
-and selected current supervisor and scalar extensions used by its guests. It
-uses TinyEMU's bit-exact integer SoftFP lineage. Riscbox is not RVA23 compliant;
-vectors and other deliberately omitted requirements are never advertised.
-PMP CSRs retain masks and locks for firmware compatibility, but PMP permissions
-do not restrict memory accesses.
+* A single little-endian RISC-V 64 core with MMU and privilege modes for full OS support
+* A useful set of Hardware that (mostly based on QEMU's virt platform):
+    * VirtIO console and a 16550A UART
+    * A block device with a couple main modes:
+        * Stream blocks from a read-only web server on demand, local copy-on-write for changes as it runs
+        * Host app supplies an entire memory-based read-write image
+    * A file server that is entirely in host app memory:
+        * The guest interacts with it using Linux's standard 9p2000.L driver over VirtIO
+        * The host app can also read and write through a simplified, synchronous API, and it can watch files and be notified of changes
+    * An ethernet device: packets are streamed to the server, which relays them to the internet (requires a server-side adapter that is not yet provided)
+    * A simple framebuffer device (no JavaScript adapter for this yet, so this is a work in progress)
+    * A Goldfish realtime clock (RTC)
+    * PLIC, ACLINT MSWI/MTIMER (interrupt and timer support)
+    * SiFive test finisher (for initiating shutdowns and reboots)
+    * An entropy source for randomness
 
-The platform follows QEMU `virt` addresses for RAM, reset, UART, VirtIO MMIO,
-ACLINT MSWI and MTIMER, PLIC, and the test finisher, and adds the QEMU-compatible Goldfish RTC.
-The generated device tree describes only configured devices.
+The block device is set up as a simple way to distribute stable base images that are generic for a wide set of users. The 9p file system is great for sharing state with the host and customizing a guest image on the fly for each user.
 
-TinyEMU relationship and license
----------------------------------
+The block device and 9p file system can be reset while the guess is halted, or they can persist across guest reboots.
 
-Riscbox began as a focused fork of Fabrice Bellard's
-[TinyEMU](https://bellard.org/tinyemu/) and retains its MIT license and copyright
-notices.
+Riscbox does NOT implement:
 
-The active `tinyemu-core/` contains a freestanding subset of TinyEMU's C
-CPU, SoftFP, and physical memory implementation. Rust owns the platform,
-devices, browser requests, and C allocations. An execution quantum may enter C
-multiple times to inject guest time at a timer deadline or process host work;
-C calls Rust for device accesses.
-Project history is recorded in [CHANGELOG.md](CHANGELOG.md).
+* Multiple cores
+* PMP (mainly used by embedded systems where virtual memory is overkill)
+* Vector instructions
+
+
+License
+-------
+
+Riscbox retains the MIT license and copyright notices from [TinyEMU](https://bellard.org/tinyemu/)

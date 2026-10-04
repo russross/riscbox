@@ -58,10 +58,9 @@
                 <button id="share-reset">Reload current tree</button>
                 <button id="share-clear">Clear 9p</button>
             </fieldset>
-            <p>The file system is live and shared with the guest. This demo makes copying back and forth explicit, but it can also be trigger based and automatic.</p>
+            <p>The file tree updates automatically as the host or guest changes the shared file system. Copying to the editor and saving back remain explicit actions.</p>
             <div class="files">
                 <div>
-                    <button id="refresh-tree" disabled>Refresh tree</button>
                     <label for="files">Files and directories</label>
                     <select id="files" size="12" disabled></select>
                     <button id="read-file" disabled>Copy to editor</button>
@@ -81,8 +80,8 @@
         <p>Soft shutdown and reboot just send a request to guest OS and return immediately. Hard shutdown and reboot stop the guest instantly.</p>
         <p>The demo uses a read-only EROFS base image and Linux is set up with a tmpfs overlay to capture writes. The system also support writable ext4 file systems that capture changes with a copy-on-write overlay. Reboots normally preserve the overlay but reset clears it for a clean restart.</p>
         <p>The 9p file system also survives reboots normally, but the host can reset it while the guest is stopped. The host can also make arbitrary changes on the fly through individual file operations.</p>
-        on every boot, including reboot. Files in 9p and the HTTP disk overlay survive reboot until explicitly reset.</p>
-        with the editor text. Refresh tree lists the current namespace. Nothing saves automatically or checks for lost edits.</p>
+        <p>Boot output stays in terminal history on every boot, including reboot. Files in 9p and the HTTP disk overlay survive reboot until explicitly reset.</p>
+        <p>Copy to editor reads the selected file. Save to 9p replaces the copied file with the editor text. The file tree updates automatically; nothing saves automatically or checks for lost edits.</p>
     </details>
     <h2>Host actions and VM notifications</h2>
     <pre id="events" aria-live="polite"></pre>

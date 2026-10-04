@@ -9,5 +9,5 @@ Then try:
     make run
 
 Use the file browser to copy a file into the editor, then explicitly Save to 9p.
-Guest writes appear after Refresh tree. No editor changes are saved automatically.
+The file tree updates automatically. No editor changes are saved automatically.
 The base disk is EROFS; /tmp, /var, and /home are temporary. doas needs no password.

@@ -8,6 +8,7 @@ const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: true });
 let runtime;
 let workspace;
+let unsubscribeTree;
 let phase = "absent";
 let busy = false;
 let currentTree = "arithmetic";
@@ -85,7 +86,7 @@ function updateControls() {
     }
     element("image-reset").disabled = phase !== "running" && phase !== "halted";
     element("destroy").disabled = phase !== "halted" && phase !== "preparing";
-    for (const id of ["refresh-tree", "files", "read-file", "download-file"]) {
+    for (const id of ["files", "read-file", "download-file"]) {
         element(id).disabled = busy || !workspace;
     }
     element("save-file").disabled = busy || !workspace || editorPath === null;
@@ -107,8 +108,13 @@ async function prepare() {
     try {
         await runtime.prepareFromUrl(new URL("riscbox.cfg", location.href).href);
         workspace = runtime.filesystem("workspace");
+        subscribeTree();
+        refreshTree();
         setPhase("halted");
     } catch (error) {
+        unsubscribeTree?.(); unsubscribeTree = null;
+        workspace = null;
+        element("files").replaceChildren();
         await runtime.destroy();
         setPhase("absent");
         throw error;
@@ -145,25 +151,45 @@ async function loadTree(id) {
         workspace.setAttributes(path, { ...attributes, uid: 1000, gid: 1000 });
     }
     currentTree = id;
-    refreshTree();
     element("message").textContent = `Loaded ${id}; boot when ready.`;
 }
 
-// Listing, copying out, and copying back are separate actions with no subscriptions.
+// Coalesce change notifications while keeping each subscription tied to its VM's share.
+function subscribeTree() {
+    const share = workspace;
+    let pending = false;
+    unsubscribeTree = share.subscribe(() => {
+        if (pending) return;
+        pending = true;
+        queueMicrotask(() => {
+            pending = false;
+            if (workspace !== share) return;
+            try { refreshTree(); }
+            catch (error) { reportError(error); }
+        });
+    });
+}
+
+// Relisting preserves selection and scroll position without transferring editor bytes.
 function refreshTree() {
-    element("files").replaceChildren();
+    const files = element("files");
+    const selected = files.value;
+    const scrollTop = files.scrollTop;
+    files.replaceChildren();
     function list(path = "", depth = 0) {
         for (const entry of workspace.listDirectory(path)) {
             const full = path ? `${path}/${entry.name}` : entry.name;
             const option = document.createElement("option");
             option.value = full;
-            option.textContent = `${"  ".repeat(depth)}${entry.name}${entry.kind === "directory" ? "/" : ""}`;
+            option.textContent = `${"\u00a0\u00a0".repeat(depth)}${entry.name}${entry.kind === "directory" ? "/" : ""}`;
             option.disabled = entry.kind !== "file";
-            element("files").append(option);
+            files.append(option);
             if (entry.kind === "directory") list(full, depth + 1);
         }
     }
     list();
+    files.value = selected;
+    files.scrollTop = scrollTop;
 }
 function selectedFile() {
     const path = element("files").value;
@@ -199,12 +225,13 @@ element("image-reset").onclick = () => action("halt(); coldReset(); block(0).dis
     await runtime.boot();
 });
 element("destroy").onclick = () => action("destroy()", async () => {
+    unsubscribeTree?.(); unsubscribeTree = null;
     await runtime.destroy(); workspace = null; setPhase("absent");
+    element("files").replaceChildren();
 });
 element("load-tree").onclick = () => action("filesystem.clear(); writeFile() source tree", () => loadTree(element("source-tree").value));
 element("share-reset").onclick = () => action("reload current 9p tree", () => loadTree(currentTree));
-element("share-clear").onclick = () => action("filesystem.clear()", () => { workspace.clear(); refreshTree(); });
-element("refresh-tree").onclick = () => action("filesystem.listDirectory()", refreshTree);
+element("share-clear").onclick = () => action("filesystem.clear()", () => workspace.clear());
 element("read-file").onclick = () => action("filesystem.readFile() → editor", readFile);
 element("save-file").onclick = () => action("editor → filesystem.writeFile()", () => {
     workspace.writeFile(editorPath, editor.state.doc.toString());

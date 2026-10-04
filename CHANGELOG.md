@@ -4,6 +4,10 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Keep the demo's indented file tree synchronized with host and guest 9p
+    changes, preserving selection and scroll position. Remove Refresh tree;
+    copying to the editor and saving back remain explicit actions.
+
 *   Enable Linux ISA discovery fallback during QEMU demo image preparation.
     Ubuntu 24.04's QEMU 8.2 supplies the legacy `riscv,isa` property; accepting
     it lets Linux enable floating-point state before starting Alpine userspace.

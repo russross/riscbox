@@ -9,6 +9,7 @@ main { display: flex; flex-wrap: wrap; gap: 1.5rem; align-items: start; }
 .files { display: flex; gap: 1rem; }
 .files label { display: block; }
 #files { display: block; width: 230px; height: 330px; }
+#files option { font-family: monospace; white-space: pre; }
 #editor { width: 600px; height: 425px; border: 1px solid #aaa; }
 .cm-editor { height: 100%; }
 .cm-scroller { overflow: auto; }

@@ -206,6 +206,8 @@ older QEMU versions, including the release runner's QEMU 8.2.
 It installs TinyCC, its static runtime, musl headers, make, doas, and small tools.
 Original BSD arithmetic, Wumpus, and number source trees compile with TinyCC.
 The host populates a resident `workspace` share owned by UID/GID 1000.
+The indented file tree subscribes to host and guest filesystem changes while
+copying to and from the editor remains explicit.
 The app uses pinned CDN Wterm and CodeMirror modules without an application
 build step. It exposes explicit preparation, boot, shutdown, reboot, cold/image
 reset, share replacement, directory listing, file copying, and saving controls.

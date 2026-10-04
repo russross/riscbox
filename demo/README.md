@@ -52,7 +52,7 @@ Explicit workflows
    VM. Arithmetic is loaded by default before the first boot.
 2. In the terminal, run `make` and `make run` under `/workspace`. The individual
    [BSD examples](examples/README.md) retain their upstream licenses.
-3. Click **Refresh tree**, select a file, and click **Copy to editor**. Selecting
+3. Select a file in the automatically updated, indented tree and click **Copy to editor**. Selecting
    a file alone does not read its contents. **Save to 9p** writes the editor's
    entire current text to that path.
 4. Try soft shutdown/reboot, forced halt/reboot, boot, image reset, share clear,
@@ -61,8 +61,8 @@ Explicit workflows
    disk. Destroy invalidates both facades; Prepare creates a new VM.
 
 Tree replacement and share reset require poweroff. The controls do not save
-editor text or protect unsaved changes. Refreshing the file browser is explicit;
-there are no filesystem subscriptions, background editor writes, or snapshots.
+editor text or protect unsaved changes. The file browser subscribes to host and
+guest filesystem changes; editor reads and writes remain explicit.
 The editor is a copied host buffer; disk, share, editor, and guest state have
 separate lifetimes.
 

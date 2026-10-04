@@ -7,10 +7,12 @@ button, select { margin: .2rem; }
 main { display: flex; flex-wrap: wrap; gap: 1.5rem; align-items: start; }
 #terminal { width: 700px; height: 425px; }
 .files { display: flex; gap: 1rem; }
+.files label, .files p { margin: 0 0 .5rem; }
 .files label { display: block; }
-#files { display: block; width: 230px; height: 330px; }
+#files, #editor { box-sizing: border-box; height: 425px; }
+#files { display: block; width: 230px; margin: 0; }
 #files option { font-family: monospace; white-space: pre; }
-#editor { width: 600px; height: 425px; border: 1px solid #aaa; }
+#editor { width: 600px; border: 1px solid #aaa; }
 .cm-editor { height: 100%; }
 .cm-scroller { overflow: auto; }
 #events { max-height: 15rem; overflow: auto; border: 1px solid #ccc; padding: .5rem; }

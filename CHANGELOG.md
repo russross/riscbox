@@ -4,6 +4,9 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Align the demo file viewer and editor with matching heights and aligned
+    labels and transfer controls.
+
 *   Keep the demo's indented file tree synchronized with host and guest 9p
     changes, preserving selection and scroll position. Remove Refresh tree;
     copying to the editor and saving back remain explicit actions.

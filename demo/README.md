@@ -35,6 +35,9 @@ and compiles/runs all three source examples. It exports a root-owned tar over
 9p. `mkfs.erofs --tar=f` converts it to the read-only base disk. Package resolution
 uses the pinned Alpine branch's repositories; rebuilding can pick up package
 updates within that branch. Setup output is in `build/image-setup.log`.
+The QEMU setup boot enables Linux's `riscv_isa_fallback` so older QEMU versions,
+including Ubuntu 24.04's QEMU 8.2, can describe CPU extensions through their
+legacy `riscv,isa` device-tree property.
 
 Browser startup mounts tmpfs on `/tmp` and `/run`, overlays `/var` and `/home`,
 mounts the resident host share at `/workspace` with `cache=none`, and logs in

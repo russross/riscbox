@@ -201,7 +201,9 @@ HTTP completions and errors are guarded by the VM lifecycle generation.
 The embedding demo loads the packaged Linux kernel through OpenSBI, mounts an
 EROFS root with tmpfs overlays for `/var` and `/home`, and autologins user `demo`
 on the VirtIO console. BusyBox acpid handles orderly power events. QEMU setup
-installs TinyCC, its static runtime, musl headers, make, doas, and small tools.
+passes Linux `riscv_isa_fallback` for legacy CPU ISA device-tree bindings from
+older QEMU versions, including the release runner's QEMU 8.2.
+It installs TinyCC, its static runtime, musl headers, make, doas, and small tools.
 Original BSD arithmetic, Wumpus, and number source trees compile with TinyCC.
 The host populates a resident `workspace` share owned by UID/GID 1000.
 The app uses pinned CDN Wterm and CodeMirror modules without an application

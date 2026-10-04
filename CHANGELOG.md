@@ -4,6 +4,10 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Enable Linux ISA discovery fallback during QEMU demo image preparation.
+    Ubuntu 24.04's QEMU 8.2 supplies the legacy `riscv,isa` property; accepting
+    it lets Linux enable floating-point state before starting Alpine userspace.
+
 *   Build and test the Alpine demo against the exact release archive before
     publication, then deploy it to GitHub Pages. Add manual Release modes:
     `test` produces downloadable runtime/demo artifacts without publication;

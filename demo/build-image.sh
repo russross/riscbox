@@ -41,11 +41,11 @@ fakeroot sh -eu -c '
     find . -print0 | cpio --null --quiet -o -H newc | gzip -1 > "$4"
 ' sh "$archive" "$stage" "$(pwd)/guest" "$(pwd)/build/setup-initramfs.gz"
 
-# QEMU supplies network access for apk; the deployed browser VM needs no network.
+# QEMU supplies apk networking; ISA fallback accepts older QEMU device trees.
 if ! timeout 300 qemu-system-riscv64 \
     -machine virt -m 512M -smp 1 -nographic -no-reboot \
     -bios build/fw_dynamic.bin -kernel build/linux -initrd build/setup-initramfs.gz \
-    -append 'console=ttyS0,115200 rdinit=/sbin/demo-prepare panic=-1' \
+    -append 'console=ttyS0,115200 rdinit=/sbin/demo-prepare riscv_isa_fallback panic=-1' \
     -netdev user,id=net -device virtio-net-device,netdev=net \
     -fsdev "local,id=source,path=$(pwd),security_model=none,readonly=on" \
     -device virtio-9p-device,fsdev=source,mount_tag=source \

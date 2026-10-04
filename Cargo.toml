@@ -13,7 +13,7 @@ flate2 = { version = "1.1", default-features = false, features = ["rust_backend"
 
 [profile.release]
 lto = true
-opt-level = 's'
+opt-level = 3
 
 [lints.rust]
 unsafe_code = "deny"

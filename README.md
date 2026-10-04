@@ -1,10 +1,13 @@
 Riscbox virtual platform
 ========================
 
-Riscbox is a focused RV64 virtual platform for small teaching and grading VMs
-in a browser. The production runtime is raw WebAssembly with a dependency-free
-JavaScript adapter. Native Rust builds are test/development tools, not a
-supported native emulator.
+Riscbox is an emulator that runs a RISC-V 64 VM in a browser. The runtime is
+WebAssembly (WASM) with a small JavaScript adapter.
+
+This is a fork of Fabrice Bellard's TinyEMU, but there are so many forks out
+there that a name change seemed like a good idea. The core emulation loop is
+written in C and is an evolution of TinyEMU, but the surrounding platform is
+written in Rust and adds more device support and some modernization.
 
 Start with [HOWTO.md](HOWTO.md) for narrated embedding, storage, shutdown,
 recovery, and deployment workflows. [API.md](API.md) defines the current

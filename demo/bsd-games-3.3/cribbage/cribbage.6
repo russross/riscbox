@@ -1,0 +1,79 @@
+.Dd Jun 15, 2016
+.Dt CRIBBAGE 6
+.Os
+.Sh NAME
+.Nm cribbage
+.Nd Cribbage card game
+.Sh DESCRIPTION
+
+Cribbage is a game for two players played with the standard 52 card deck.
+Each game consists of a series of hands, each consisting of "the deal",
+"the play", and "the show". The game is won by the first player to reach
+the score of 61.
+.Pp
+The first dealer is chosen randomly. The dealer shuffles the deck and
+deals six cards to each player. Each player then discards two cards face
+down to form the "crib". The non-dealing player cuts the deck to reveal
+the "starter". If this card is a Jack, the dealer scores 2 points for
+"his heels".
+.Pp
+During "the play", each player plays a card in turn, stating the count
+(the cumulative value of the cards laid down in this play). The value
+of the numbered cards and Ace is at face value, while Jack, Queen, and
+King are valued at 10. Points are scored for reaching multiples of 15,
+for runs (valued by length), and for pairs (2), three-of-a-kind (6) and
+four-of-a-kind (12). If a player cannot play without causing the count
+exceed 31, he says "Go." The other player continues the play until he
+is unable to play either. Once 31 is reached or no one can play, the
+player who laid down the last card gets one point and another point if
+the count is exactly 31. At this point the count is reset and another
+round is played until players have no cards.
+.Pp
+In "the show" stage each player scores his hand based on its content in
+conjunction with the starter card. Points are scored for combinations
+of cards totalling 15, runs (valued at the size of the run), pairs,
+a flush and having a Jack of the same suit as the starter card ("one
+for his nob"). A four-card flush scores four and cannot include the cut
+or starter. A five-card flush scores five. It is important to note
+that each combination is scored separately. For example, the highest
+possible hand is J,5,5,5 with the starter the 5 of the same suit as
+the jack. There are four fifteens by combining the jack with a five,
+four more by combinations of three fives (a total of 16 for fifteens);
+the double pair royal adds 12 for a total of 28; and his nobs adds 1 for
+a maximum score of 29. (the score of 2 for his heels does not count in
+the total of the hand, since it is pegged before the play.)
+.Pp
+The dealer scores his hand last and then turns the cards in the crib
+face up. These cards are then scored by the dealer as an additional hand,
+also in conjunction with the starter card. Unlike the dealer's own hand,
+the crib cannot score a four-card flush, but it can score a five-card
+flush with the starter.
+.Pp
+The cribbage board is used for scoring, with two pegs inserted in
+appropriate holes in leapfrog manner to keep the score for the current
+and the previous hands. There are two rows of holes for each player,
+used forward and back. In each game the pegs go twice around the board.
+.Pp
+The best strategy is playing kings and aces, because they have the
+least chance of producing sequences. 10-value cards are generally good,
+provided that the two cards laid away are not too near (likely to make
+a sequence). When nothing better offers, give two wide cards, at least
+three apart in rank.
+.Pp
+Proverbially the safest lead is a 4. The next card cannot make a 15. Lower
+cards are also safe from this point of view, but are better treasured
+for go and 31. The most dangerous leads are 7 and 8, but may be made to
+trap the opponent when they are backed with other close cards.  Generally
+speaking, play on (toward a sequence) when you have close cards and off
+when you do not. However, the state of the score is a consideration. If
+far behind, play on when there is any chance of building a score for
+yourself; if well ahead, balk your opponent by playing off unless you
+will surely peg as much as he by playing on.
+.Pp
+The user interface consists of selecting cards from your hand using jk
+or arrow keys, making the choice with space. You can only make valid
+choices. If there is only one card to play, it is played automatically.
+Scoring of hands and plays is also handled by the computer, and fault
+points are never awarded. The match consists of 7 games, after which
+the match winner is declared and the game exits. You can also quit the
+game at any time by pressing q or F10.

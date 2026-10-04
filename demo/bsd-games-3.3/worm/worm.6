@@ -1,0 +1,27 @@
+.\" This file is free software, distributed under the BSD license.
+.Dd May 31, 1993
+.Dt WORM 6
+.Os
+.Sh NAME
+.Nm worm
+.Nd Play the growing worm game
+.Sh SYNOPSIS
+.Nm
+.Op Ar size
+.Sh DESCRIPTION
+In
+.Nm ,
+you are a little worm, your body is the "o"'s on the screen
+and your head is the "@".
+You move with the hjkl keys and the arrow keys (as in the game snake).
+If you don't press any keys, you continue in the direction you last moved.
+.Pp
+On the screen you will see a digit, if your worm eats the digit is will
+grow longer, the actual amount longer depends on which digit it was
+that you ate.
+The object of the game is to see how long you can make the worm grow.
+.Pp
+The game ends when the worm runs into either the sides of the screen,
+or itself.
+The current score (how much the worm has grown) is kept in
+the upper right corner of the screen.

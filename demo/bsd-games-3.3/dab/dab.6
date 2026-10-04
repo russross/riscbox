@@ -1,0 +1,46 @@
+.\" This file is free software, distributed under the BSD license.
+.Dd December 24, 2003
+.Dt DAB 6
+.Os
+.Sh NAME
+.Nm dab
+.Nd Dots and Boxes game
+.Sh SYNOPSIS
+.Nm
+.Op Ar level
+.Sh DESCRIPTION
+.Nm
+is a game where each player tries to complete the most boxes. A turn
+consists of putting one border of a box; the player setting the fourth
+and final border of a box gets the point for the box and has another turn.
+.Pp
+The keys used are the vi keys:
+.Ic k
+for up,
+.Ic j
+for down,
+.Ic h
+for left, and
+.Ic l
+for right.
+.Aq Ic space
+sets a new border,
+.Ic q
+quits the game.
+.Pp
+Support option is:
+.Ar level
+sets the starting level.
+.Sh AUTHORS
+.An Christos Zoulas
+.Aq christos@NetBSD.org
+.An Mike Sharov
+.Aq msharov@users.sourceforge.net
+.Sh SEE ALSO
+.Rs
+.%A Elwyn R. Berlekamp
+.%T The Dots and Boxes Game: Sophisticated Child's Play
+.%D 2000
+.%I A K Peters
+.%O http://www.akpeters.com/book.asp?bID=111
+.Re

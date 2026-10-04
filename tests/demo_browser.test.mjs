@@ -52,7 +52,7 @@ try {
 });
 
 // The page serves only the assembled application, including its unchanged release tree.
-test("release demo boots, shares files, compiles games, and exercises lifecycle controls", { timeout: 300_000 }, async () => {
+test("release demo boots, shares files, compiles games, and exercises lifecycle controls", { timeout: 600_000 }, async () => {
     const directory = await mkdtemp(join(tmpdir(), "riscbox-demo-"));
     try {
         await runChromePage(`<!doctype html><iframe src="/riscbox/index.html"></iframe><script type="module">
@@ -71,6 +71,10 @@ try {
     await until(() => frame.contentDocument?.getElementById('state')?.textContent === 'running', 'startup');
     app = await frame.contentWindow.eval('import("/riscbox/app.js")');
     const doc = frame.contentDocument;
+    // Command delimiters use console output; screen capture can join wrapped lines.
+    let rawConsole = '';
+    const write = app.terminal.write.bind(app.terminal);
+    app.terminal.write = value => { rawConsole += value; return write(value); };
     let captured = '';
     async function text() {
         try {
@@ -94,9 +98,11 @@ try {
     async function command(command, expected) {
         const marker = 'DEMO_OK_' + ++serial;
         const start = 'DEMO_BEGIN_' + serial;
-        app.terminal.onData('echo ' + start + '; ' + command + '; echo; echo ' + marker + '\\r');
-        await until(async () => (await text()).includes('\\n' + marker), command);
-        const output = captured.slice(captured.indexOf('\\n' + start + '\\n') + start.length + 2, captured.lastIndexOf('\\n' + marker));
+        rawConsole = '';
+        app.terminal.onData('echo ' + start + '; ' + command + '; printf "\\\\r\\\\n' + marker + '\\\\r\\\\n"\\r');
+        await until(() => rawConsole.replace(/\\r/g, '').includes('\\n' + marker + '\\n'), command);
+        const console = rawConsole.replace(/\\r/g, '');
+        const output = console.slice(console.indexOf('\\n' + start + '\\n') + start.length + 2, console.lastIndexOf('\\n' + marker));
         check(output.includes(expected), 'missing output ' + expected + ': ' + output);
         return output;
     }
@@ -105,6 +111,66 @@ try {
     check(initialOutput.includes('uid=0(root)'), 'passwordless doas');
     check(initialOutput.includes('type overlay'), 'tmpfs overlays');
     check(initialOutput.includes(' ='), 'arithmetic compiled and executed');
+
+    // Compile every self-contained project on resident 9p with the guest compiler.
+    const games = await (await fetch('/riscbox/examples.json')).json();
+    check(games.length === 18, 'complete BSD games collection');
+    check(doc.getElementById('source-tree').options.length === games.length, 'all games selectable');
+    const directories = new Set();
+    for (const game of games) {
+        for (const path of game.files) {
+            check(!/\\.(o|d)$/.test(path) && path !== game.id, 'source distribution excludes build products');
+            const source = await (await fetch('/riscbox/examples/' + game.id + '/' + path)).text();
+            const destination = 'games/' + game.id + '/' + path;
+            const parts = destination.split('/');
+            for (let count = 1; count < parts.length; count++) {
+                const directory = parts.slice(0, count).join('/');
+                if (directories.has(directory)) continue;
+                app.workspace.mkdir(directory);
+                app.workspace.setAttributes(directory, { ...app.workspace.stat(directory), uid: 1000, gid: 1000 });
+                directories.add(directory);
+            }
+            app.workspace.writeFile(destination, source);
+            app.workspace.setAttributes(destination, {
+                ...app.workspace.stat(destination), uid: 1000, gid: 1000,
+                mtime: { seconds: 0n, nanoseconds: 0 },
+            });
+        }
+        const build = await command('make -C games/' + game.id + ' > /tmp/build.log 2>&1 && echo GAME_BUILT; cat /tmp/build.log', 'GAME_BUILT');
+        check(!/warning:|error:/.test(build), 'clean TinyCC build: ' + game.id);
+    }
+
+    // Real terminal startup covers curses, dictionary access, random state, and timers.
+    const screens = {
+        adventure: 'Colossal Cave', arithmetic: ' =', atc: 'Time:',
+        battlestar: 'B A T T L E S T A R', cribbage: 'Your score:',
+        dab: 'human', drop4: 'Level:', gofish: 'Cards:', gomoku: 'Your move',
+        hangman: 'Word:', klondike: 'Klondike', robots: 'Commands:',
+        sail: 'Round', snake: '@', spirhunt: 'Condition', worm: 'Worm', wump: 'Wumpus',
+    };
+    await command("printf 'Hello\\\\n' | games/caesar/caesar 13", 'Uryyb');
+    for (const [id, expected] of Object.entries(screens)) {
+        doc.getElementById('clear-terminal').click();
+        captured = '';
+        app.terminal.onData('(cd games/' + id + ' && ./' + id + ')\\r');
+        await until(async () => (await text()).includes(expected), id + ' playable screen');
+        check(!/Fatal error|Segmentation fault|Error:/.test(captured), id + ' startup');
+        if (id === 'arithmetic') {
+            const problem = captured.match(/(\\d+) ([+-]) (\\d+) =/);
+            check(problem, 'arithmetic question');
+            const left = Number(problem[1]), right = Number(problem[3]);
+            app.terminal.onData(String(problem[2] === '+' ? left + right : left - right) + '\\r');
+            await until(async () => (await text()).includes('Right!'), 'arithmetic answer');
+        }
+        if (id === 'sail') {
+            app.terminal.onData('\\r');
+            await until(async () => (await text()).includes('Aye aye, Sir'), 'sail scenario');
+        }
+        const quit = { arithmetic: 'q\\r', hangman: '\\r', wump: 'q\\r' };
+        app.terminal.onData(quit[id] ?? '\\u0003');
+        await until(async () => (await text()).includes('demo@riscbox:'), id + ' terminal cleanup');
+    }
+    await command('stty sane', '');
     const files = doc.getElementById('files');
     const hasFile = path => [...files.options].some(option => option.value === path);
     check(!doc.getElementById('refresh-tree'), 'tree has no manual refresh control');
@@ -144,16 +210,16 @@ try {
     const changedSector = originalSector.slice();
     changedSector[0] ^= 1;
     disk.write(0n, changedSector);
-    doc.getElementById('source-tree').value = 'number';
+    doc.getElementById('source-tree').value = 'caesar';
     await click('load-tree');
     await click('boot');
-    await command('make; ./number 123', 'one hundred twenty-three.');
+    await command("make; printf 'Hello\\\\n' | ./caesar 13", 'Uryyb');
     await click('shutdown');
     await until(() => doc.getElementById('state').textContent === 'halted', 'soft shutdown');
     doc.getElementById('source-tree').value = 'wump';
     await click('load-tree');
     await click('boot');
-    await command("make; printf 'n\\\\nq\\\\n' | ./wump", 'Wumpus');
+    await command("make; printf 'q\\\\n' | ./wump", 'Wumpus');
     await click('reset');
     await command('test -f wump && echo SHARE_RETAINED', 'SHARE_RETAINED');
     await click('image-reset');
@@ -184,6 +250,6 @@ try {
     try { output = await app?.terminal.readText(); } catch {}
     await fetch('/result?status=' + encodeURIComponent((error?.stack ?? String(error)) + '\\n' + output));
 }
-</script>`, directory, { root: resolve(import.meta.dirname, "../demo/dist"), basePath: "/riscbox", timeoutMs: 290_000 });
+</script>`, directory, { root: resolve(import.meta.dirname, "../demo/dist"), basePath: "/riscbox", timeoutMs: 590_000 });
     } finally { await rm(directory, { recursive: true, force: true }); }
 });

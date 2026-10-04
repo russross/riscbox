@@ -65,4 +65,4 @@ fi
 # Guest tar headers retain root ownership, the demo UID, symlinks, and setuid doas.
 mkfs.erofs --tar=f build/rootfs.erofs.part "$output/rootfs.tar"
 mv build/rootfs.erofs.part build/rootfs.erofs
-echo 'Prepared Alpine EROFS image; TinyCC built and ran all three BSD examples.'
+echo 'Prepared Alpine EROFS image; TinyCC built all 18 vendored BSD games.'

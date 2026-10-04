@@ -4,6 +4,13 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Replace the demo's three small BSD examples with all 18 vendored,
+    self-contained BSD-GAMES 3.3 TinyCC projects. Add ncurses development files,
+    terminal data, and Hangman's dictionary to Alpine. Build every game during
+    image preparation and check compilation and terminal startup in Chrome/WASM.
+    Copy Drop4 score rows before formatting to avoid an RV64 TinyCC warning.
+    End Wumpus's prompt line when quitting or reaching end of input.
+
 *   Link the demo to rendered HTML guides and source provenance. Build these
     pages with Pandoc, styled like `view-markdown` with pinned CDN-hosted CMU
     fonts, and keep local documentation links within the rendered pages.

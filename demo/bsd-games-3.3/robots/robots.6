@@ -1,0 +1,60 @@
+.\" This file is free software, distributed under the BSD license.
+.Dd May 31, 1993
+.Dt ROBOTS 6
+.Os
+.Sh NAME
+.Nm robots
+.Nd fight off villainous robots
+.Sh DESCRIPTION
+.Nm
+pits you against evil robots, who are trying to kill you (which is
+why they are evil). Fortunately for you, even though they are evil,
+they are not very bright and have a habit of bumping into each other,
+thus destroying themselves. In order to survive, you must get them to
+kill each other off, since you have no offensive weaponry.
+.Pp
+Since you are stuck without offensive weaponry, you are endowed with
+one piece of defensive weaponry: a teleportation device. When two robots
+run into each other or a junk pile, they die. If a robot runs into you,
+you die. When a robot dies, you get 1 point, and when all the robots die,
+you start on the next field. This keeps up until they finally get you.
+.Pp
+Robots are represented on the screen by a
+.Sq \&+ ,
+the junk heaps from their collisions by a
+.Sq \(** ,
+and you
+(the good guy)
+by a
+.Sq \@ .
+.Pp
+The commands are:
+.Bl -tag -width indent -compact
+.It Ic h
+move one square left
+.It Ic l
+move one square right
+.It Ic k
+move one square up
+.It Ic j
+move one square down
+.It Ic y
+move one square up and left
+.It Ic u
+move one square up and right
+.It Ic b
+move one square down and left
+.It Ic n
+move one square down and right
+.It Ic \&.
+(also space) do nothing for one turn
+.It Ic t
+teleport to a random location
+.It Ic q
+quit
+.El
+.Sh FILES
+.Bl -tag -width robots.scores -compact
+.It Pa robots.scores
+the score file
+.El

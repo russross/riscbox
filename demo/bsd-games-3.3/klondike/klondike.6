@@ -1,0 +1,31 @@
+.\" This file is free software, distributed under the BSD license.
+.Dd Jun 15, 2016
+.Dt KLONDIKE 6
+.Os
+.Sh NAME
+.Nm klondike
+.Nd Klondike solitaire card game
+.Sh DESCRIPTION
+Klondike is a card game with the object of sorting cards into four piles,
+one for each suit, sorted by rank from Ace to King. The initial deal
+creates seven sorting stacks; one card in the first to seven cards in
+the last. The top card in each stack is revealed, while the rest stay
+hidden.
+.Pp
+The game is played by moving the cards around the sorting stacks. You
+may only move revealed cards in the sorting stacks, the last card dealt
+from the deck, and the last card dealt onto the final sorted piles. You
+may not move cards back into the deck. When you move a card, you must
+move all the cards on top of it with it. In the sorting stacks you may
+place a card only onto a card of one rank higher and a different suit
+color. For example, a Jack of Spades can only be placed onto a Queen
+of Hearts or Queen of Diamonds. In the final piles you may only place a
+card that is one rank higher and of the same suit as the card already on
+top. For example, if a final pile contains Ace-2-3-4 Clubs, then you may
+only place 5 of Clubs on it.  The remaining cards in the deck are dealt
+one at a time as needed. You may only move the last dealt card from the
+dealt stack. When no cards remain in the deck, the dealt stack is turned
+over and becomes the deck again.
+.Pp
+The game is won when the four final piles contain the all four suits in
+Ace-King order.

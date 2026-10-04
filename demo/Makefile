@@ -1,6 +1,8 @@
 RELEASE_ARCHIVE ?=
-IMAGE_SOURCES := $(shell find guest examples -type f) build-image.sh
-APP_SOURCES := $(shell find web examples docs -type f) assemble.mjs
+# Source-only prerequisites keep local game builds out of image and app assembly.
+GAME_SOURCES := $(shell find bsd-games-3.3 -type f \( -name '*.c' -o -name '*.h' -o -name '*.6' -o -name '*.md' -o -name Makefile -o -name LICENSE \))
+IMAGE_SOURCES := $(shell find guest -type f) $(GAME_SOURCES) build-image.sh Makefile
+APP_SOURCES := $(shell find web docs -type f) $(GAME_SOURCES) assemble.mjs Makefile
 
 all: release
 	$(MAKE) dist/.built

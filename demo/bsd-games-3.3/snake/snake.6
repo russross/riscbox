@@ -1,0 +1,63 @@
+.\" Copyright (c) 1980 The Regents of the University of California.
+.\" This file is free software, distributed under the BSD license.
+
+.Dd May 31, 1993
+.Dt SNAKE 6
+.Os
+.Sh NAME
+.Nm snake
+.Nd display chase game
+.Sh SYNOPSIS
+.Nm
+.Op width height
+.Op -s
+.br
+.Sh DESCRIPTION
+.Nm
+is a display-based game which must be played on a CRT terminal.
+The object of the game is to make as much money as possible without
+getting eaten by the snake. Two optional arguments allow specifying
+the size of the playing field. By default the entire screen is used.
+If the -s argument is passed, snake will print scores and exit.
+.Pp
+You are represented on the screen by an @.
+The snake is represented by s's with an S at its head.
+The money is $, and an exit is #.
+Your score is posted in the upper left hand corner.
+.Pp
+You can move around using the same conventions as
+.Xr vi 1 ,
+the
+.Ic h ,
+.Ic j ,
+.Ic k ,
+and
+.Ic l
+keys work, as do the arrow keys.
+.It Ic q
+This lets you quit the game at any time.
+.It Ic w
+Space warp to get out of tight squeezes, at a price.
+.El
+.Pp
+To earn money, move to the same square the money is on.
+A new $ will appear when you earn the current one.
+As you get richer, the snake gets hungrier.
+To leave the game, move to the exit (#).
+.Pp
+A record is kept of the personal best score of each player.
+Scores are only counted if you leave at the exit,
+getting eaten by the snake is worth nothing.
+.Pp
+As in pinball, matching the last digit of your score to the number
+which appears after the game is worth a bonus.
+.Sh FILES
+.It Pa snake.scores
+database of personal bests
+.El
+.Sh BUGS
+When playing on a small screen,
+it's hard to tell when you hit the edge of the screen.
+.Pp
+The scoring function takes into account the size of the screen.
+A perfect function to do this equitably has not been devised.

@@ -1,0 +1,35 @@
+.\" This file is free software, distributed under the BSD license.
+.Dd May 31, 1993
+.Dt HANGMAN 6
+.Os
+.Sh NAME
+.Nm hangman
+.Nd computer version of the game hangman
+.Sh SYNOPSIS
+.Nm
+.Op Fl d Ar wordlist
+.Op Fl m Ar minlen
+.Sh DESCRIPTION
+In
+.Nm ,
+the computer picks a word from the on-line word list
+and you must try to guess it.
+The computer keeps track of which letters have been guessed
+and how many wrong guesses you have made on the screen in a graphic fashion.
+.Sh OPTIONS
+.Bl -tag -width flag
+.It Fl d
+Use the specified
+.Ar wordlist
+instead of the default one named below.
+.It Fl m
+Set the minimum word length to use.
+The default is 6 letters.
+.El
+.Sh FILES
+.Bl -tag -width /usr/share/dict/words -compact
+.It Pa /usr/share/dict/words
+On-line word list
+.El
+.Sh AUTHORS
+.An Ken Arnold

@@ -36,8 +36,11 @@ Guest image
 -----------
 
 QEMU boots a verified Alpine 3.24.2 riscv64 minirootfs as an initramfs, installs
-TinyCC (including its runtime archive), musl headers, make, doas, nano, and less,
-and compiles/runs all three source examples. It exports a root-owned tar over
+TinyCC (including its runtime archive), musl headers, make, doas, nano, less,
+ncurses development files and terminal data, and the CrackLib word list.
+Hangman's plain-text dictionary is installed at `/usr/share/dict/words`.
+Preparation compiles all 18 vendored BSD games and runs text-mode smoke checks.
+It exports a root-owned tar over
 9p. `mkfs.erofs --tar=f` converts it to the read-only base disk. Package resolution
 uses the pinned Alpine branch's repositories; rebuilding can pick up package
 updates within that branch. Setup output is in `build/image-setup.log`.
@@ -57,7 +60,9 @@ Explicit workflows
 1. Select a source tree and click **Load tree**. Replacement requires a halted
    VM. Arithmetic is loaded by default before the first boot.
 2. In the terminal, run `make` and `make run` under `/workspace`. The individual
-   [BSD examples](examples/README.md) retain their upstream licenses.
+   [BSD games](bsd-games-3.3/README.md) retain their upstream licenses. All 18
+   self-contained projects are vendored here and distributed with the demo;
+   assembly excludes binaries, objects, dependency files, and saved state.
 3. Select a file in the automatically updated, indented tree and click **Copy to editor**. Selecting
    a file alone does not read its contents. **Save to 9p** writes the editor's
    entire current text to that path.
@@ -78,5 +83,6 @@ the editor has a fixed size and no syntax highlighting. Boot output stays in
 terminal history across guest resets; the separate Clear terminal control clears
 the display and retained history without touching the VM.
 
-`make test` runs opt-in real Chrome acceptance using only the assembled file tree
+`make test` compiles all games on resident 9p with the emulated RV64 TinyCC,
+checks each game's terminal startup, and runs opt-in real Chrome acceptance using only the assembled file tree
 as the app's server root. It is separate from core `make check`.

@@ -11,15 +11,19 @@ mount -t 9p -o trans=virtio,version=9p2000.L output /mnt/output
 trap 'echo "guest preparation failed" > /mnt/output/failed; poweroff -f' EXIT
 ip link set eth0 up
 udhcpc -q -n -i eth0
-apk add --no-cache tcc tcc-libs-static musl-dev make doas nano less
+apk add --no-cache tcc tcc-libs-static musl-dev make doas nano less \
+    ncurses-dev ncurses-terminfo-base cracklib-words
+
+# Hangman reads plain text; retain the package's dictionary and license metadata.
+mkdir -p /usr/share/dict
+gzip -dc /usr/share/cracklib/cracklib-words.gz > /usr/share/dict/words
 
 # The image contains tools, while independently loaded source trees stay on 9p.
-cp -R /mnt/source/examples /tmp/examples
-for game in arithmetic wump number; do
-    make -C "/tmp/examples/$game"
-done
-/tmp/examples/number/number 123 | grep -q 'one hundred twenty-three'
-printf 'n\nq\n' | /tmp/examples/wump/wump | grep -q 'Wumpus'
+cp -R /mnt/source/bsd-games-3.3 /tmp/examples
+make -C /tmp/examples clean
+make -C /tmp/examples
+printf 'Hello\n' | /tmp/examples/caesar/caesar 13 | grep -q 'Uryyb'
+printf 'q\n' | /tmp/examples/wump/wump | grep -q 'Wumpus'
 /tmp/examples/arithmetic/arithmetic </dev/null | grep -q ' = '
 
 addgroup -g 1000 demo

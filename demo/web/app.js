@@ -257,6 +257,8 @@ try {
     const examples = await fetch("examples.json");
     if (!examples.ok) throw new Error(`Examples HTTP ${examples.status}`);
     trees = await examples.json();
+    element("source-tree").replaceChildren(...trees.map(tree => new Option(tree.id, tree.id)));
+    element("source-tree").value = currentTree;
     await action("prepare VM; load arithmetic; boot", async () => {
         await prepare();
         await loadTree("arithmetic");

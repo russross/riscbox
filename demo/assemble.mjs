@@ -1,4 +1,4 @@
-import { cp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { execFileSync } from "node:child_process";
 
@@ -10,13 +10,18 @@ try {
     await rm("dist/riscbox", { recursive: true, force: true });
     await cp(release, "dist/riscbox", { recursive: true, force: true });
     await cp("web", "dist", { recursive: true, force: true });
-    await cp("examples", "dist/examples", { recursive: true, force: true });
+    await rm("dist/examples", { recursive: true, force: true });
+    await cp("bsd-games-3.3", "dist/examples", {
+        recursive: true, force: true,
+        filter: async source => (await stat(source)).isDirectory() ||
+            /(?:\.(?:c|h|6|md)|\/(?:Makefile|LICENSE))$/.test(source),
+    });
     const assets = await readdir(release);
     // Render packaged guides separately so the copied runtime release remains unchanged.
     await rm("dist/docs", { recursive: true, force: true });
     for (const [source, destination, documents] of [
         [release, "dist/docs/riscbox", assets.filter(asset => asset.endsWith(".md"))],
-        ["examples", "dist/docs/examples", ["README.md"]],
+        ["bsd-games-3.3", "dist/docs/examples", ["README.md"]],
     ]) {
         await mkdir(destination, { recursive: true });
         for (const document of documents) {
@@ -58,8 +63,10 @@ try {
         return paths.sort();
     }
     const trees = [];
-    for (const id of ["arithmetic", "wump", "number"]) {
-        trees.push({ id, files: await files(join("examples", id)) });
+    for (const entry of await readdir("dist/examples", { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue;
+        const id = entry.name;
+        trees.push({ id, files: await files(join("dist/examples", id)) });
     }
     await writeFile("dist/examples.json", JSON.stringify(trees, null, 2) + "\n");
 } catch (error) {

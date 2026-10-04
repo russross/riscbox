@@ -206,7 +206,11 @@ on the VirtIO console. BusyBox acpid handles orderly power events. QEMU setup
 passes Linux `riscv_isa_fallback` for legacy CPU ISA device-tree bindings from
 older QEMU versions, including the release runner's QEMU 8.2.
 It installs TinyCC, its static runtime, musl headers, make, doas, and small tools.
-Original BSD arithmetic, Wumpus, and number source trees compile with TinyCC.
+All 18 self-contained BSD-GAMES 3.3 projects in `demo/bsd-games-3.3/` are
+vendored and distributed as selectable source trees. Alpine includes ncurses
+development files, terminal data, and a plain-text dictionary for Hangman.
+QEMU preparation builds every game; Chrome acceptance compiles each on resident
+9p and checks terminal startup in the real WASM emulator.
 The host populates a resident `workspace` share owned by UID/GID 1000.
 The indented file tree subscribes to host and guest filesystem changes while
 copying to and from the editor remains explicit.

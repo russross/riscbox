@@ -56,7 +56,11 @@ Repository map and terminology
     before publication, then deploys it to GitHub Pages. Manual `test` runs on
     any branch upload runtime/demo artifacts with no publication; manual
     `publish` requires main and verifies existing tags before reusing a release
-    archive to retry demo deployment. Pages uses the GitHub Actions source and
+    archive to retry demo deployment. Manual `demo` runs require main, select
+    the latest published release or an explicit `demo_release_tag`, and rebuild
+    and Chrome-test the current demo sources using that unchanged archive.
+    They skip core builds and release publication, then deploy Pages on success.
+    Pages uses the GitHub Actions source and
     the `github-pages` environment. Builds have read-only repository access;
     separate publication and deployment jobs receive their write permissions.
 *   `js/riscbox.js` owns the dependency-free client adapter and its private

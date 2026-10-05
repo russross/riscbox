@@ -4,6 +4,11 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Add manual `demo` mode to the Release workflow to rebuild and redeploy
+    current demo sources against an already-published runtime archive. Default
+    to the latest release, with an optional explicit tag. Run Chrome acceptance
+    before Pages deployment without building or publishing a new core release.
+
 *   Consolidate browser VM creation into `Riscbox.prepare(options)`, returning a
     halted VM with all block devices ready. Accept configuration URLs, text, or
     objects, per-slot block source overrides, callbacks, and preparation

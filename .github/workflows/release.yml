@@ -11,10 +11,14 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: Test builds artifacts; publish releases and deploys the demo from main
+        description: Test builds artifacts; publish releases; demo rebuilds and deploys using a posted release
         type: choice
         default: test
-        options: [test, publish]
+        options: [test, publish, demo]
+      demo_release_tag:
+        description: 'Demo mode only: published release tag (blank selects latest)'
+        type: string
+        required: false
 
 permissions:
   contents: read
@@ -25,7 +29,7 @@ concurrency:
 
 jobs:
   release:
-    if: github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main'
+    if: inputs.mode != 'demo' && (github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/main')
     runs-on: ubuntu-24.04
     outputs:
       publish: ${{ steps.version.outputs.publish }}
@@ -132,7 +136,61 @@ jobs:
         with:
           path: demo/dist
 
-  # Publication alone receives repository write access; test builds stay read-only.
+  # Demo-only runs consume posted runtime bytes and build only the image and application.
+  demo:
+    if: github.event_name == 'workflow_dispatch' && inputs.mode == 'demo'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+
+      - uses: astral-sh/setup-uv@v7
+
+      - name: Download published runtime
+        id: archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEMO_RELEASE_TAG: ${{ inputs.demo_release_tag }}
+        run: .github/scripts/demo-release.sh
+
+      - name: Install demo build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-misc fakeroot cpio erofs-utils
+          command -v google-chrome
+
+      - name: Build and test demo
+        env:
+          ARCHIVE: ${{ steps.archive.outputs.archive }}
+          DOCUMENTATION_REF: ${{ steps.archive.outputs.tag }}
+        run: |
+          make -C demo test RELEASE_ARCHIVE="$GITHUB_WORKSPACE/$ARCHIVE"
+          tar -czf build/releases/riscbox-demo.tar.gz -C demo/dist .
+
+      - name: Upload demo build artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: riscbox-demo-${{ github.run_id }}
+          path: build/releases/riscbox-demo.tar.gz
+          if-no-files-found: error
+
+      - name: Upload demo diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: demo-diagnostics-${{ github.run_id }}
+          path: demo/build/image-setup.log
+          if-no-files-found: warn
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: demo/dist
+
+  # Publication alone receives repository write access; builds stay read-only.
   publish:
     needs: release
     if: needs.release.outputs.publish == 'true'
@@ -168,10 +226,13 @@ jobs:
             *) gh release create "$TAG" "$archive" --title "Riscbox $VERSION" --generate-notes --verify-tag ;;
           esac
 
-  # Only successful publication runs can replace the public demo.
+  # Either successful publication or an accepted demo-only rebuild can replace the site.
   deploy:
-    needs: [release, publish]
-    if: needs.release.outputs.publish == 'true'
+    needs: [release, publish, demo]
+    if: >-
+      ${{ !cancelled() &&
+          ((needs.release.result == 'success' && needs.publish.result == 'success' &&
+            needs.release.outputs.publish == 'true') || needs.demo.result == 'success') }}
     runs-on: ubuntu-24.04
     permissions:
       pages: write

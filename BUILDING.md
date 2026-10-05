@@ -70,12 +70,20 @@ For manual runs, open **Actions → Release → Run workflow**:
     demo. An existing version tag must point to the selected commit. When the
     release already exists, the workflow downloads its original runtime archive
     for demo assembly, skips release creation, and retries Pages deployment.
+3. Select **main** and **demo** to rebuild and redeploy only the demo using an
+    already-published runtime archive. Leave **demo_release_tag** blank for the
+    latest release, or enter a published tag such as `v2026.10.4`. The workflow
+    downloads that archive, prepares the demo image, runs Chrome acceptance,
+    and deploys Pages. It does not build the core, create a tag, or publish a
+    release. The demo sources come from current `main`, independently of the
+    archive's release commit. Failed builds or acceptance tests leave the site
+    unchanged; a successful run also provides `riscbox-demo.tar.gz` as an artifact.
 
 Enable **Settings → Pages → Build and deployment → Source → GitHub Actions**
 once in the repository. The `github-pages` environment must allow deployment
 from `main`. GitHub's built-in workflow token supplies publication permissions;
-manual test builds have read-only repository access. Publication and deployment
-receive their required write permissions in separate jobs. Only one workflow
+manual test and demo builds have read-only repository access. Publication and
+deployment receive their required write permissions in separate jobs. Only one workflow
 run publishes at a time.
 
 Repository boundaries

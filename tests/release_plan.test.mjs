@@ -125,3 +125,93 @@ test("mismatched crate versions fail in test mode", () => {
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /versions differ/);
 });
+
+// Demo selection owns a read-only release lookup and a pinned archive download, without Cargo or tags.
+function demoArchive(overrides = {}, metadata = {}) {
+    const directory = mkdtempSync(join(tmpdir(), "riscbox-demo-release-"));
+    const output = join(directory, "outputs");
+    const calls = join(directory, "calls");
+    const release = { tagName: "v2026.9.31", isDraft: false,
+        assets: [{ name: "riscbox-2026.9.31.tar.gz" }], ...metadata };
+    try {
+        writeFileSync(join(directory, "gh"), `#!/bin/sh
+set -eu
+echo "$*" >> "$CALLS"
+test "$API_FAILURE" = false || exit 1
+if [ "$1 $2" = 'release view' ]; then
+    cat "$METADATA"
+elif [ "$1 $2" = 'release download' ]; then
+    test "$DOWNLOAD_FAILURE" = false || exit 1
+    printf 'posted bytes' > build/releases/riscbox-2026.9.31.tar.gz
+else
+    echo 'unexpected GitHub operation' >&2; exit 1
+fi
+`, { mode: 0o755 });
+        writeFileSync(join(directory, "metadata"), JSON.stringify(release));
+        writeFileSync(output, "");
+        writeFileSync(calls, "");
+        const result = spawnSync(resolve(".github/scripts/demo-release.sh"), [], {
+            cwd: directory, encoding: "utf8",
+            env: { ...process.env, PATH: `${directory}:${process.env.PATH}`,
+                GITHUB_REF: "refs/heads/main", GITHUB_REPOSITORY: "russross/riscbox",
+                GITHUB_OUTPUT: output, CALLS: calls, METADATA: join(directory, "metadata"),
+                API_FAILURE: "false", DOWNLOAD_FAILURE: "false", DEMO_RELEASE_TAG: "", ...overrides },
+        });
+        const outputs = Object.fromEntries(readFileSync(output, "utf8").trim().split("\n").filter(Boolean).map(line => line.split("=")));
+        return { status: result.status, stderr: result.stderr, outputs,
+            calls: readFileSync(calls, "utf8"),
+            archive: result.status === 0 ? readFileSync(join(directory, outputs.archive), "utf8") : undefined };
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+}
+
+test("demo defaults to the latest posted release and pins its archive download", () => {
+    const result = demoArchive();
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.outputs.tag, "v2026.9.31");
+    assert.equal(result.outputs.archive, "build/releases/riscbox-2026.9.31.tar.gz");
+    assert.equal(result.archive, "posted bytes");
+    assert.match(result.calls, /^release view --repo russross\/riscbox --json tagName,isDraft,assets\n/);
+    assert.match(result.calls, /release download v2026\.9\.31 --repo russross\/riscbox --pattern riscbox-2026\.9\.31\.tar\.gz/);
+});
+
+test("demo can select an explicit published release independently of the source version", () => {
+    const result = demoArchive({ DEMO_RELEASE_TAG: "v2026.9.31" });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.calls, /release view .* -- v2026\.9\.31\n/);
+    assert.equal(result.outputs.tag, "v2026.9.31");
+});
+
+test("demo deployment rejects another branch before release lookup", () => {
+    const result = demoArchive({ GITHUB_REF: "refs/heads/experiment" });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /requires main/);
+    assert.equal(result.calls, "");
+});
+
+test("demo rejects draft releases and missing or mismatched runtime archives", () => {
+    for (const metadata of [{ isDraft: true }, { assets: [] },
+        { assets: [{ name: "riscbox-2026.9.30.tar.gz" }] }]) {
+        const result = demoArchive({}, metadata);
+        assert.notEqual(result.status, 0);
+        assert.equal(result.outputs.archive, undefined);
+        assert.doesNotMatch(result.calls, /release download/);
+    }
+});
+
+test("demo reports remote lookup or download failures without deployment outputs", () => {
+    for (const failure of [{ API_FAILURE: "true" }, { DOWNLOAD_FAILURE: "true" }]) {
+        const result = demoArchive(failure);
+        assert.notEqual(result.status, 0);
+        assert.equal(result.outputs.archive, undefined);
+        if (failure.API_FAILURE) assert.doesNotMatch(result.calls, /release download/);
+        else assert.match(result.calls, /release download/);
+    }
+});
+
+test("demo rejects unsafe release tags before writing workflow outputs", () => {
+    const result = demoArchive({}, { tagName: "v2026.9.31\narchive=other" });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /Unsupported release tag/);
+    assert.deepEqual(result.outputs, {});
+    assert.doesNotMatch(result.calls, /release download/);
+});

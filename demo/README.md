@@ -2,10 +2,15 @@ Release-based demo
 ==================
 
 The [published demo](https://russross.github.io/riscbox/) updates after successful
-releases. The Release workflow builds this directory against the release archive
-and runs Chrome acceptance before publishing. Manual test runs provide a
+releases or manual **demo** runs. The Release workflow builds this directory
+against the release archive and runs Chrome acceptance before publishing. Manual test runs provide a
 downloadable `riscbox-demo.tar.gz` without replacing the public site; see
 [release automation](../BUILDING.md#release-automation).
+
+To redeploy demo changes without releasing the core, open **Actions → Release →
+Run workflow**, select **main**, and choose **demo**. The runtime comes from the
+latest published release, or the optional **demo_release_tag**. The workflow
+rebuilds the demo image and app and checks them in Chrome before deployment.
 
     make
     python3 -m http.server --directory dist 8000

@@ -4,6 +4,9 @@ Riscbox changelog
 Unreleased
 ----------
 
+2026.10.5 — 2026-10-05
+----------------------
+
 *   Add manual `demo` mode to the Release workflow to rebuild and redeploy
     current demo sources against an already-published runtime archive. Default
     to the latest release, with an optional explicit tag. Run Chrome acceptance

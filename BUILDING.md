@@ -72,7 +72,7 @@ For manual runs, open **Actions → Release → Run workflow**:
     for demo assembly, skips release creation, and retries Pages deployment.
 3. Select **main** and **demo** to rebuild and redeploy only the demo using an
     already-published runtime archive. Leave **demo_release_tag** blank for the
-    latest release, or enter a published tag such as `v2026.10.4`. The workflow
+    latest release, or enter a published tag such as `v2026.10.5`. The workflow
     downloads that archive, prepares the demo image, runs Chrome acceptance,
     and deploys Pages. It does not build the core, create a tag, or publish a
     release. The demo sources come from current `main`, independently of the

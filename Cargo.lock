@@ -45,14 +45,14 @@ dependencies = [
 
 [[package]]
 name = "riscbox"
-version = "2026.10.4"
+version = "2026.10.5"
 dependencies = [
  "flate2",
 ]
 
 [[package]]
 name = "riscbox-wasm"
-version = "2026.10.4"
+version = "2026.10.5"
 dependencies = [
  "riscbox",
 ]

@@ -43,11 +43,19 @@ async function checkRelease(archive) {
         for (const internal of ["StorageRuntime", "StorageExports", "FilesystemHandle", "DiskHandle", "runQuantum", "hostImports"]) {
             assert(!declarations.includes(internal), `internal declaration ${internal}`);
         }
-        const module = await WebAssembly.compile(await readFile(join(root, "riscbox.wasm")));
+        const wasm = await readFile(join(root, "riscbox.wasm"));
+        const module = await WebAssembly.compile(wasm);
         const exports = WebAssembly.Module.exports(module).map(entry => entry.name);
         assert(!exports.includes("riscbox_start") && !exports.includes("riscbox_start_resolved"), "unused startup exports");
-        const runtime = await Riscbox.instantiate(module);
-        assert.equal(runtime.state, "empty");
+        const runtime = await Riscbox.prepare({
+            wasmUrl: "https://release.invalid/riscbox.wasm",
+            config: { value: { version: 1, machine: "riscv64", memory_size: 32,
+                bios: "https://release.invalid/firmware.bin", console: "uart" } },
+            fetch: async url => new Response(String(url).endsWith(".wasm")
+                ? wasm : Uint8Array.of(0x73, 0, 0x50, 0x10),
+                { headers: { "Content-Type": String(url).endsWith(".wasm") ? "application/wasm" : "application/octet-stream" } }),
+        });
+        assert.equal(runtime.state, "halted");
         assert.equal(runtime.runQuantum, undefined);
         assert.equal(runtime.exports, undefined);
         await runtime.destroy();

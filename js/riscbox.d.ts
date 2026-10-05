@@ -58,7 +58,28 @@ export interface RiscboxOptions {
     readonly framebufferClear?: () => void;
     readonly framebufferRefresh?: (bytes: Uint8Array, geometry: { x: number; y: number; width: number; height: number; stride: number }) => void;
 }
-export type VmState = "empty" | "preparing" | "halted" | "running";
+export type ConfigSource =
+    | { readonly url: string | URL }
+    | { readonly text: string; readonly baseUrl?: string | URL }
+    | { readonly value: VmConfig; readonly baseUrl?: string | URL };
+export interface BlockOverrides {
+    readonly drive0?: HttpDrive | ArrayDrive;
+    readonly drive1?: HttpDrive | ArrayDrive;
+    readonly drive2?: HttpDrive | ArrayDrive;
+    readonly drive3?: HttpDrive | ArrayDrive;
+}
+export interface PreparationOptions extends RiscboxOptions {
+    readonly config: ConfigSource;
+    readonly wasmUrl?: string | URL;
+    readonly blocks?: BlockOverrides;
+    readonly ramMiB?: number;
+    readonly width?: number;
+    readonly height?: number;
+    readonly hasNetwork?: boolean;
+    readonly commandLine?: string;
+    readonly signal?: AbortSignal;
+}
+export type VmState = "halted" | "running" | "destroyed";
 export type HaltCause = "guest-poweroff" | "host-halt" | "guest-failure";
 export type ResetCause = "guest-reboot" | "host-reset" | "host-boot";
 
@@ -69,12 +90,7 @@ export declare class Riscbox {
     static readonly BlockError: typeof BlockError;
     readonly state: VmState;
     readonly started: boolean;
-    static instantiate(bytes: BufferSource | WebAssembly.Module, options?: RiscboxOptions): Promise<Riscbox>;
-    static loadResolvedConfig(url: string, commandLine?: string, fetchRequest?: typeof fetch): Promise<VmConfig>;
-    prepareResolved(config: VmConfig, ramMiB?: number, width?: number, height?: number, hasNetwork?: boolean): Promise<void>;
-    prepareFromUrl(url: string, ramMiB?: number, commandLine?: string, width?: number, height?: number, hasNetwork?: boolean): Promise<void>;
-    startResolved(config: VmConfig, ramMiB?: number, width?: number, height?: number, hasNetwork?: boolean): Promise<void>;
-    startFromUrl(url: string, ramMiB?: number, commandLine?: string, width?: number, height?: number, hasNetwork?: boolean): Promise<void>;
+    static prepare(options: PreparationOptions): Promise<Riscbox>;
     filesystem(name: string): Filesystem;
     block(index: number): BlockDisk;
     boot(): Promise<void>;

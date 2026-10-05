@@ -4,6 +4,14 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Consolidate browser VM creation into `Riscbox.prepare(options)`, returning a
+    halted VM with all block devices ready. Accept configuration URLs, text, or
+    objects, per-slot block source overrides, callbacks, and preparation
+    cancellation in one call. Fetch WASM automatically with streaming
+    instantiation; revalidate cached WASM and configuration. Remove the separate
+    instantiation, configuration-loading, preparation, and startup APIs.
+    Destroyed clients enter terminal `destroyed` state and cannot be reused.
+
 *   Halt powers off all guest device interfaces and retires guest interactions
     while retaining RAM and backing stores. Filesystem `clear()` recursively
     unlinks content with ordinary inode/fid lifetimes; halted filesystem `reset()`

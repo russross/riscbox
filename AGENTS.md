@@ -151,26 +151,30 @@ Decompressed output is bounded by the boot layout. Image
 deployments gzip firmware and the next-stage payload while naming them from
 their uncompressed hashes. HTTP
 disk writes are session-local. The browser adapter uses `force-cache` for
-content-hash-named boot and disk assets and `no-store` for the configuration.
+content-hash-named boot and disk assets and `no-cache` for WASM and configuration.
 The browser adapter parses configuration files, supplies defaults, and
-resolves boot and drive URLs through `startFromUrl`; `startResolved` accepts a
-host object. Rust validates the resolved configuration and still constructs
-the machine. Native Rust configuration loading remains for development tests.
+resolves boot and drive URLs through the single `Riscbox.prepare(options)` factory,
+which accepts config URL, text, or object sources, optional per-slot block source
+overrides, callbacks, and named preparation options. It fetches WASM beside the
+adapter by default and uses `WebAssembly.instantiateStreaming`. Rust validates
+the resolved configuration and still constructs the machine. Native Rust
+configuration loading remains for development tests.
 The client has no `start()` alias or raw startup entry points; documentation
 describes the current release without cross-release compatibility promises.
-Client state is `empty`, `preparing`, `halted`, or `running`. Preparation reserves
-the VM before downloads, rejects overlapping loads, and cleans up failures.
+Public client state is `halted`, `running`, or terminal `destroyed`. Preparation
+returns only after constructing a halted VM and cleans up failures. An optional
+`AbortSignal` cancels preparation before a client is returned.
 Boot requires halt, forced reset requires running, and cold reset requires halt;
 queued controls check prerequisites at dispatch. Device input checks scalar
 ranges and device/state prerequisites before WASM conversion. Network carrier
-may precede preparation, while frames outside execution are dropped.
+may precede boot, while frames outside execution are dropped.
 Each runtime owns a streaming console UTF-8 decoder: halt flushes a truncated
 sequence, and reset/destroy discard its tail. Other text decoding is stateless.
 HTTP block stores start with a 16 MiB in-memory cache limit that grows to
 cover a single request when needed.
-Rust owns every disk and share in the VM. `prepareResolved` and `prepareFromUrl`
-load and construct the platform without booting; startup helpers prepare then
-boot. Resolved drives select HTTP manifests, copied host `Uint8Array` bytes, or
+Rust owns every disk and share in the VM. `Riscbox.prepare()` loads and constructs
+the platform without booting; 9p population and `boot()` remain separate.
+Configured drives select HTTP manifests, copied host `Uint8Array` bytes, or
 zeroed `capacity_sectors` arrays. HTTP and array disks occupy configured order.
 Array writes update Rust bytes directly. HTTP writes use 4 KiB overlays with
 per-sector dirty masks and never fetch unwritten sectors. Reads are synchronous
@@ -183,8 +187,9 @@ return copied bytes or promises for HTTP misses; writes are synchronous. Boot
 rejects pending host reads. Reboot retains bytes and CoW. Halted disk
 `reset()` removes HTTP overlays while retaining cache and rejects array disks; `coldReset()`
 retires reads/fetches, clears guest RAM, and reloads boot images while preserving
-stores. Destroy frees all storage and invalidates every facade; a runtime may
-prepare another VM. Export consistency requires orderly guest shutdown.
+stores. Destroy frees all storage and invalidates every facade and client;
+replacement requires a fresh `Riscbox.prepare()` call. Export consistency
+requires orderly guest shutdown.
 
 The host can deliver soft shutdown and reboot input events, force an immediate
 halt or reset, boot a halted machine, and destroy a halted machine. The prepared
@@ -200,8 +205,8 @@ retaining host backends, 9p servers, HTTP clean cache and CoW data, and guest
 RAM mappings. Resident 9p replies complete synchronously; pending HTTP requests
 are retired without reusing request IDs. Console and framebuffer host callbacks
 receive reset notifications. Destroy releases the machine and 9p sessions.
-Destroy also cancels config/asset startup, retires its pending HTTP response,
-and permits reuse of the runtime after invalidating its storage handles. Browser
+Preparation cancellation releases partial machines and retires pending HTTP
+responses. Destroyed clients cannot be reused. Browser
 HTTP completions and errors are guarded by the VM lifecycle generation.
 
 The embedding demo loads the packaged Linux kernel through OpenSBI, mounts an

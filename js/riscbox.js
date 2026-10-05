@@ -5,6 +5,9 @@
 
     const runtimeEncoder = new TextEncoder();
     const textDecoder = new TextDecoder();
+    // Capture the adapter's location while its script is executing, before application calls.
+    const adapterUrl = typeof document === "object" ? document.currentScript?.src : undefined;
+    const defaultWasmUrl = adapterUrl ? new URL("riscbox.wasm", adapterUrl).href : undefined;
     // Guest timer deadlines use 10 MHz ticks; host wakeup delays use milliseconds.
     const GUEST_TICKS_PER_MILLISECOND = 10_000;
     const QUANTUM_BUDGET_REACHED = 0;
@@ -19,7 +22,7 @@
 
     function parseConfig(source) {
         let offset = 0;
-        const fail = (message) => { throw new SyntaxError(`${message} at offset ${offset}`); };
+        const fail = (message) => { throw new SyntaxError(`configuration: ${message} at offset ${offset}`); };
         const space = () => {
             for (;;) {
                 while (/\s/.test(source[offset] ?? "") && offset < source.length) offset++;
@@ -125,10 +128,7 @@
         };
         const path = (name) => {
             const value = optional(name, "string", null);
-            if (value === null || !baseUrl || value.includes(":") || value.startsWith("/"))
-                return value;
-            const slash = baseUrl.lastIndexOf("/");
-            return slash < 0 ? value : baseUrl.slice(0, slash + 1) + value;
+            return value === null || !baseUrl ? value : new URL(value, baseUrl).href;
         };
         if (required("version", "number") !== 1) throw new RangeError("unsupported configuration version");
         const resolved = {
@@ -195,9 +195,7 @@
 
     function resolveConfigPath(value, baseUrl) {
         if (typeof value !== "string") throw new TypeError("drive file must be a string");
-        if (!baseUrl || value.includes(":") || value.startsWith("/")) return value;
-        const slash = baseUrl.lastIndexOf("/");
-        return slash < 0 ? value : baseUrl.slice(0, slash + 1) + value;
+        return baseUrl ? new URL(value, baseUrl).href : value;
     }
 
     function resolveArrayDrive(entry) {
@@ -337,11 +335,6 @@
             }
         }
 
-        async startResolved(config, ramMiB = 0, width = 0, height = 0, hasNetwork = false) {
-            await this.prepareResolved(config, ramMiB, width, height, hasNetwork);
-            await this.boot();
-        }
-
         prepareResolved(config, ramMiB = 0, width = 0, height = 0, hasNetwork = false) {
             if (this.preparation) throw new Error("VM preparation is already active");
             const resolved = resolveConfig(config, null);
@@ -369,14 +362,6 @@
             });
         }
 
-        async prepareFromUrl(configUrl, ramMiB = 0, commandLine = "", width = 0, height = 0, hasNetwork = false) {
-            const generation = this.httpGeneration;
-            const resolved = await RiscboxRuntime.loadResolvedConfig(configUrl, commandLine, this.options.fetch ?? globalThis.fetch);
-            if (generation !== this.httpGeneration) throw new Error("VM preparation was cancelled");
-            this.configUrl = configUrl;
-            await this.prepareResolved(resolved, ramMiB, width, height, hasNetwork);
-        }
-
         filesystem(name) { return FilesystemHandle.open(this, name); }
 
         block(index) {
@@ -389,22 +374,6 @@
             const preparation = this.preparation;
             this.preparation = null;
             preparation?.reject(error);
-        }
-
-        static async loadResolvedConfig(configUrl, commandLine = "", fetchRequest = globalThis.fetch) {
-            if (typeof fetchRequest !== "function")
-                throw new Error("Riscbox HTTP fetch is not available");
-            const response = await fetchRequest(configUrl, { cache: "no-store" });
-            if (response.status < 200 || response.status >= 300)
-                throw new Error(`configuration HTTP status ${response.status}`);
-            const source = textDecoder.decode(await response.arrayBuffer());
-            return resolveConfig(parseConfig(source), configUrl, commandLine);
-        }
-
-        async startFromUrl(configUrl, ramMiB = 0, commandLine = "", width = 0,
-                           height = 0, hasNetwork = false) {
-            await this.prepareFromUrl(configUrl, ramMiB, commandLine, width, height, hasNetwork);
-            await this.boot();
         }
 
         control(name, allowedStates) {
@@ -662,8 +631,7 @@
                     if (typeof fetchRequest !== "function")
                         throw new Error("Riscbox HTTP fetch is not available");
                     const hashedPath = /(?:^|\/)[^/?#]*-[0-9a-f]{8,64}(?:\.|\/|[?#]|$)/i.test(url);
-                    const cache = url === this.configUrl ? "no-store"
-                        : hashedPath ? "force-cache" : "default";
+                    const cache = hashedPath ? "force-cache" : "default";
                     const disk = this.exports.riscbox_action_disk();
                     let completed = false;
                     const load = async () => {
@@ -672,7 +640,7 @@
                             if (!(data instanceof Uint8Array)) throw new TypeError("fetchBlock must return Uint8Array");
                             return { data, status: 200 };
                         }
-                        const response = await fetchRequest(url, { cache });
+                        const response = await fetchRequest(url, { cache, signal: this.preparationSignal });
                         return { data: new Uint8Array(await response.arrayBuffer()), status: response.status ?? 200 };
                     };
                     load().then(({ data, status }) => {
@@ -817,71 +785,124 @@
         static FilesystemError = FilesystemError;
         static BlockError = BlockError;
         constructor(runtime) {
-            if (!(runtime instanceof RiscboxRuntime)) throw new TypeError("use Riscbox.instantiate()");
+            if (!(runtime instanceof RiscboxRuntime)) throw new TypeError("use Riscbox.prepare()");
             this.#runtime = runtime;
         }
-        static async instantiate(source, options = {}) {
+        static async prepare(options) {
+            if (!options || typeof options !== "object" || Array.isArray(options))
+                throw new TypeError("preparation options must be an object");
+            // Runtime options are copied separately from the inputs used only during construction.
             const names = ["fetch", "fetchBlock", "targetQuantumMs", "debugTiming", "consoleWrite",
                 "consoleReset", "onVmStarted", "onVmHalted", "onVmReset", "onVmDestroyed",
                 "onError", "networkWrite", "framebufferClear", "framebufferRefresh"];
+            const setupNames = ["config", "wasmUrl", "blocks", "ramMiB", "width", "height",
+                "hasNetwork", "commandLine", "signal"];
+            const runtimeOptions = {};
             for (const name of Object.keys(options)) {
+                if (setupNames.includes(name)) continue;
                 if (!names.includes(name)) throw new TypeError(`unknown Riscbox option ${name}`);
                 if (name !== "targetQuantumMs" && name !== "debugTiming" && typeof options[name] !== "function")
                     throw new TypeError(`${name} must be a function`);
+                runtimeOptions[name] = options[name];
             }
             if (options.debugTiming !== undefined && typeof options.debugTiming !== "boolean")
                 throw new TypeError("debugTiming must be boolean");
-            return new Riscbox(await RiscboxRuntime.instantiate(source, { ...options }));
-        }
-        static async loadResolvedConfig(url, commandLine = "", fetchRequest = globalThis.fetch) {
-            if (typeof url !== "string" || !url) throw new TypeError("configuration URL must be nonempty string");
-            if (typeof commandLine !== "string") throw new TypeError("commandLine must be string");
-            return RiscboxRuntime.loadResolvedConfig(url, commandLine, fetchRequest);
-        }
-        get state() { return this.#runtime.state; }
-        get started() { return this.#runtime.started; }
-
-        // Preparation reserves the runtime before downloads and cleans up failed loads.
-        async #prepare(operation, ramMiB, width, height, hasNetwork) {
-            this.#requireState("prepare", ["empty"]);
+            // A destruction notification belongs to the client returned after successful preparation.
+            const onVmDestroyed = runtimeOptions.onVmDestroyed;
+            delete runtimeOptions.onVmDestroyed;
+            // Named machine overrides retain configured values when their numeric value is zero.
+            const { ramMiB = 0, width = 0, height = 0, hasNetwork = false,
+                commandLine = "", signal } = options;
             integer("ramMiB", ramMiB, 0, 0xffff_ffff);
             integer("width", width, 0, 0xffff_ffff);
             integer("height", height, 0, 0xffff_ffff);
             if (typeof hasNetwork !== "boolean") throw new TypeError("hasNetwork must be boolean");
-            const generation = this.#runtime.httpGeneration;
-            this.#runtime.state = "preparing";
-            try { await operation(); }
-            catch (error) {
-                if (generation === this.#runtime.httpGeneration) await this.destroy();
+            if (typeof commandLine !== "string") throw new TypeError("commandLine must be string");
+            if (signal !== undefined && !(signal instanceof AbortSignal))
+                throw new TypeError("signal must be an AbortSignal");
+            const fetchRequest = options.fetch ?? globalThis.fetch;
+            if (typeof fetchRequest !== "function") throw new Error("Riscbox HTTP fetch is not available");
+            const wasmUrl = options.wasmUrl ?? defaultWasmUrl;
+            if (!(wasmUrl instanceof URL) && (typeof wasmUrl !== "string" || !wasmUrl))
+                throw new TypeError("wasmUrl is required when the adapter has no script URL");
+
+            // Copy application-owned inputs before fetching; each configured slot has one backing source.
+            const blocks = copyBlockOverrides(options.blocks);
+            const source = configSource(options.config);
+            const controller = new AbortController();
+            let runtime;
+            const cancel = () => {
+                controller.abort(signal.reason);
+                if (runtime) void runtime.destroy().catch(error => {
+                    if (runtimeOptions.onError) runtimeOptions.onError(error);
+                    else console.error(error);
+                });
+            };
+            signal?.throwIfAborted();
+            signal?.addEventListener("abort", cancel, { once: true });
+            try {
+                // URL sources fetch text before sharing resolution and block replacement with inline sources.
+                const loadConfig = async () => {
+                    let value = source.value;
+                    if (source.url !== undefined) {
+                        const response = await fetchRequest(source.url, { cache: "no-cache", signal: controller.signal });
+                        if (!response.ok) throw new Error(`configuration HTTP ${response.status}`);
+                        value = parseConfig(await response.text());
+                    } else if (source.text !== undefined) value = parseConfig(source.text);
+                    const merged = { ...value };
+                    for (const [name, drive] of Object.entries(blocks)) {
+                        if (merged[name] === undefined) throw new RangeError(`block override ${name} has no configured drive`);
+                        merged[name] = drive;
+                    }
+                    return resolveConfig(merged, source.baseUrl, commandLine);
+                };
+                // Streaming compilation uses the same validated fetch policy as configuration loading.
+                const loadRuntime = async () => {
+                    const response = await fetchRequest(wasmUrl, { cache: "no-cache", signal: controller.signal });
+                    if (!response.ok) throw new Error(`WASM HTTP ${response.status}`);
+                    const host = RiscboxRuntime.hostImports(runtimeOptions);
+                    const result = await WebAssembly.instantiateStreaming(response, { riscbox_host: host.imports });
+                    runtime = host.attach(result.instance.exports);
+                    runtime.state = "preparing";
+                    runtime.preparationSignal = controller.signal;
+                    return runtime;
+                };
+
+                // Both downloads settle before failure cleanup, so a late instance cannot escape ownership.
+                const stopOnFailure = promise => promise.catch(error => {
+                    controller.abort(error);
+                    throw error;
+                });
+                const results = await Promise.allSettled([stopOnFailure(loadConfig()), stopOnFailure(loadRuntime())]);
+                const failure = results.find(result => result.status === "rejected");
+                if (failure) throw controller.signal.reason;
+                controller.signal.throwIfAborted();
+                await runtime.prepareResolved(results[0].value, ramMiB, width, height, hasNetwork);
+                controller.signal.throwIfAborted();
+                runtime.preparationSignal = undefined;
+                const client = new Riscbox(runtime);
+                runtime.options.onVmDestroyed = () => {
+                    runtime.state = "destroyed";
+                    onVmDestroyed?.();
+                };
+                return client;
+            } catch (error) {
+                controller.abort();
+                if (runtime && runtime.state !== "empty") await runtime.destroy();
                 throw error;
+            } finally {
+                signal?.removeEventListener("abort", cancel);
             }
         }
-        prepareResolved(config, ramMiB = 0, width = 0, height = 0, hasNetwork = false) {
-            return this.#prepare(() => this.#runtime.prepareResolved(config, ramMiB, width, height, hasNetwork),
-                ramMiB, width, height, hasNetwork);
-        }
-        prepareFromUrl(url, ramMiB = 0, commandLine = "", width = 0, height = 0, hasNetwork = false) {
-            return this.#prepare(async () => {
-                if (typeof url !== "string" || !url) throw new TypeError("configuration URL must be nonempty string");
-                if (typeof commandLine !== "string") throw new TypeError("commandLine must be string");
-                await this.#runtime.prepareFromUrl(url, ramMiB, commandLine, width, height, hasNetwork);
-            }, ramMiB, width, height, hasNetwork);
-        }
-        async startResolved(config, ramMiB = 0, width = 0, height = 0, hasNetwork = false) {
-            await this.prepareResolved(config, ramMiB, width, height, hasNetwork);
-            await this.boot();
-        }
-        async startFromUrl(url, ramMiB = 0, commandLine = "", width = 0, height = 0, hasNetwork = false) {
-            await this.prepareFromUrl(url, ramMiB, commandLine, width, height, hasNetwork);
-            await this.boot();
-        }
+        get state() { return this.#runtime.state; }
+        get started() { return this.#runtime.started; }
 
         // Controls check state again when queued execution reaches the WASM boundary.
         boot() { return this.#runtime.control("reset", ["halted"]); }
         reset() { return this.#runtime.control("reset", ["running"]); }
         halt() { return this.#runtime.control("halt", ["running"]); }
         coldReset() { return this.#runtime.control("cold_reset", ["halted"]); }
-        destroy() { return this.#runtime.control("destroy", ["empty", "preparing", "halted"]); }
+        destroy() { return this.#runtime.control("destroy", ["halted"]); }
         requestShutdown() { return this.#runtime.control("request_shutdown", ["running"]); }
         requestReboot() { return this.#runtime.control("request_reboot", ["running"]); }
         filesystem(name) {
@@ -932,8 +953,9 @@
             return this.#runtime.wheelEvent(delta);
         }
 
-        // Transport carrier can precede preparation; frames are dropped outside execution.
+        // Transport carrier can precede boot; frames are dropped outside execution.
         networkInput(packet) {
+            this.#requireState("networkInput", ["halted", "running"]);
             if (!(packet instanceof Uint8Array)) throw new TypeError("networkInput requires Uint8Array");
             if (this.state !== "running" || packet.length === 0 || packet.length > 65535) return 1;
             if (!this.#runtime.hasNetwork || !this.#runtime.config.eth0)
@@ -941,9 +963,61 @@
             return this.#runtime.networkInput(packet);
         }
         networkCarrier(up) {
+            this.#requireState("networkCarrier", ["halted", "running"]);
             if (typeof up !== "boolean") throw new TypeError("up must be boolean");
             return this.#runtime.networkCarrier(up);
         }
+    }
+    // Overrides replace backing sources without changing the configured device topology.
+    function copyBlockOverrides(blocks = {}) {
+        if (!blocks || typeof blocks !== "object" || Array.isArray(blocks))
+            throw new TypeError("blocks must be an object keyed by drive0 through drive3");
+        const copied = {};
+        for (const [name, drive] of Object.entries(blocks)) {
+            if (!/^drive[0-3]$/.test(name)) throw new TypeError(`unknown block slot ${name}`);
+            if (!drive || typeof drive !== "object" || Array.isArray(drive))
+                throw new TypeError(`${name} must be a drive source`);
+            copied[name] = drive.bytes !== undefined || drive.capacity_sectors !== undefined || drive.provider !== undefined
+                ? resolveArrayDrive(drive) : { ...drive };
+            if (copied[name].bytes !== undefined) copied[name].bytes = copied[name].bytes.slice();
+        }
+        return copied;
+    }
+
+    // Explicit source forms keep configuration text distinct from URLs and establish asset resolution.
+    function configSource(source) {
+        if (!source || typeof source !== "object" || Array.isArray(source))
+            throw new TypeError("config needs url, text, or value");
+        const kinds = ["url", "text", "value"].filter(name => source[name] !== undefined);
+        if (kinds.length !== 1) throw new TypeError("config needs exactly one of url, text, or value");
+        const kind = kinds[0];
+        for (const name of Object.keys(source)) {
+            if (name !== kind && (name !== "baseUrl" || kind === "url"))
+                throw new TypeError(`unknown config source property ${name}`);
+        }
+        // URL sources define their own asset base; inline sources can select an explicit document base.
+        const documentUrl = typeof document === "object" ? document.baseURI : globalThis.location?.href;
+        if (kind === "url") {
+            if (!(source.url instanceof URL) && (typeof source.url !== "string" || !source.url))
+                throw new TypeError("config url must be a nonempty URL");
+            const url = new URL(source.url, documentUrl).href;
+            return { url, baseUrl: url };
+        }
+        // Inline object disk bytes are snapshots, independent of later application buffer writes.
+        if (kind === "text" && typeof source.text !== "string") throw new TypeError("config text must be a string");
+        if (kind === "value" && (!source.value || typeof source.value !== "object" || Array.isArray(source.value)))
+            throw new TypeError("config value must be an object");
+        if (source.baseUrl !== undefined && !(source.baseUrl instanceof URL) &&
+            (typeof source.baseUrl !== "string" || !source.baseUrl)) throw new TypeError("baseUrl must be a nonempty URL");
+        const baseUrl = source.baseUrl === undefined ? documentUrl : new URL(source.baseUrl, documentUrl).href;
+        const value = kind === "value" ? { ...source.value } : undefined;
+        if (value) {
+            for (let index = 0; index < 4; index++) {
+                const name = `drive${index}`;
+                if (value[name]?.bytes instanceof Uint8Array) value[name] = { ...value[name], bytes: value[name].bytes.slice() };
+            }
+        }
+        return { text: source.text, value, baseUrl };
     }
     function integer(name, value, minimum, maximum) {
         if (!Number.isInteger(value) || value < minimum || value > maximum)

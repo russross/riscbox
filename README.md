@@ -14,6 +14,13 @@ The docs for using riscbox are split into two parts:
 * [HOWTO.md](HOWTO.md) that walks through common setup and workflow scenarios
 * [API.md](API.md) defines the current JavaScript calls, options, types, and enforced VM-state contracts
 
+`Riscbox.prepare({config: {url: "riscbox.cfg"}, ...callbacks})` fetches WASM,
+loads the configuration and block devices, and returns a halted VM. Populate
+optional 9p shares, then call `boot()`. Configuration can also be supplied as
+text or an object, with initial block bytes in the same preparation call.
+WASM and config fetches revalidate cached responses. Destroy is terminal;
+prepare a fresh client to create another VM.
+
 Most users will just a [packaged release from github](https://github.com/russross/riscbox/releases) that includes riscbox assets, plus a Linux kernel image, OpenSBI firmware, and a U-boot bootloader, all customized and pre-built.
 
 See [BUILDING.md](https://github.com/russross/riscbox/blob/main/BUILDING.md) if you want to build from source, run tests, etc.

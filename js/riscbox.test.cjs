@@ -50,29 +50,20 @@ function fakeModule() {
     return { exports, calls };
 }
 
-test("configuration URL resolves defaults and assets before the WASM call", async () => {
+test("resolved configuration supplies defaults before the WASM call", async () => {
     const fake = fakeModule();
-    const fetched = [];
-    const runtime = new Riscbox(fake.exports, {
-        fetch: async (url, options) => {
-            fetched.push([url, options.cache]);
-            return { status: 200, arrayBuffer: async () => Buffer.from(
-                '{version:1,machine:"riscv64",memory_size:128,bios:"fw.bin",' +
-                'drive0:{file:"disk/blk.txt"},console:"uart",}',
-            ) };
-        },
-    });
-    await runtime.startFromUrl("https://host/vm/riscbox.cfg", 256, "quiet");
-    assert.deepEqual(fetched, [["https://host/vm/riscbox.cfg", "no-store"]]);
+    const runtime = new Riscbox(fake.exports);
+    await runtime.prepareResolved({ version: 1, machine: "riscv64", memory_size: 128,
+        bios: "https://host/vm/fw.bin", drive0: { file: "https://host/vm/disk/blk.txt" }, console: "uart" }, 256);
     const call = fake.calls.find((entry) => entry[0] === "prepare_resolved");
     const config = JSON.parse(new TextDecoder().decode(runtime.bytes(call[1], call[2])));
     assert.equal(call[3], 256);
     assert.equal(config.bios, "https://host/vm/fw.bin");
     assert.equal(config.drive0.file, "https://host/vm/disk/blk.txt");
-    assert.equal(config.cmdline, " quiet");
+    assert.equal(config.cmdline, "");
     assert.equal(config.uart_output, false);
     assert.equal(config.rtc_local_time, false);
-    await assert.rejects(runtime.startResolved({ version: 1 }), /machine must be string/);
+    assert.throws(() => runtime.prepareResolved({ version: 1 }), /machine must be string/);
 });
 
 test("adapter copies host input into WASM memory and releases it", () => {
@@ -165,12 +156,11 @@ test("HTTP actions complete requests and continue draining startup", async () =>
     const runtime = new Riscbox(fake.exports, {
         fetch: async (requestUrl, options) => {
             assert.equal(requestUrl, "https://host/vm.cfg");
-            assert.deepEqual(options, { cache: "no-store" });
+            assert.equal(options.cache, "default");
             return { status: 200, arrayBuffer: async () => Uint8Array.of(1, 2).buffer };
         },
         onVmStarted: () => started++,
     });
-    runtime.configUrl = "https://host/vm.cfg";
     runtime.drainActions();
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(fake.calls.find((call) => call[0] === "http_complete")[1], 17);

@@ -59,7 +59,7 @@ while old pages can request them. Serve matching JavaScript and WASM together.
 Prepare storage before the first boot
 ------------------------------------
 
-Create the adapter once, prepare a halted machine, populate a share, and boot.
+Prepare a halted machine in one call, populate a share, and boot.
 Preparation downloads boot assets without guest execution, so no guest can race
 the initial host writes. Load the browser script before your application module:
 
@@ -74,14 +74,12 @@ from these callbacks. Startup means CPU execution began, not that login is ready
 
 ```js
 let finishShutdown;
-const response = await fetch("riscbox/riscbox.wasm");
-if (!response.ok) throw new Error(`WASM HTTP ${response.status}`);
-const runtime = await Riscbox.instantiate(await response.arrayBuffer(), {
+const runtime = await Riscbox.prepare({
+    config: { url: "riscbox.cfg" },
     consoleWrite: text => terminal.write(text),
     onVmHalted: cause => { finishShutdown?.(cause); },
     onError: error => console.error(error),
 });
-await runtime.prepareFromUrl(new URL("riscbox.cfg", location.href).href);
 const workspace = runtime.filesystem("workspace");
 workspace.writeFile("hello.c", '#include <stdio.h>\nint main(void) { puts("Hello from 9p"); }\n');
 await runtime.boot();
@@ -209,30 +207,33 @@ recreates guest tmpfs, so home/tmp contents are distinct from retained disk and
 Cancel preparation or replace the VM
 -----------------------------------
 
-Preparation reserves `preparing` before it downloads. `destroy()` can cancel
-that operation; its preparation promise rejects and late responses are ignored.
-A failed preparation cleans itself up. Handle the rejection even when your UI
-deliberately cancelled it.
+Pass an `AbortSignal` to `Riscbox.prepare()` to cancel downloads and machine
+preparation. The promise rejects and late responses are ignored. Failed
+preparation releases partially created resources. Handle rejection even when
+your UI deliberately cancels the operation.
 
 To replace a live VM, first shut down or halt, then `await runtime.destroy()`.
-Existing disk/share objects become invalid. Reuse the same runtime with another
-prepare/start call and obtain new storage objects; do not retain the old ones.
+Existing disk/share objects become invalid. Create a fresh client with
+`Riscbox.prepare()` and obtain new storage objects. Destroyed clients cannot be
+reused; do not retain their storage objects.
 Destroy releases the machine but does not remove your application-owned editor
 or saved snapshots.
 
 Use a host-supplied disk or configuration
 ---------------------------------------
 
-For a downloaded raw disk, copy bytes into the VM during preparation. Load a
-deployed configuration first when you want its boot URLs/defaults while changing
-one storage entry:
+For a downloaded raw disk, copy bytes into the VM during preparation. Use a
+deployed configuration and override one storage entry in the preparation call:
 
 ```js
-const config = await Riscbox.loadResolvedConfig(new URL("riscbox.cfg", location.href).href);
 const diskResponse = await fetch("uploaded-disk.img");
 if (!diskResponse.ok) throw new Error(`Disk HTTP ${diskResponse.status}`);
 const bytes = new Uint8Array(await diskResponse.arrayBuffer());
-await runtime.prepareResolved({ ...config, drive0: { bytes } });
+const runtime = await Riscbox.prepare({
+    config: { url: "riscbox.cfg" },
+    blocks: { drive0: { bytes } },
+    consoleWrite: text => terminal.write(text),
+});
 const disk = runtime.block(0);
 disk.write(0n, bootSector); // copied, whole-sector write while halted
 await runtime.boot();
@@ -263,16 +264,18 @@ Attach the optional network frontend
 -----------------------------------
 
 Networking requires both configured `eth0: {driver: "user"}` and an enabled
-startup flag. Attach/connect the release's WebSocket frontend before boot; it
-can report transport carrier before a VM exists:
+preparation flag. Attach/connect the release's WebSocket frontend before boot;
+it can report transport carrier while the prepared VM is halted:
 
 ```js
 import { WebSocketNetwork } from "./riscbox/network/index.js";
 const network = new WebSocketNetwork("wss://your-origin.example/ethernet");
-const runtime = await Riscbox.instantiate(wasmBytes, { networkWrite: network.transmit });
+const runtime = await Riscbox.prepare({
+    config: { url: configUrl }, hasNetwork: true, networkWrite: network.transmit,
+});
 network.attach(runtime);
 network.connect();
-await runtime.startFromUrl(configUrl, 0, "", 0, 0, true);
+await runtime.boot();
 ```
 
 The repository supplies no production origin service. Your origin owns routing,

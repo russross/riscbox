@@ -40,7 +40,7 @@ test("deployed filesystem ABI owns bytes and handles through synchronous sharing
             assert.equal(await facadeRegression(runtime, firmware), 1);
         }
         finally { runtime.cancelWakeup(); }
-        assert.equal(await publicAdapterRegression(ClientAdapter, module, firmware), 1);
+        assert.equal(await publicAdapterRegression(ClientAdapter, bytes, firmware), 1);
 
         if (process.env.RISCBOX_TEST_BROWSER === "1") {
             const source = (await readFile(join(import.meta.dirname, "fixtures/ninep_abi.mjs"), "utf8"))

@@ -20,10 +20,9 @@ States and errors
 
 | State       | Meaning                                                        |
 | ----------- | -------------------------------------------------------------- |
-| `empty`     | No prepared VM; the runtime can prepare a new one.              |
-| `preparing` | Configuration or boot assets are loading; destroy cancels them. |
 | `halted`    | A prepared or powered-off VM exists with clean device interfaces. |
 | `running`   | The VM can execute, including while its guest sleeps in WFI.    |
+| `destroyed` | Storage and machine resources are released; the client cannot be reused. |
 
 Lifecycle calls return `Promise<void>` and reject on invalid states or failed
 operations. Queued controls check state when they reach the execution boundary.
@@ -36,54 +35,54 @@ it does not replace rejection/throw handling for explicit calls.
 Preparation
 -----------
 
-### `Riscbox.instantiate(source, options?)`
+### `Riscbox.prepare(options)`
 
-Returns `Promise<Riscbox>` in `empty` state. `source` is a `BufferSource` or
-compiled `WebAssembly.Module` for the matching release. Instantiation checks the
-runtime interface and options; unknown option names are rejected. The runtime
-is reusable after destroy. Supply browser Web Crypto for guest entropy.
+Returns `Promise<Riscbox>` after fetching and instantiating WASM and constructing
+a complete `halted` VM. Populate its optional 9p shares, then call `boot()`.
+There is no separate public instantiation, configuration-loading, or startup API.
+Each call creates a new client; destroy is terminal. Supply browser Web Crypto
+for guest entropy.
 
-### `Riscbox.loadResolvedConfig(url, commandLine?, fetchRequest?)`
+```js
+const vm = await Riscbox.prepare({
+    config: { url: "./riscbox.cfg" },
+    consoleWrite: text => terminal.write(text),
+});
+vm.filesystem("workspace").writeFile("hello.txt", "Hello\n");
+await vm.boot();
+```
 
-Returns `Promise<VmConfig>` without creating or changing a VM. `url` must be a
-nonempty string; use an absolute URL to resolve relative assets unambiguously.
-The default fetch is `globalThis.fetch`. Configuration uses `no-store`, accepts
-comments/unquoted keys/trailing commas, supplies defaults, and resolves boot and
-drive paths relative to its URL. `commandLine` defaults to `""`; a nonempty value
-appends to `cmdline`, or replaces it when beginning with `!`. HTTP and syntax
-errors reject. This is useful before replacing a disk entry in a host object.
+`config` requires exactly one source: `{url: string | URL}`, `{text: string,
+baseUrl?: string | URL}`, or `{value: VmConfig, baseUrl?: string | URL}`.
+URL sources fetch contents and follow the same parsing/resolution path as
+inline sources. Text accepts comments, unquoted keys, and trailing commas.
+Boot and drive paths resolve relative to the config URL, or the inline source's
+`baseUrl` (default: the document base URL). Outside a browser, provide absolute
+asset URLs or an explicit base URL. Object sources support initial array bytes.
 
-### `prepareResolved(config, ramMiB?, width?, height?, hasNetwork?)`
+Preparation options include the callbacks and transport hooks below, plus:
 
-Requires `empty`; returns `Promise<void>` after building a `halted` VM.
-`config` is a `VmConfig`; asset URLs are used as supplied. Array drive bytes are
-copied during the call. The optional overrides default to `0, 0, 0, false`.
-RAM and dimensions are unsigned 32-bit integers; zero selects configured values.
-`hasNetwork` must be boolean and enables the configured `eth0` device when true.
-Boot payload bounds/overlap and platform configuration are validated by Rust.
-The call reserves `preparing` before asynchronous work begins. Failed preparation
-cleans up to `empty`; successful preparation permits host storage population.
+| Option            | Contract |
+| ----------------- | -------- |
+| `wasmUrl`         | String or URL; defaults to `riscbox.wasm` beside the loaded adapter script. Required when no script URL is available. |
+| `blocks`          | Optional `drive0` through `drive3` source overrides for existing configured slots: HTTP `{file, device?}` or array `{bytes?, capacity_sectors?}`. Replaces the slot's backing source; does not add a device. |
+| `ramMiB`          | Unsigned 32-bit integer; default zero selects configured RAM. |
+| `width`, `height` | Unsigned 32-bit integers; default zero selects configured framebuffer dimensions. |
+| `hasNetwork`      | Boolean, default false; enables configured `eth0`. |
+| `commandLine`     | String, default empty; nonempty text appends to `cmdline`, or replaces it when beginning with `!`. |
+| `signal`          | Optional `AbortSignal`; cancels preparation and releases partially created resources. It has no effect after successful preparation. |
 
-### `prepareFromUrl(url, ramMiB?, commandLine?, width?, height?, hasNetwork?)`
+Initial array bytes are copied before asynchronous work starts. Explicit capacity
+must match their length in 512-byte sectors; capacity-only arrays start zeroed.
+All configured disks are ready before preparation resolves. Rust validates the
+machine and boot payload bounds/overlap.
 
-Requires `empty`. Loads configuration through the runtime's fetch option, then
-prepares as above. The URL and command-line contracts match
-`loadResolvedConfig`; overrides have the same defaults. Returns `Promise<void>`
-in `halted` state. Concurrent preparation is rejected. Destroy cancels loading;
-late replies cannot replace a newer VM.
-
-### `startResolved(config, ramMiB?, width?, height?, hasNetwork?)`
-
-Requires `empty`. Prepares using `prepareResolved`, then boots. Returns
-`Promise<void>` once boot has begun, not when the guest reaches login. A failed
-boot can leave a prepared halted VM; inspect `state` and handle the rejection.
-
-### `startFromUrl(url, ramMiB?, commandLine?, width?, height?, hasNetwork?)`
-
-Requires `empty`. Prepares using `prepareFromUrl`, then boots; returns
-`Promise<void>` once execution starts. Arguments and failure behavior match the
-two component calls. Use preparation separately when storage must be populated
-before guest execution.
+WASM and configuration fetches use `cache: "no-cache"`, allowing cached responses
+after validation. WASM uses `WebAssembly.instantiateStreaming`; serve it as
+`application/wasm`. Hash-named boot and disk assets use `force-cache`.
+Unknown option names, HTTP failures, syntax errors, and preparation failures
+reject the promise. Failures release partially created VM storage. Cancellation
+retires pending responses; no partially prepared client is returned.
 
 Lifecycle controls
 ------------------
@@ -99,14 +98,14 @@ destroyed. Each callback observes the updated state.
 | `halt()`            | `running`                         | Force halt without letting guest buffers flush.              |
 | `reset()`           | `running`                         | Force reboot from boot payloads, retaining RAM and stores.   |
 | `coldReset()`       | `halted`                          | Clear RAM, reload boot payloads, reset devices; remain halted.|
-| `destroy()`         | `empty`, `preparing`, or `halted`   | Cancel startup/free VM stores and invalidate storage objects. |
+| `destroy()`         | `halted`                          | Free VM stores, invalidate storage objects, and enter terminal `destroyed` state. |
 
 `boot()` and `reset()` reject while host disk reads are pending. `coldReset()`
 retires them. Reboot/reset close guest 9p sessions and retain namespace bytes,
 clean HTTP cache, and HTTP write overlays. Soft controls require a guest event
 handler, such as the demo's BusyBox acpid. Observe `onVmHalted` or `onVmReset` to
 know when the requested guest action happens; a resolved request is not evidence
-that filesystems were flushed. `destroy()` in `empty` is allowed.
+that filesystems were flushed. All VM operations reject after destroy.
 
 Entering `halted` through guest poweroff, guest failure, or forced halt resets
 guest device registers, queues, interrupts, timers, 9p fids, and locks. Pending
@@ -123,8 +122,8 @@ Disk access
 Requires `halted` or `running`. Returns the same `BlockDisk` for each configured
 zero-based integer index. Unknown indexes throw. Getting a disk while running
 does not permit host disk I/O: **every disk operation below requires `halted`**.
-Destroy invalidates retained objects; acquiring a later VM's disk returns a new
-object. Host byte buffers are copies.
+Destroy invalidates retained objects; a fresh client's disk is a new object.
+Host byte buffers are copies.
 
 | Member                 | Contract                                                             |
 | ---------------------- | -------------------------------------------------------------------- |
@@ -231,12 +230,12 @@ by lifecycle reset/halt/destroy; the host must retire its own retry buffers too.
 | `pointerEvent(x, y, buttons)`| Unsigned 32-bit integer coordinates, clamped/scaled by the platform; mask bits 1/2/4 are left/right/middle buttons; return `0`. |
 | `wheelEvent(delta)`         | Signed 32-bit integer movement at the last pointer position; return `0`. |
 | `networkInput(packet)`      | Require `Uint8Array`; return `0` accepted or `1` dropped. Empty/over-65535-byte frames and non-running VMs drop. A running VM requires configured `eth0` and `hasNetwork: true`; otherwise throw. |
-| `networkCarrier(up)`        | Boolean carrier status; accepted in every state so a transport can attach before preparation; return `0`. |
+| `networkCarrier(up)`        | Boolean carrier status; accepted while halted or running so a transport can attach before boot; return `0`. |
 
 Runtime options and callbacks
 -----------------------------
 
-Options are supplied once to `instantiate`; the adapter copies the option
+Options are supplied once to `prepare`; the adapter copies the option
 object. Callback functions are optional and are not awaited. Keep them short,
 avoid throwing, and use the updated state to choose valid operations.
 
@@ -251,7 +250,7 @@ avoid throwing, and use the updated state to choose valid operations.
 | `onVmStarted`         | `() => void`; boot/start begins execution, not userspace readiness. |
 | `onVmHalted`          | `(cause: HaltCause) => void`; state is halted. Causes: `guest-poweroff`, `host-halt`, `guest-failure`. |
 | `onVmReset`           | `(cause: ResetCause) => void`; state is running. Causes: `guest-reboot`, `host-reset`, `host-boot`; host boot also reports started. |
-| `onVmDestroyed`       | `() => void`; storage invalidated and state empty.                |
+| `onVmDestroyed`       | `() => void`; storage invalidated and state destroyed. Failed preparation returns no client and emits no destruction notification. |
 | `onError`             | `(error: unknown) => void`; asynchronous runtime/subscriber error. |
 | `networkWrite`        | `(packet: Uint8Array) => void`; one copied Ethernet frame.         |
 | `framebufferClear`    | `() => void`; clear notification on boot/reset/cold reset.         |
@@ -262,9 +261,9 @@ Configuration reference
 
 `VmConfig` describes one little-endian RV64 VM. The adapter supplies defaults;
 Rust validates the resolved machine and boot layout. Configuration-file drive
-and boot paths resolve relative to the configuration URL. Host objects use URLs
-as given. JSON files cannot contain `Uint8Array` or bigint values; use quoted
-integers for large capacities/physical addresses.
+and boot paths resolve relative to the configuration URL. Inline sources use
+their base URL or the document base URL. JSON files cannot contain `Uint8Array`
+or bigint values; use quoted integers for large capacities/physical addresses.
 
 | Field                              | Contract                                                   |
 | ---------------------------------- | ---------------------------------------------------------- |

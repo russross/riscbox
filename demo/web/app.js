@@ -88,7 +88,7 @@ function updateControls() {
         element(id).disabled = phase !== "running";
     }
     element("image-reset").disabled = phase !== "running" && phase !== "halted";
-    element("destroy").disabled = phase !== "halted" && phase !== "preparing";
+    element("destroy").disabled = phase !== "halted";
     for (const id of ["files", "read-file", "download-file"]) {
         element(id).disabled = busy || !workspace;
     }
@@ -109,7 +109,18 @@ async function action(name, operation) {
 async function prepare() {
     setPhase("preparing");
     try {
-        await runtime.prepareFromUrl(new URL("riscbox.cfg", location.href).href);
+        runtime = await Riscbox.prepare({
+            config: { url: "riscbox.cfg" },
+            consoleWrite: text => terminal.write(text),
+            onVmStarted: () => {
+                element("message").textContent = "";
+                log("onVmStarted"); setPhase("running"); runtime.consoleResize(80, 25);
+            },
+            onVmHalted: cause => { clearInput(); log(`onVmHalted: ${cause}`); setPhase("halted"); },
+            onVmReset: cause => { clearInput(); log(`onVmReset: ${cause}`); setPhase("running"); runtime.consoleResize(80, 25); },
+            onVmDestroyed: () => { clearInput(); log("onVmDestroyed"); },
+            onError: error => { clearInput(); reportError(error); },
+        });
         workspace = runtime.filesystem("workspace");
         subscribeTree();
         refreshTree();
@@ -118,7 +129,8 @@ async function prepare() {
         unsubscribeTree?.(); unsubscribeTree = null;
         workspace = null;
         element("files").replaceChildren();
-        await runtime.destroy();
+        if (runtime?.state === "halted") await runtime.destroy();
+        runtime = null;
         setPhase("absent");
         throw error;
     }
@@ -215,7 +227,7 @@ function downloadFile() {
 }
 
 // Each control spells out the lifecycle calls; reset operations keep their stores distinct.
-element("prepare").onclick = () => action("prepareFromUrl()", prepare);
+element("prepare").onclick = () => action("Riscbox.prepare()", prepare);
 element("boot").onclick = () => action("boot()", () => runtime.boot());
 element("shutdown").onclick = () => action("requestShutdown()", () => runtime.requestShutdown());
 element("reboot").onclick = () => action("requestReboot()", () => runtime.requestReboot());
@@ -229,7 +241,7 @@ element("image-reset").onclick = () => action("halt(); coldReset(); block(0).res
 });
 element("destroy").onclick = () => action("destroy()", async () => {
     unsubscribeTree?.(); unsubscribeTree = null;
-    await runtime.destroy(); workspace = null; setPhase("absent");
+    await runtime.destroy(); runtime = null; workspace = null; setPhase("absent");
     element("files").replaceChildren();
 });
 element("load-tree").onclick = () => action("filesystem.reset(); writeFile() source tree", () => loadTree(element("source-tree").value));
@@ -242,21 +254,8 @@ element("save-file").onclick = () => action("editor → filesystem.writeFile()",
 element("download-file").onclick = () => action("filesystem.readFile() → download", downloadFile);
 element("clear-terminal").onclick = () => { terminal.write("\x1b[3J\x1b[2J\x1b[H"); log("clear terminal display and history"); };
 
-// Reset notifications retire host input but keep full boot history visible in the terminal.
+// Prepare a fresh VM and populate its share before the first guest instruction.
 try {
-    const response = await fetch("riscbox/riscbox.wasm");
-    if (!response.ok) throw new Error(`WASM HTTP ${response.status}`);
-    runtime = await Riscbox.instantiate(await response.arrayBuffer(), {
-        consoleWrite: text => terminal.write(text),
-        onVmStarted: () => {
-            element("message").textContent = "";
-            log("onVmStarted"); setPhase("running"); runtime.consoleResize(80, 25);
-        },
-        onVmHalted: cause => { clearInput(); log(`onVmHalted: ${cause}`); setPhase("halted"); },
-        onVmReset: cause => { clearInput(); log(`onVmReset: ${cause}`); setPhase("running"); runtime.consoleResize(80, 25); },
-        onVmDestroyed: () => { clearInput(); log("onVmDestroyed"); },
-        onError: error => { clearInput(); reportError(error); },
-    });
     const examples = await fetch("examples.json");
     if (!examples.ok) throw new Error(`Examples HTTP ${examples.status}`);
     trees = await examples.json();

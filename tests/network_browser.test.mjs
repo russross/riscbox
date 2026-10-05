@@ -83,8 +83,8 @@ const network = new WebSocketNetwork("ws://127.0.0.1:${port}/network", {
     onError: (error) => report("adapter: " + error.message),
 });
 try {
-    const response = await fetch("/riscbox.wasm");
-    const runtime = await Riscbox.instantiate(await response.arrayBuffer(), {
+    const runtime = await Riscbox.prepare({
+        config: { url: "/riscbox.cfg" }, ramMiB: 32, hasNetwork: true,
         consoleWrite(text) {
             output += text;
             if (output.includes("NETWORK PASS")) report("pass");
@@ -103,7 +103,7 @@ try {
             if (up && !started) {
                 started = true;
                 try {
-                    void runtime.startFromUrl(new URL("/riscbox.cfg", location.href).href, 32, "", 0, 0, true)
+                    void runtime.boot()
                         .catch(error => report("startup: " + error.message));
                 } catch (error) {
                     report("startup: " + error.message);

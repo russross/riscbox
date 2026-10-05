@@ -157,10 +157,24 @@ can recover control, but it cannot establish that guest writes were flushed.
 For large disks, export in whole-sector batches rather than allocating one
 whole-disk buffer. Applications own persistence of the copied bytes.
 
-After halt, `workspace.clear()` and explicit host writes can install another
+After halt, `workspace.reset()` and explicit host writes can install another
 project. Fetch every source body before clearing if a download failure should
 preserve the outgoing project. The disk and share have independent lifetimes;
 replacing 9p does not discard block changes. Boot explicitly when ready.
+
+To empty a share while the guest runs, call `workspace.clear()`. This recursively
+deletes names below the existing root and preserves the mount and active fids.
+Open files retain their bytes until closed; a shell in a removed directory must
+change to an absolute path such as `/workspace`. The guest can observe the empty
+tree and each later host write. Fetching replacement bodies first avoids losing
+the outgoing project to a download failure, but does not make loading atomic.
+Linux can retain pathname metadata through cached fids even with `cache=none`;
+fresh directory enumeration shows the cleared namespace, while existing fids
+continue to describe their original objects.
+
+Guest poweroff and forced halt both retire device interaction state, including
+9p fids and locks, while preserving RAM and storage bytes. Forced halt does not
+flush guest buffers. Boot always runs the guest startup procedure.
 
 Choose an orderly reboot or forced recovery
 ------------------------------------------
@@ -182,11 +196,11 @@ writes while retaining the project share:
 ```js
 if (runtime.state === "running") await runtime.halt();
 await runtime.coldReset();
-runtime.block(0).discardChanges();
+runtime.block(0).reset();
 await runtime.boot();
 ```
 
-Add `workspace.clear()` and your source-loading writes before boot only when
+Add `workspace.reset()` and your source-loading writes before boot only when
 you also want to reset the project. Array disks have no discardable overlay;
 restore their bytes explicitly or destroy/prepare them again. Every boot
 recreates guest tmpfs, so home/tmp contents are distinct from retained disk and

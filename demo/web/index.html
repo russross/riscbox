@@ -47,7 +47,7 @@
         <section>
             <h2>9p file system mounted as /workspace and shared with the host</h2>
             <fieldset id="share-controls" disabled>
-                <legend>Replace the entire file tree (only while halted) </legend>
+                <legend>Shared file tree</legend>
                 <label for="source-tree">Source tree</label>
                 <select id="source-tree">
                     <option value="arithmetic">Arithmetic practice</option>
@@ -57,7 +57,7 @@
                 <button id="share-reset">Reload current tree</button>
                 <button id="share-clear">Clear 9p</button>
             </fieldset>
-            <p>The file tree updates automatically as the host or guest changes the shared file system. Copying to the editor and saving back remain explicit actions.</p>
+            <p>Loading or reloading a tree requires halt. Clear 9p recursively deletes content while running or halted. The file tree updates automatically as the host or guest changes it. Copying to the editor and saving back remain explicit actions.</p>
             <div class="files">
                 <div>
                     <label for="files">Files and directories</label>

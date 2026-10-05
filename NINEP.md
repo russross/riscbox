@@ -47,7 +47,8 @@ Calling convention
     reply. The server never starts external work or retains pending requests.
 3. Call `reset(&mut filesystem)` when a device resets, and `close(...)` before
     discarding a session. Both release fids, inode references, and locks while
-    preserving namespace bytes. Namespace clear invalidates prior fids.
+    preserving namespace bytes. Namespace reset invalidates prior fids;
+    namespace clear preserves them and recursively unlinks root contents.
 
 Resident file I/O borrows or writes only the requested range. Complete requests
 are parsed before dispatch, and reply space is checked before mutation.
@@ -70,7 +71,23 @@ Preparation creates one resident namespace per configured server name and one
 independent session per mount tag. The VM owns all trees; reboot retains them,
 and destroy releases them. `BrowserRuntime::with_filesystem(key, operation)`
 permits host access between CPU activations, before boot, and while halted.
-The raw host clear operation requires a powered-off VM.
+Host `clear()` works while halted or running, preserves the root inode and
+protocol sessions, and emits ordinary removal events. All object kinds,
+including directories, use namespace link counts and separate fid reference
+counts. An unlinked inode survives until its last fid closes. Detached
+directories are empty; creation and parent traversal return `ENOENT`.
+Open file I/O and locks remain attached to the original inode, including its
+quota usage. Replacement names identify new inodes.
+
+Linux may retain pathname fids in its dentry cache even with `cache=none`.
+Metadata requests through those fids still describe detached inodes, while
+fresh directory enumeration describes the current namespace. There is no
+server-pushed cache invalidation; clear does not revoke retained fids.
+
+Entering the halted state resets guest device interfaces and closes every 9p
+session's fids and locks without removing linked content. Host `reset()` requires
+halted state and replaces the complete namespace, including the root. Host
+handles and subscriptions remain valid across clear, halt, and reset.
 
 Resident guest requests finish within the notifying CPU run, without a browser
 service exit. Generic VirtIO descriptor handling remains separate from protocol

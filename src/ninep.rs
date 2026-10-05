@@ -388,7 +388,7 @@ impl Filesystem {
         Ok(())
     }
 
-    /// Releases an inode and reclaims a file after its last link and fid vanish.
+    /// Releases an inode and reclaims it after its last link and fid vanish.
     ///
     /// # Errors
     /// Returns an unknown-inode or invalid-reference error.
@@ -1264,7 +1264,38 @@ impl Filesystem {
         }
     }
 
-    /// Clears the namespace and gives every new inode a fresh identity.
+    /// Recursively unlinks root contents while retaining root and fid identities.
+    ///
+    /// # Errors
+    /// Reports an inconsistent namespace before removing any entries.
+    pub fn clear(&mut self) -> Result<(), FilesystemError> {
+        // Gather parent/name pairs before mutation. Reverse preorder removes
+        // descendants before their directories without recursive host calls.
+        let mut directories = vec![self.root];
+        let mut removals = Vec::new();
+        while let Some(parent) = directories.pop() {
+            let inode = self.inode(parent).ok_or(FilesystemError::NotFound)?;
+            let InodeKind::Directory { entries, .. } = &inode.kind else {
+                return Err(FilesystemError::NotDirectory);
+            };
+            for (name, entry) in entries {
+                let child = self.inode(entry.inode).ok_or(FilesystemError::NotFound)?;
+                if matches!(child.kind, InodeKind::Directory { .. }) {
+                    directories.push(entry.inode);
+                }
+                removals.push((parent, name.clone()));
+            }
+        }
+
+        // Ordinary unlink accounting retains detached inodes, locks, and bytes
+        // until their remaining fids close, and emits ordinary removal events.
+        for (parent, name) in removals.into_iter().rev() {
+            self.remove_at(parent, &name)?;
+        }
+        Ok(())
+    }
+
+    /// Replaces the namespace and gives every new inode a fresh identity.
     ///
     /// # Errors
     /// Returns an exhaustion error if the generation cannot advance.
@@ -1898,6 +1929,60 @@ mod tests {
         fs.symlink("link", "../outside").unwrap();
         assert_eq!(fs.readlink("link"), Ok("../outside"));
         assert_eq!(fs.read_file("link"), Err(FilesystemError::IsDirectory));
+    }
+
+    #[test]
+    fn clear_retains_root_and_detached_inodes_until_their_last_fids_close() {
+        let mut fs = Filesystem::new(
+            Limits {
+                max_tree_bytes: 4,
+                ..Limits::default()
+            },
+            100,
+        );
+        let root = fs.root();
+        let generation = fs.generation();
+        let directory = fs.mkdir("dir").unwrap();
+        let file = fs.write_file("dir/file", b"data").unwrap();
+        fs.hard_link("dir/file", "alias").unwrap();
+        fs.symlink("link", "dir/file").unwrap();
+        fs.retain_fid(directory).unwrap();
+        fs.retain_fid(file).unwrap();
+        fs.retain_fid(file).unwrap();
+        while fs.next_change().is_some() {}
+
+        // Clearing removes all names without changing existing object identities.
+        fs.clear().unwrap();
+        assert_eq!(fs.root(), root);
+        assert_eq!(fs.generation(), generation);
+        assert!(fs.directory_entries(root).unwrap().is_empty());
+        assert!(fs.directory_entries(directory).unwrap().is_empty());
+        assert_eq!(fs.inode(directory).unwrap().parent, None);
+        assert_eq!(fs.inode(file).unwrap().link_count, 0);
+        assert_eq!(fs.inode(file).unwrap().fid_refs, 2);
+        assert_eq!(
+            fs.write_file("replacement", b"x"),
+            Err(FilesystemError::NoSpace)
+        );
+        let mut removed = 0;
+        while let Some(change) = fs.next_change() {
+            assert_eq!(change.kind, ChangeKind::Remove);
+            removed += 1;
+        }
+        assert_eq!(removed, 4);
+
+        // Repeating clear leaves detached objects alone; only final close frees bytes.
+        fs.clear().unwrap();
+        assert!(fs.next_change().is_none());
+        fs.release_fid(file).unwrap();
+        assert!(fs.inode(file).is_some());
+        fs.release_fid(file).unwrap();
+        assert!(fs.inode(file).is_none());
+        fs.release_fid(directory).unwrap();
+        assert!(fs.inode(directory).is_none());
+        let replacement = fs.write_file("dir", b"new").unwrap();
+        assert_ne!(replacement, directory);
+        assert_ne!(replacement, file);
     }
 
     #[test]

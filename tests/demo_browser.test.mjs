@@ -209,6 +209,11 @@ try {
     await click('image-reset');
     const resetOutput = await command('test ! -e /home/demo/marker && echo IMAGE_CLEAN; test -f wump && echo SHARE_KEPT', 'IMAGE_CLEAN');
     check(resetOutput.includes('SHARE_KEPT'), 'image reset retains share');
+    await command('exec 3<Makefile; mkdir removed; cd removed; echo DIRECTORY_OPEN', 'DIRECTORY_OPEN');
+    await click('share-clear');
+    check(app.workspace.listDirectory('').length === 0, 'live clear empties host namespace');
+    const clearOutput = await command('cd /workspace; test -z "$(ls -A)" && echo LIVE_TREE_EMPTY; read line <&3 && echo OPEN_FID_RETAINED; exec 3<&-; echo LIVE_FID_CLOSED', 'LIVE_FID_CLOSED');
+    check(clearOutput.includes('LIVE_TREE_EMPTY') && clearOutput.includes('OPEN_FID_RETAINED'), 'Linux leaves deleted directory and retains open file');
     await click('halt');
     check((await disk.read(0n, 512))[0] === originalSector[0], 'image reset discards HTTP overlay');
     await click('share-reset');

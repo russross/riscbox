@@ -17,6 +17,41 @@ fn console_fifo_wraps_and_drops_only_excess_input() {
 }
 
 #[test]
+fn poweroff_retires_interactions_and_retains_host_settings() {
+    let mut input = BrowserInputQueue::default();
+    input.resize(100, 30);
+    input.network_carrier(true);
+    input.queue_console(b"stale");
+    input.key_event(true, 30);
+    input.pointer_event(10, 20, 3);
+    input.network_packet(&[1, 2]);
+    input.retire_guest_work();
+    assert_eq!(input.console_len(), 0);
+    assert_eq!(input.next_event(), None);
+    assert!(input.carrier_is_up());
+    assert_eq!(
+        input.take_resize(),
+        Some(TerminalSize {
+            columns: 100,
+            rows: 30
+        })
+    );
+    input.wheel_event(1);
+    assert_eq!(
+        input.next_event(),
+        Some(BrowserEvent::Pointer(PointerEvent {
+            x: 0,
+            y: 0,
+            wheel: 1,
+            buttons: 0,
+        }))
+    );
+    for _ in 0..MAX_PENDING_NETWORK_FRAMES {
+        assert_eq!(input.network_packet(&[1]), NetworkInputResult::Accepted);
+    }
+}
+
+#[test]
 fn latest_resize_is_consumed_once() {
     let mut input_queue = BrowserInputQueue::default();
     input_queue.resize(80, 25);

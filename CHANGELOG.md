@@ -4,6 +4,12 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Halt powers off all guest device interfaces and retires guest interactions
+    while retaining RAM and backing stores. Filesystem `clear()` recursively
+    unlinks content with ordinary inode/fid lifetimes; halted filesystem `reset()`
+    replaces the namespace. HTTP disk `reset()` discards write overlays and
+    retains clean cache; array disks reject it.
+
 *   Size demo panels from their widgets so explanatory text does not force the
     file tree and editor below the console before the widgets run out of room.
 

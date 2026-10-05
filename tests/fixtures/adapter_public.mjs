@@ -62,7 +62,11 @@ export async function publicAdapterRegression(Adapter, wasm, firmware) {
     await rejects(() => client.boot(), "boot cannot silently reset running VM");
     await rejects(() => client.destroy(), "destroy cannot force halt");
     await rejects(() => client.coldReset(), "cold reset requires halt");
-    await rejects(() => share.clear(), "clear requires halt");
+    await rejects(() => share.reset(), "filesystem reset requires halt");
+    const root = share.stat("").inode;
+    share.clear();
+    check(share.listFiles().length === 0 && share.stat("").inode === root, "live clear preserves root");
+    share.writeFile("file", "replacement");
     await rejects(() => disk.read(0n, 512), "host disk reads require halt");
     await rejects(() => client.consoleInput("text"), "console requires bytes");
     await rejects(() => client.consoleResize(0, 25), "nonzero terminal dimensions");

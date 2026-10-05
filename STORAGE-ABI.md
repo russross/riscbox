@@ -9,7 +9,7 @@ with synchronous filesystem calls and copied or asynchronous HTTP disk reads.
 Ownership and buffers
 ---------------------
 
-`riscbox_prepare_resolved` constructs a powered-off VM and emits action 15
+`riscbox_prepare_resolved` constructs a halted VM and emits action 15
 (Prepared). `riscbox_fs_get(address, length)` finds the configured UTF-8 server
 name and returns a nonzero handle, or zero with `riscbox_fs_status()` set.
 Names are raw UTF-8 without a length prefix. Handles are monotonic within the
@@ -53,9 +53,10 @@ explicitly; raw WASM has no OS clock. The origin is recorded in change events.
 | 9    | Symlink         | `str path, str target`       | Empty                    |
 | 10   | Readlink        | `str path`                   | Raw UTF-8 target bytes   |
 | 11   | Hard link       | `str existing, str new_path` | Empty                    |
-| 12   | Clear namespace | Empty                        | Empty                    |
+| 12   | Reset namespace | Empty                        | Empty                    |
 | 13   | Change tracking | `u32 enabled` (0 or 1)       | Empty                    |
 | 14   | Set attributes  | Attribute body below        | Empty                    |
+| 15   | Clear contents  | Empty                        | Empty                    |
 
 The attribute body is `str path`, `u32 mode`, `u32 uid`, `u32 gid`,
 `u64 atime_seconds`, `u32 atime_nanoseconds`, `u64 mtime_seconds`, and
@@ -65,7 +66,12 @@ changes ctime and QID version and emits a metadata event carrying the origin.
 The synchronous facade exposes `setAttributes(path, FileAttributes, origin?)`.
 
 Operations work before boot, during execution boundaries, and while halted.
-Clear is permitted only while powered off.
+Reset requires `halted` and replaces the root and all namespace content.
+Clear recursively unlinks entries below the existing root and preserves active
+fids, locks, root metadata, and session state. Detached inodes remain allocated
+and count against quota until their last fid closes. Both operations preserve
+host handles and tracking subscriptions; reset emits reset and clear emits
+ordinary removal events.
 Writes require existing parent directories and replace the whole regular file.
 Remove deletes a file, symlink, or empty directory. The root directory path is
 the empty string. The host API uses literal namespace paths; readlink exposes
@@ -111,7 +117,7 @@ Disk operations
 ---------------
 
 Disk IDs are zero-based configured drive positions. Host access requires the
-VM to be powered off. Sector addresses use `low | (high << 32)`; lengths must
+VM to be halted. Sector addresses use `low | (high << 32)`; lengths must
 be nonzero whole 512-byte sectors and fit the disk.
 
 | Export                                      | Result                                  |
@@ -127,9 +133,10 @@ be nonzero whole 512-byte sectors and fit the disk.
 Read IDs are monotonic; pending reads own their destination bytes. Resident
 reads create no request ID. HTTP errors return EIO and retired IDs return
 ESTALE. Boot is rejected while host reads are pending. `riscbox_cold_reset`
-requires a powered-off VM, retires reads and fetches, clears RAM, and reloads
-boot images without replacing storage. Discard removes HTTP overlays while
-retaining clean cache; it fails for array disks.
+requires a halted VM, retires reads and fetches, clears RAM, and reloads
+boot images without replacing storage. The facade's `reset()` calls
+`riscbox_disk_discard` to remove HTTP overlays while retaining clean cache;
+it fails for array disks.
 
 HTTP actions carry `riscbox_action_disk()`: zero means a startup asset;
 otherwise subtract one for the disk index. Fetch completions are copied through
@@ -141,5 +148,5 @@ Validation
 
 `make test-unit` exercises namespace/protocol behavior, malformed packets,
 invalid pointers, notifications, array copies, sparse HTTP overlays, joined
-misses, failures/retries, powered-off restrictions, and lifecycle retirement
+misses, failures/retries, halted restrictions, and lifecycle retirement
 through executable WASM operations. `make test` repeats these probes in Chrome.

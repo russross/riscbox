@@ -42,7 +42,12 @@ Riscbox emulates:
 
 The block device is set up as a simple way to distribute stable base images that are generic for a wide set of users. The 9p file system is great for sharing state with the host and customizing a guest image on the fly for each user.
 
-The block device and 9p file system can be reset while the guess is halted, or they can persist across guest reboots.
+Disk and 9p contents persist across guest reboots and halt. Halt powers off guest
+device interfaces and closes 9p fids and locks without clearing RAM or storage.
+While halted, an HTTP disk's `reset()` discards its write overlay, and a 9p
+filesystem's `reset()` replaces its complete namespace. Array disks reject
+reset. A filesystem's `clear()` recursively deletes its contents while running
+or halted, preserving the root and active file references.
 
 Riscbox does NOT implement:
 

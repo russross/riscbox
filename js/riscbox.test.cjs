@@ -115,6 +115,39 @@ test("lifecycle controls forward to WASM and report guest and host causes", asyn
     ]);
 });
 
+test("halt retires late HTTP completions and failures before the next boot", async () => {
+    for (const fail of [false, true]) {
+        const fake = fakeModule();
+        const url = Buffer.from("https://host/block.bin");
+        new Uint8Array(fake.exports.memory.buffer, 64, url.length).set(url);
+        const actions = [1, 0];
+        let current;
+        fake.exports.riscbox_next_action = () => { current = actions.shift() ?? 0; return current; };
+        fake.exports.riscbox_action_value = () => current === 10 ? 2 : 17;
+        fake.exports.riscbox_action_disk = () => 1;
+        fake.exports.riscbox_action_data_address = () => 64;
+        fake.exports.riscbox_action_data_length = () => url.length;
+        fake.exports.riscbox_http_complete = (...args) => { fake.calls.push(["http_complete", ...args]); return 0; };
+        let complete, reject;
+        const errors = [];
+        const runtime = new Riscbox(fake.exports, {
+            fetchBlock: () => new Promise((resolve, failRequest) => { complete = resolve; reject = failRequest; }),
+            onError: error => errors.push(error),
+        });
+        runtime.started = true;
+        runtime.state = "running";
+        runtime.drainActions();
+        actions.push(10, 0);
+        runtime.drainActions();
+        assert.equal(runtime.state, "halted");
+        if (fail) reject(new Error("obsolete transport failure"));
+        else complete(new Uint8Array(512));
+        await new Promise(resolve => setImmediate(resolve));
+        assert.deepEqual(fake.calls.filter(([name]) => name === "http_complete"), []);
+        assert.deepEqual(errors, []);
+    }
+});
+
 test("HTTP actions complete requests and continue draining startup", async () => {
     const fake = fakeModule();
     const url = Buffer.from("https://host/vm.cfg");

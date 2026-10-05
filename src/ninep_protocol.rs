@@ -2041,6 +2041,65 @@ mod tests {
     }
 
     #[test]
+    fn clear_preserves_sessions_open_files_directory_fids_and_locks() {
+        let mut fs = filesystem();
+        let directory = fs.mkdir("dir").unwrap();
+        let file = fs.write_file("dir/file", b"old").unwrap();
+        let mut first = Client::mount(&mut fs);
+        let mut second = Client::mount(&mut fs);
+        assert_eq!(first.call(&mut fs, 110, walk(1, 2, &["dir"]))[4], 111);
+        assert_eq!(first.call(&mut fs, 110, walk(2, 3, &["file"]))[4], 111);
+        assert_eq!(
+            first.call(&mut fs, 12, Body::default().u32(2).u32(0))[4],
+            13
+        );
+        assert_eq!(
+            first.call(&mut fs, 12, Body::default().u32(3).u32(2))[4],
+            13
+        );
+        assert_eq!(
+            second.call(&mut fs, 110, walk(1, 4, &["dir", "file"]))[4],
+            111
+        );
+        assert_eq!(
+            second.call(&mut fs, 12, Body::default().u32(4).u32(2))[4],
+            13
+        );
+        assert_eq!(first.call(&mut fs, 52, lock(3, 1, Some(0), 0, 0, 10))[7], 0);
+
+        // Detached fids still address their original inodes in both sessions.
+        fs.clear().unwrap();
+        assert_eq!(&first.call(&mut fs, 116, read(3, 0, 3))[11..], b"old");
+        assert_eq!(second.call(&mut fs, 118, write(4, 0, b"new"))[4], 119);
+        assert_eq!(&first.call(&mut fs, 116, read(3, 0, 3))[11..], b"new");
+        assert_eq!(
+            second.call(&mut fs, 52, lock(4, 1, Some(0), 0, 0, 20))[7],
+            1
+        );
+        assert_eq!(at32(&first.call(&mut fs, 40, read(2, 0, 1024)), 7), 0);
+        error(
+            &first.call(
+                &mut fs,
+                72,
+                Body::default().u32(2).string("child").u32(0o755).u32(9),
+            ),
+            2,
+        );
+        error(&second.call(&mut fs, 110, walk(1, 5, &["dir"])), 2);
+
+        // The mounted root remains usable, and replacement names have new identities.
+        let replacement = fs.mkdir("dir").unwrap();
+        assert_ne!(replacement, directory);
+        assert_eq!(second.call(&mut fs, 110, walk(1, 5, &["dir"]))[4], 111);
+        first.call(&mut fs, 120, Body::default().u32(3));
+        assert!(fs.inode(file).is_some());
+        second.call(&mut fs, 120, Body::default().u32(4));
+        assert!(fs.inode(file).is_none());
+        first.call(&mut fs, 120, Body::default().u32(2));
+        assert!(fs.inode(directory).is_none());
+    }
+
+    #[test]
     fn detached_directory_fids_cannot_create_entries_or_masquerade_as_root() {
         let mut fs = filesystem();
         fs.mkdir("dir").unwrap();

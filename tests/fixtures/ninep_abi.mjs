@@ -76,8 +76,9 @@ export async function abiRegression(api, firmware) {
     check(command(handle, 1, text("dir/file")) === 0 && decoder.decode(data()) === "content", "failed mutation atomicity");
     api.memory.grow(1);
     check(command(handle, 1, text("dir/file")) === 0 && decoder.decode(data()) === "content", "memory growth");
-    check(command(handle, 12) === 0, "powered-off clear");
+    check(command(handle, 15) === 0, "recursive clear");
     check(command(handle, 1, text("dir/file")) === -2, "clear removes content");
+    check(command(handle, 12) === 0, "halted namespace reset");
     check(api.riscbox_destroy() === 0, "destroy");
     check(command(handle, 7) === -9, "destroy invalidates handles");
     const replacement = prepare();

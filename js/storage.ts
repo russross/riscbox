@@ -1,4 +1,4 @@
-// Synchronous file storage and powered-off disk access share one raw boundary.
+// Synchronous file storage and halted disk access share one raw boundary.
 /** @internal */
 export interface StorageExports {
     readonly memory: WebAssembly.Memory;
@@ -131,6 +131,7 @@ export interface Filesystem {
     readlink(path: string): string;
     link(existing: string, path: string, origin?: bigint): void;
     clear(): void;
+    reset(): void;
     setAttributes(path: string, attributes: FileAttributes, origin?: bigint): void;
     subscribe(listener: (change: P9Change) => void): () => void;
 }
@@ -138,7 +139,7 @@ export interface BlockDisk {
     readonly capacitySectors: bigint;
     read(sector: bigint, length: number): Uint8Array | Promise<Uint8Array>;
     write(sector: bigint, bytes: Uint8Array): void;
-    discardChanges(): void;
+    reset(): void;
 }
 
 // A facade references its VM-owned tree; calls always finish before returning.
@@ -149,7 +150,7 @@ export class FilesystemHandle {
         mkdir: this.mkdir.bind(this), remove: this.remove.bind(this), rename: this.rename.bind(this),
         listDirectory: this.listDirectory.bind(this), listFiles: this.listFiles.bind(this),
         stat: this.stat.bind(this), symlink: this.symlink.bind(this), readlink: this.readlink.bind(this),
-        link: this.link.bind(this), clear: this.clear.bind(this),
+        link: this.link.bind(this), clear: this.clear.bind(this), reset: this.reset.bind(this),
         setAttributes: this.setAttributes.bind(this), subscribe: this.subscribe.bind(this),
     });
     private readonly listeners = new Set<(change: P9Change) => void>();
@@ -212,7 +213,8 @@ export class FilesystemHandle {
     symlink(path: string, target: string, origin = 0n): void { this.operation(9, new Writer().str(path).str(target), origin); }
     readlink(path: string): string { return new TextDecoder().decode(this.operation(10, new Writer().str(path))); }
     link(existing: string, path: string, origin = 0n): void { this.operation(11, new Writer().str(existing).str(path), origin); }
-    clear(): void { this.operation(12); }
+    clear(): void { this.operation(15); }
+    reset(): void { this.operation(12); }
 
     // Restored attributes preserve nanoseconds; inode identity and ctime are new.
     setAttributes(path: string, attributes: FileAttributes, origin = 0n): void {
@@ -284,7 +286,7 @@ export class DiskHandle {
         const disk = this;
         this.client = Object.freeze({
             read: this.read.bind(this), write: this.write.bind(this),
-            discardChanges: this.discardChanges.bind(this),
+            reset: this.reset.bind(this),
             get capacitySectors(): bigint { return disk.capacitySectors; },
         });
     }
@@ -332,7 +334,7 @@ export class DiskHandle {
         return capacity;
     }
 
-    discardChanges(): void {
+    reset(): void {
         this.check();
         this.checked(this.runtime.exports.riscbox_disk_discard(this.index));
         this.poll();

@@ -8,6 +8,7 @@
     .equ REPLY, 0x80004000
 
 _start:
+    li s2, 0
     li t0, VIRTIO
     li t1, 3
     sw t1, 0x70(t0)
@@ -66,6 +67,7 @@ _start:
     la a0, pass_message
     j print
 fail:
+    li s2, 2
     la a0, fail_message
 print:
     li t0, 0x10000000
@@ -76,8 +78,53 @@ print:
     addi a0, a0, 1
     j 1b
 2:
+    bnez s2, finished
+    # Host input resumes the existing connection after a live namespace clear.
+    li t0, 0x10000000
+    lbu t1, 5(t0)
+    andi t1, t1, 1
+    beqz t1, 2b
+    lbu t1, 0(t0)
+    la a0, read
+    lwu a1, 0(a0)
+    jal send
+    li t0, REPLY
+    lbu t1, 11(t0)
+    li t2, 'o'
+    bne t1, t2, fail
+    la a0, replacement_walk
+    lwu a1, 0(a0)
+    jal send
+    li t0, REPLY
+    lbu t1, 4(t0)
+    li t2, 111
+    bne t1, t2, fail
+    la a0, replacement_open
+    lwu a1, 0(a0)
+    jal send
+    la a0, replacement_read
+    lwu a1, 0(a0)
+    jal send
+    li t0, REPLY
+    lbu t1, 4(t0)
+    li t2, 117
+    bne t1, t2, fail
+    lbu t1, 11(t0)
+    li t2, 'n'
+    bne t1, t2, fail
+    li s2, 1
+    la a0, clear_message
+    j print
+finished:
+    li t1, 1
+    bne s2, t1, stopped
+    # Orderly poweroff lets the host verify cleanup before the next boot.
+    li t0, 0x100000
+    li t1, 0x5555
+    sw t1, 0(t0)
+stopped:
     wfi
-    j 2b
+    j stopped
 
 send:
     li t0, DESC
@@ -151,6 +198,33 @@ read:
     .quad 0
     .word 3
 read_end:
+    .balign 8
+replacement_walk:
+    .word replacement_walk_end-replacement_walk
+    .byte 110
+    .short 5
+    .word 1, 3
+    .short 1, 4
+    .ascii "file"
+replacement_walk_end:
+    .balign 8
+replacement_open:
+    .word replacement_open_end-replacement_open
+    .byte 12
+    .short 6
+    .word 3, 0
+replacement_open_end:
+    .balign 8
+replacement_read:
+    .word replacement_read_end-replacement_read
+    .byte 116
+    .short 7
+    .word 3
+    .quad 0
+    .word 3
+replacement_read_end:
+clear_message:
+    .asciz "ABI LIVE CLEAR PASS\n"
 pass_message:
     .asciz "ABI GUEST PASS\n"
 fail_message:

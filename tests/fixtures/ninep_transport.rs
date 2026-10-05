@@ -224,6 +224,37 @@ pub fn regression() {
     assert_eq!(&second.reply(&mut machine, 0)[11..], b"new");
     assert!(first.count(&mut machine) > 0);
     assert!(first.used(&mut machine, 0).1 > 0);
+
+    // Live clear detaches the old file without disturbing either guest session.
+    let old = tree.with_filesystem(|fs| fs.lookup("file")).unwrap();
+    tree.with_filesystem(Filesystem::clear).unwrap();
+    tree.with_filesystem(|fs| fs.write_file("file", b"new"))
+        .unwrap();
+    first.submit(&mut machine, 0, 116, 5, &read(2));
+    assert_eq!(&first.reply(&mut machine, 0)[11..], b"new");
+    second.submit(&mut machine, 0, 116, 5, &read(2));
+    assert_eq!(&second.reply(&mut machine, 0)[11..], b"new");
+    assert_eq!(
+        tree.with_filesystem(|fs| fs.inode(old).unwrap().fid_refs),
+        2
+    );
+
+    // Poweroff closes both sets of fids and reclaims only detached content.
+    machine.reset_devices();
+    assert!(tree.with_filesystem(|fs| fs.inode(old).is_none()));
+    for ring in [&first, &second] {
+        assert_eq!(
+            machine
+                .bus_mut()
+                .read(GuestAddress(ring.mmio() + 0x70), AccessWidth::Word)
+                .unwrap(),
+            0
+        );
+    }
+    assert_eq!(
+        tree.with_filesystem(|fs| fs.read_file("file")).unwrap(),
+        b"new"
+    );
     machine.reset().unwrap();
     assert_eq!(
         tree.with_filesystem(|fs| fs.read_file("file")).unwrap(),

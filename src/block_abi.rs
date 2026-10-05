@@ -1,4 +1,4 @@
-//! Copied host disk operations, restricted to the powered-off VM platform.
+//! Copied host disk operations, restricted to the halted VM platform.
 
 use std::collections::BTreeMap;
 

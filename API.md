@@ -22,7 +22,7 @@ States and errors
 | ----------- | -------------------------------------------------------------- |
 | `empty`     | No prepared VM; the runtime can prepare a new one.              |
 | `preparing` | Configuration or boot assets are loading; destroy cancels them. |
-| `halted`    | A prepared VM exists and CPU execution has stopped.             |
+| `halted`    | A prepared or powered-off VM exists with clean device interfaces. |
 | `running`   | The VM can execute, including while its guest sleeps in WFI.    |
 
 Lifecycle calls return `Promise<void>` and reject on invalid states or failed
@@ -108,6 +108,13 @@ handler, such as the demo's BusyBox acpid. Observe `onVmHalted` or `onVmReset` t
 know when the requested guest action happens; a resolved request is not evidence
 that filesystems were flushed. `destroy()` in `empty` is allowed.
 
+Entering `halted` through guest poweroff, guest failure, or forced halt resets
+guest device registers, queues, interrupts, timers, 9p fids, and locks. Pending
+guest I/O and input are retired. Hardware configuration, RAM allocation and
+bytes, disk contents, filesystem contents, and host storage objects remain.
+Final console output is delivered before the halt notification. `boot()` starts
+from the reset entry point and reloads boot payloads; it does not resume execution.
+
 Disk access
 -----------
 
@@ -124,7 +131,7 @@ object. Host byte buffers are copies.
 | `capacitySectors`      | Read-only `bigint` count of 512-byte sectors.                          |
 | `read(sector, length)` | Start at unsigned 64-bit `bigint` sector; positive byte length must be a multiple of 512 and fit unsigned 32 bits and capacity. Returns `Uint8Array` when resident, or `Promise<Uint8Array>` for HTTP misses. |
 | `write(sector, bytes)` | Synchronous whole-sector `Uint8Array` write within capacity; returns `void`. Array writes change owned bytes; HTTP writes create sparse overlays without fetching untouched sectors. |
-| `discardChanges()`    | Synchronous `void`; discard an HTTP disk's writes while retaining clean cache. Array disks reject this operation. |
+| `reset()`             | Synchronous `void`; discard an HTTP disk's write overlay and retire pending host reads while retaining clean cache. Array disks reject this operation. |
 
 HTTP reads are deduplicated and cache bounded. Pending reads reject when retired
 by cold reset or destroy. Reboot and halt retain disk bytes/overlays; page reload
@@ -139,7 +146,7 @@ Resident filesystem access
 Requires `halted` or `running`; `name` must be a nonempty configured server name.
 Returns the same `Filesystem` for that resident tree. Multiple tags with the
 same server share bytes and have independent guest protocol sessions. Host
-operations work while halted or running, except `clear()` requires halt.
+operations work while halted or running, except `reset()` requires halt.
 
 All filesystem calls are synchronous; reads return copied bytes, not promises.
 Paths are share-relative or begin with one `/`; `""` and `/` identify the root.
@@ -161,7 +168,8 @@ stored permissions and mount policy. Destroy invalidates every retained facade.
 | `symlink(path, target, origin?)`     | Create a symlink with its literal target; return `void`.      |
 | `readlink(path)`                    | Return a symlink's target string.                            |
 | `link(existing, path, origin?)`     | Add a hard link to a file/symlink; return `void`.              |
-| `clear()`                           | Require `halted`; empty the entire namespace; return `void`.  |
+| `clear()`                           | Recursively unlink all entries below the root while halted or running; return `void`. |
+| `reset()`                           | Require `halted`; replace the namespace with a fresh empty root; return `void`. |
 | `setAttributes(path, attrs, origin?)`| Set mode/UID/GID/atime/mtime; return `void`; update ctime/version.|
 | `subscribe(listener)`              | Return an unsubscribe function; deliver copied `P9Change` events in microtasks after WASM borrows end. |
 
@@ -171,6 +179,24 @@ use explicit attributes when preparing another ownership policy. List results
 and notifications describe current namespace state, not guest mount caches.
 Use `cache=none` for host/guest sharing. An unsubscribed listener is skipped even
 if an event was already queued. Subscriber errors are reported to `onError`.
+
+`clear()` preserves root identity, ownership, and permissions, along with guest
+sessions and existing fids. Deleted files and directories remain ordinary
+inodes until their last fid closes. Reads and writes through retained file fids
+continue; these bytes still count against the tree quota. Removed directories
+are empty, cannot accept new entries, and have no parent to walk to. Absolute
+guest paths can still use the mounted root. Recreated names have fresh inode
+identities. Clear emits removal events and completes between guest requests;
+subsequent host writes or guest activity can repopulate the tree.
+
+Linux can retain fids for cached dentries as well as open files. Even with
+`cache=none`, a pathname metadata check can still reach a detached inode while
+fresh directory enumeration shows the name absent. Clear does not invalidate
+guest caches or guarantee immediate disappearance from every guest operation.
+
+`reset()` replaces root metadata with namespace defaults, reclaims all content,
+and emits a reset event. Halt has already closed guest fids and locks. Both
+operations preserve the host facade and its subscriptions.
 
 Filesystem value types
 ----------------------

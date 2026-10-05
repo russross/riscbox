@@ -71,9 +71,11 @@ Explicit workflows
    notifications. Resetting the image preserves 9p; resetting 9p preserves the
    disk. Destroy invalidates both facades; Prepare creates a new VM.
 
-Tree replacement and share reset require poweroff. The controls do not save
-editor text or protect unsaved changes. The file browser subscribes to host and
-guest filesystem changes; editor reads and writes remain explicit.
+Tree replacement and share reset require halt. Clear 9p works while running or
+halted and recursively unlinks content while preserving the mounted root and
+active fids. A shell in a removed directory can return with `cd /workspace`.
+The controls do not save editor text or protect unsaved changes. The file browser
+subscribes to host and guest filesystem changes; editor reads and writes remain explicit.
 The editor is a copied host buffer; disk, share, editor, and guest state have
 separate lifetimes.
 

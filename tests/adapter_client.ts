@@ -26,6 +26,8 @@ export async function recover(runtime: Riscbox): Promise<void> {
     const disk = runtime.block(0);
     const saved: Uint8Array = await disk.read(0n, 512);
     console.log(saved.byteLength, disk.capacitySectors);
-    disk.discardChanges();
+    disk.reset();
+    runtime.filesystem("workspace").reset();
+    runtime.filesystem("workspace").clear();
     await runtime.boot();
 }

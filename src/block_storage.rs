@@ -1,4 +1,4 @@
-//! VM-owned sector storage shared by `VirtIO` and powered-off host operations.
+//! VM-owned sector storage shared by `VirtIO` and halted host operations.
 
 use crate::config::{Value, parse_value};
 use crate::virtio_devices::{BlockBackend, BlockRequestStatus, DeviceError};

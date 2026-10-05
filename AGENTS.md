@@ -178,10 +178,10 @@ when resident and request/completion based when HTTP chunks are missing. The
 optional `fetchBlock` hook replaces immutable chunk transport only; Rust retains
 cache, validation, deduplication, errors, ordering, and lifetime ownership.
 
-Host disk access requires poweroff, including preboot and forced halt. Host reads
+Host disk access requires halted state, including preboot and forced halt. Host reads
 return copied bytes or promises for HTTP misses; writes are synchronous. Boot
-rejects pending host reads. Reboot retains bytes and CoW. Powered-off
-`discardChanges()` removes HTTP overlays while retaining cache; `coldReset()`
+rejects pending host reads. Reboot retains bytes and CoW. Halted disk
+`reset()` removes HTTP overlays while retaining cache and rejects array disks; `coldReset()`
 retires reads/fetches, clears guest RAM, and reloads boot images while preserving
 stores. Destroy frees all storage and invalidates every facade; a runtime may
 prepare another VM. Export consistency requires orderly guest shutdown.
@@ -189,7 +189,11 @@ prepare another VM. Export consistency requires orderly guest shutdown.
 The host can deliver soft shutdown and reboot input events, force an immediate
 halt or reset, boot a halted machine, and destroy a halted machine. The prepared
 demo guest uses BusyBox `acpid` to turn the two input events into
-orderly userspace actions. Guest poweroff halts without teardown; guest reboot
+orderly userspace actions. Guest poweroff, failure, and forced halt reset all
+guest device interfaces, queues, interrupts, timers, fids, and locks while
+retaining hardware configuration, RAM bytes, and backing stores. Queued guest
+input and I/O are retired; final console output precedes the halt notification.
+Boot restarts from the reset entry point rather than resuming execution. Guest reboot
 uses the QEMU `virt` syscon reset value. In-place reset restarts the C CPU,
 reloads boot images, and clears platform and VirtIO interface state while
 retaining host backends, 9p servers, HTTP clean cache and CoW data, and guest
@@ -286,10 +290,21 @@ VirtIO 9p completes resident requests synchronously within the CPU run. Rust
 validates descriptors and envelopes; protocol sessions own fids and locks.
 Preparation creates one tree per configured server name and an independent
 session per tag. Host access works before boot, while running, and after halt.
-Whole-tree `clear()` requires poweroff. Reset closes protocol state and retains
-bytes; destroy releases every tree. The adapter uses copied packets and change
-events, with no source loader, independent creation/binding, or promise-based
+Whole-tree `clear()` recursively unlinks root contents while running or halted,
+preserving root identity, active fids, and locks. Files and directories use
+separate namespace link and fid reference counts; detached inodes and their
+quota usage survive until the last fid closes. Filesystem `reset()` requires
+halted state and replaces all namespace content and root identity. Device reset
+closes protocol state and retains bytes; destroy releases every tree. Both host
+filesystem operations preserve facades and subscriptions. The adapter uses
+copied packets and change events, with no source loader, independent
+creation/binding, or promise-based
 filesystem interface. Do not restore removed `file`, `socket`, or `js9p` forms.
+
+Linux can retain pathname fids through dentries even with `cache=none`. Clear
+does not revoke those fids: metadata can still describe detached inodes while
+fresh directory enumeration describes the cleared namespace. Host change
+notifications do not invalidate guest caches.
 
 Architecture rules
 ------------------

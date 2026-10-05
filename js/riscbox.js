@@ -723,6 +723,7 @@
                         { x, y, width, height, stride },
                     );
                 } else if (kind === 10) {
+                    this.httpGeneration++;
                     const cause = LIFECYCLE_CAUSES[value];
                     if (cause === undefined)
                         throw new Error(`invalid VM halt cause ${value}`);

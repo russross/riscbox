@@ -98,7 +98,13 @@ pub extern "C" fn riscbox_prepare_resolved(
 
 #[must_use]
 pub extern "C" fn riscbox_halt() -> i32 {
-    STATE.with_borrow_mut(|state| state.runtime.halt().map_or(-1, |()| 0))
+    STATE.with_borrow_mut(|state| {
+        if state.runtime.halt().is_err() {
+            return -1;
+        }
+        state.input_queue.retire_guest_work();
+        0
+    })
 }
 
 #[must_use]

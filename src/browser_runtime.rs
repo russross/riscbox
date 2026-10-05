@@ -483,7 +483,7 @@ impl BrowserRuntime {
     ) -> Result<T, RuntimeError> {
         let State::Halted(running) = &mut self.state else {
             return Err(RuntimeError::Machine(
-                "disk host access requires powered off VM".into(),
+                "disk host access requires halted VM".into(),
             ));
         };
         let slot = *running
@@ -501,7 +501,7 @@ impl BrowserRuntime {
     pub fn discard_disk_changes(&mut self, id: BlockDiskId) -> Result<(), RuntimeError> {
         let State::Halted(running) = &mut self.state else {
             return Err(RuntimeError::Machine(
-                "disk discard requires powered off VM".into(),
+                "disk discard requires halted VM".into(),
             ));
         };
         let slot = *running
@@ -525,11 +525,11 @@ impl BrowserRuntime {
 
     /// Resets execution and clears RAM without starting or changing storage.
     /// # Errors
-    /// Requires a powered-off VM and valid boot images.
+    /// Requires a halted VM and valid boot images.
     pub fn cold_reset(&mut self) -> Result<(), RuntimeError> {
         let State::Halted(running) = &mut self.state else {
             return Err(RuntimeError::Machine(
-                "cold reset requires powered off VM".into(),
+                "cold reset requires halted VM".into(),
             ));
         };
         self.retired_http.extend(running.pending_http.keys());
@@ -1184,17 +1184,13 @@ impl BrowserRuntime {
             else {
                 unreachable!();
             };
-            let mut running = running;
-            self.retired_http.extend(running.pending_http.keys());
-            running.pending_http.clear();
-            running.machine.retire_storage_work();
-            self.state = State::Halted(running);
+            input_queue.retire_guest_work();
             let cause = if matches!(finish, FinishStatus::Failed(_)) {
                 LifecycleCause::GuestFailure
             } else {
                 LifecycleCause::GuestPoweroff
             };
-            self.actions.push_back(HostAction::Halted(cause));
+            self.enter_halted(running, cause);
             return Ok(None);
         }
         Ok(Some(PlatformRunResult {
@@ -1252,14 +1248,21 @@ impl BrowserRuntime {
                 return Err(RuntimeError::Machine("VM is not running".into()));
             }
         };
-        let mut running = running;
+        self.enter_halted(running, LifecycleCause::HostHalt);
+        Ok(())
+    }
+
+    // Poweroff retires interaction state before publishing the lifecycle event.
+    // Console output remains deliverable; obsolete device actions cannot escape.
+    fn enter_halted(&mut self, mut running: Box<Running>, cause: LifecycleCause) {
         self.retired_http.extend(running.pending_http.keys());
         running.pending_http.clear();
-        running.machine.retire_storage_work();
-        self.state = State::Halted(running);
+        running.machine.reset_devices();
+        running.network_output.borrow_mut().clear();
         self.actions
-            .push_back(HostAction::Halted(LifecycleCause::HostHalt));
-        Ok(())
+            .retain(|action| matches!(action, HostAction::Console(_)));
+        self.state = State::Halted(running);
+        self.actions.push_back(HostAction::Halted(cause));
     }
 
     /// Boots a halted VM or forcibly resets a running VM in place.
@@ -1583,9 +1586,118 @@ impl NetworkBackend for OutputNetwork {
 #[cfg(test)]
 mod tests {
     use super::{
-        ActiveQuantum, AdaptiveSkew, BrowserRuntime, CALIBRATION_HALFLIFE_HOST_MS, QuantumOutcome,
-        RateEstimate, guest_tick_rate, scale_pointer_coordinate,
+        ActiveQuantum, AdaptiveSkew, BrowserRuntime, CALIBRATION_HALFLIFE_HOST_MS, HostAction,
+        LifecycleCause, QuantumOutcome, RateEstimate, RuntimeStart, State, guest_tick_rate,
+        scale_pointer_coordinate,
     };
+    use crate::browser_input::BrowserInputQueue;
+    use crate::config::VmConfig;
+    use crate::guest_memory::{AccessWidth, GuestAddress};
+    use crate::machine::VIRTIO_BASE;
+
+    #[test]
+    fn every_halt_path_powers_off_interfaces_and_preserves_final_output() {
+        for cause in [
+            LifecycleCause::HostHalt,
+            LifecycleCause::GuestPoweroff,
+            LifecycleCause::GuestFailure,
+        ] {
+            let mut runtime = BrowserRuntime::default();
+            let config = VmConfig::from_resolved(
+                r#"{"version":1,"machine":"riscv64","memory_size":32,
+                "bios":"fw.bin","console":"virtio","uart_output":false,
+                "rtc_local_time":false,"cmdline":""}"#,
+            )
+            .unwrap();
+            runtime
+                .start_resolved(
+                    RuntimeStart {
+                        config_url: String::new(),
+                        ram_mib: 32,
+                        command_line: String::new(),
+                        width: 0,
+                        height: 0,
+                        has_network: false,
+                    },
+                    config,
+                )
+                .unwrap();
+            let Some(HostAction::Request(request)) = runtime.next_action() else {
+                panic!("firmware request");
+            };
+            runtime
+                .complete_http(request.id, 200, 0x0000_006f_u32.to_le_bytes().to_vec())
+                .unwrap();
+            assert_eq!(runtime.next_action(), Some(HostAction::Started));
+
+            // Each shutdown source retires the same device state and old output work.
+            let State::Running(running) = &mut runtime.state else {
+                panic!("running VM");
+            };
+            running
+                .machine
+                .bus_mut()
+                .write(GuestAddress(VIRTIO_BASE + 0x70), AccessWidth::Word, 3)
+                .unwrap();
+            running.machine.write_ram(0x8000_4000, b"retained").unwrap();
+            runtime
+                .actions
+                .push_back(HostAction::Console(b"final".to_vec()));
+            runtime
+                .actions
+                .push_back(HostAction::Network(vec![1, 2, 3]));
+            let mut input = BrowserInputQueue::default();
+            if cause == LifecycleCause::HostHalt {
+                runtime.halt().unwrap();
+            } else {
+                let State::Running(running) = &mut runtime.state else {
+                    unreachable!();
+                };
+                let value = if cause == LifecycleCause::GuestPoweroff {
+                    0x5555
+                } else {
+                    0x3333
+                };
+                running
+                    .machine
+                    .bus_mut()
+                    .write(GuestAddress(0x0010_0000), AccessWidth::Word, value)
+                    .unwrap();
+                // Excess FIFO bytes remain queued until shutdown retires them.
+                input.queue_console(&[9; 1024]);
+                runtime.run_cpu_once(&mut input, 0, 0, 100).unwrap();
+                assert_eq!(input.console_len(), 0);
+            }
+            assert_eq!(
+                runtime.next_action(),
+                Some(HostAction::Console(b"final".to_vec()))
+            );
+            assert_eq!(runtime.next_action(), Some(HostAction::Halted(cause)));
+            assert_eq!(runtime.next_action(), None);
+
+            // Halt preserves RAM and hardware while restoring guest registers.
+            let State::Halted(running) = &mut runtime.state else {
+                panic!("halted VM");
+            };
+            assert_eq!(
+                running
+                    .machine
+                    .bus_mut()
+                    .read(GuestAddress(VIRTIO_BASE + 0x70), AccessWidth::Word)
+                    .unwrap(),
+                0
+            );
+            assert_eq!(
+                running.machine.read_ram(0x8000_4000, 8).unwrap(),
+                b"retained"
+            );
+            runtime.reset().unwrap();
+            assert_eq!(
+                runtime.next_action(),
+                Some(HostAction::Reset(LifecycleCause::HostBoot))
+            );
+        }
+    }
 
     #[test]
     fn quantum_target_is_configurable() {

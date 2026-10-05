@@ -72,6 +72,15 @@ impl Default for BrowserInputQueue {
 }
 
 impl BrowserInputQueue {
+    /// Retires guest input while retaining host terminal and carrier settings.
+    pub fn retire_guest_work(&mut self) {
+        let resize = self.resize;
+        let carrier = self.network_carrier;
+        *self = Self::default();
+        self.resize = resize;
+        self.network_carrier = carrier;
+    }
+
     /// Queues as much terminal input as the fixed browser FIFO can hold.
     pub fn queue_console(&mut self, data: &[u8]) -> usize {
         let accepted = data

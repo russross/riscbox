@@ -35,18 +35,32 @@ export async function facadeRegression(runtime, firmware) {
     await rejects(() => share.setAttributes("file", { ...attributes, mtime: { seconds: 0n, nanoseconds: 1_000_000_000 } }), "invalid timestamp rejected");
     await runtime.boot();
     runtime.cancelWakeup();
-    await rejects(() => share.clear(), "running share clear must fail");
+    await rejects(() => share.reset(), "running share reset must fail");
     for (let run = 0; run < 20 && !transcript.includes("ABI GUEST PASS"); run++) {
         await runtime.runQuantum(); runtime.cancelWakeup();
     }
     checkFacade(transcript.includes("ABI GUEST PASS"), "guest reads the synchronous host file");
     share.writeFile("host", "while running");
     checkFacade(new TextDecoder().decode(share.readFile("host")) === "while running", "concurrent host sharing");
-    await runtime.reset(); runtime.cancelWakeup();
-    checkFacade(new TextDecoder().decode(share.readFile("host")) === "while running", "reboot retains tree");
-    await runtime.halt();
+    const root = share.stat("");
     share.clear();
-    checkFacade(share.listFiles().length === 0, "clear after halt");
+    checkFacade(share.listFiles().length === 0 && share.stat("").inode === root.inode, "running clear retains root");
+    share.writeFile("file", "new");
+    runtime.consoleInput(new Uint8Array([120]));
+    for (let run = 0; run < 20 && !transcript.includes("ABI LIVE CLEAR PASS"); run++) {
+        await runtime.runQuantum(); runtime.cancelWakeup();
+    }
+    checkFacade(transcript.includes("ABI LIVE CLEAR PASS"), "guest retains old file fid and walks surviving root");
+    checkFacade(runtime.state === "halted", "guest poweroff completes after final output");
+    await delay();
+    checkFacade(events.some(event => event.kind === "remove"), "clear delivers ordinary removals");
+    await runtime.reset(); runtime.cancelWakeup();
+    checkFacade(new TextDecoder().decode(share.readFile("file")) === "new", "reboot retains tree");
+    await runtime.halt();
+    share.reset();
+    checkFacade(share.listFiles().length === 0 && share.stat("").inode !== root.inode, "halted reset replaces root");
+    await delay();
+    checkFacade(events.some(event => event.kind === "reset"), "reset preserves subscriptions");
     unsubscribe();
     await runtime.destroy();
     await rejects(() => share.readFile("file"), "destroy invalidates facade");
@@ -70,6 +84,7 @@ export async function facadeRegression(runtime, firmware) {
     checkFacade(array.read(0n, 512)[0] === 2, "read returns a copy");
     array.write(1n, copy);
     checkFacade(array.read(1n, 512)[0] === 7, "array write-through");
+    await rejects(() => array.reset(), "array disks have no resettable overlay");
     await rejects(() => array.read(4n, 512), "capacity checked");
     http.write(1n, new Uint8Array(512).fill(9));
     checkFacade(http.read(1n, 512)[0] === 9 && loads === 0, "unfetched writes and reads stay synchronous");
@@ -85,11 +100,12 @@ export async function facadeRegression(runtime, firmware) {
     checkFacade(combined[0] === 6 && combined[512] === 9, "late base completion preserves writes");
     checkFacade((await second)[0] === 6, "joined read completes");
     await delay();
-    http.discardChanges();
+    http.reset();
     checkFacade(http.read(0n, 1024)[0] === 3 && loads === 1, "discard retains immutable cache");
     await runtime.boot(); runtime.cancelWakeup();
     await rejects(() => array.read(0n, 512), "running disk reads blocked");
     await rejects(() => array.write(0n, copy), "running disk writes blocked");
+    await rejects(() => http.reset(), "running disk reset blocked");
     await runtime.halt();
     checkFacade(array.read(1n, 512)[0] === 7, "array survives forced halt");
 
@@ -98,7 +114,7 @@ export async function facadeRegression(runtime, firmware) {
     const cancelled = rejects(() => pending, "discard must retire reads");
     await delay();
     const obsolete = complete;
-    http.discardChanges();
+    http.reset();
     await cancelled;
     obsolete(new Uint8Array(1024).fill(4));
     await delay();

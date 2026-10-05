@@ -504,16 +504,6 @@ impl Machine {
         Ok(device.device.backend_mut())
     }
 
-    /// Retires storage requests and guest filesystem sessions at poweroff.
-    pub fn retire_storage_work(&mut self) {
-        for slot in &mut self.bus.virtio {
-            if matches!(slot, VirtioSlot::StorageBlock(_) | VirtioSlot::NineP(_)) {
-                slot.reset();
-            }
-        }
-        self.bus.update_device_irqs();
-    }
-
     /// Clears RAM while retaining its stable `TinyEMU` mappings.
     /// # Errors
     /// Reports a failed RAM write.
@@ -562,6 +552,14 @@ impl Machine {
         if !self.cpu.reset_cpu() {
             return Err(MachineError::CoreAllocation);
         }
+        self.reset_devices();
+        Ok(())
+    }
+
+    /// Powers off guest interfaces while preserving RAM and host-owned stores.
+    pub fn reset_devices(&mut self) {
+        // Platform registers and pending interrupts return to their defaults;
+        // configured devices and their persistent backends remain allocated.
         self.bus.aclint = Aclint::default();
         self.bus.plic = Plic::default();
         self.bus.uart = Uart16550::default();
@@ -576,7 +574,6 @@ impl Machine {
         }
         self.bus.update_device_irqs();
         self.sync_interrupts();
-        Ok(())
     }
 
     /// Adds a `VirtIO` block device and returns its MMIO slot.

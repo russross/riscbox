@@ -673,6 +673,86 @@ fn timer_deadlines_use_guest_ticks_and_drop_due_compares() {
 }
 
 #[test]
+fn poweroff_resets_device_interactions_without_scrubbing_ram_or_storage() {
+    let mut machine = machine(false);
+    let console = machine.add_console_device(100, 30).unwrap();
+    let disk = machine
+        .add_storage_block_device(BlockStore::array(2).unwrap(), [0; 20])
+        .unwrap();
+    machine
+        .storage_mut(disk)
+        .unwrap()
+        .write_sectors(0, &[7; 512])
+        .unwrap();
+    machine.write_ram(RAM_BASE + 0x1000, b"retained").unwrap();
+    machine.receive_console(b"x");
+    machine.virtio_console_receive(console, b"queued").unwrap();
+
+    // Guest register programming and pending interrupts disappear at poweroff.
+    for (address, width, value) in [
+        (0x1000_1000 + 0x70, AccessWidth::Word, 3),
+        (0x1000_0000 + 7, AccessWidth::Byte, 42),
+        (ACLINT_BASE, AccessWidth::Word, 1),
+        (ACLINT_BASE + 0x4000, AccessWidth::DoubleWord, 10),
+    ] {
+        machine
+            .bus_mut()
+            .write(GuestAddress(address), width, value)
+            .unwrap();
+    }
+    machine.reset_devices();
+    assert_eq!(
+        machine
+            .bus_mut()
+            .read(GuestAddress(VIRTIO_BASE + 0x70), AccessWidth::Word)
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        machine
+            .bus_mut()
+            .read(GuestAddress(VIRTIO_BASE + 0x100), AccessWidth::Word)
+            .unwrap(),
+        0x001e_0064
+    );
+    assert_eq!(
+        machine
+            .bus_mut()
+            .read(GuestAddress(0x1000_0000 + 7), AccessWidth::Byte)
+            .unwrap(),
+        0
+    );
+    assert_eq!(
+        machine
+            .bus_mut()
+            .read(GuestAddress(0x1000_0000 + 5), AccessWidth::Byte)
+            .unwrap()
+            & 1,
+        0
+    );
+    assert_eq!(
+        machine
+            .bus_mut()
+            .read(GuestAddress(ACLINT_BASE), AccessWidth::Word)
+            .unwrap(),
+        0
+    );
+    assert_eq!(machine.next_timer_remaining_guest_ticks(), None);
+
+    // Persistent bytes and host-defined geometry remain available after teardown.
+    assert_eq!(machine.read_ram(RAM_BASE + 0x1000, 8).unwrap(), b"retained");
+    let mut bytes = [0; 512];
+    machine
+        .storage_mut(disk)
+        .unwrap()
+        .read_sectors(0, &mut bytes)
+        .unwrap();
+    assert_eq!(bytes, [7; 512]);
+    machine.reset_devices();
+    assert_eq!(machine.read_ram(RAM_BASE + 0x1000, 8).unwrap(), b"retained");
+}
+
+#[test]
 fn reset_restarts_cpu_and_interface_state_without_replacing_ram() {
     let mut machine = machine(false);
     machine

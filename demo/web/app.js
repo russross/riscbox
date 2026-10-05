@@ -78,7 +78,10 @@ function setPhase(value) {
 // Enable operations according to their API preconditions, without implicit shutdowns.
 function updateControls() {
     element("vm-controls").disabled = busy;
-    element("share-controls").disabled = busy || phase !== "halted";
+    element("share-controls").disabled = busy || !workspace;
+    for (const id of ["load-tree", "share-reset"]) {
+        element(id).disabled = phase !== "halted";
+    }
     element("prepare").disabled = phase !== "absent";
     element("boot").disabled = phase !== "halted";
     for (const id of ["shutdown", "reboot", "halt", "reset"]) {
@@ -129,7 +132,7 @@ async function loadTree(id) {
         if (!response.ok) throw new Error(`HTTP ${response.status}: ${path}`);
         return { path, bytes: new Uint8Array(await response.arrayBuffer()) };
     }));
-    workspace.clear();
+    workspace.reset();
     workspace.setAttributes("", {
         mode: 0o755, uid: 1000, gid: 1000,
         atime: { seconds: BigInt(Math.floor(Date.now() / 1000)), nanoseconds: 0 },
@@ -218,10 +221,10 @@ element("shutdown").onclick = () => action("requestShutdown()", () => runtime.re
 element("reboot").onclick = () => action("requestReboot()", () => runtime.requestReboot());
 element("halt").onclick = () => action("halt()", () => runtime.halt());
 element("reset").onclick = () => action("reset()", () => runtime.reset());
-element("image-reset").onclick = () => action("halt(); coldReset(); block(0).discardChanges(); boot()", async () => {
+element("image-reset").onclick = () => action("halt(); coldReset(); block(0).reset(); boot()", async () => {
     if (phase === "running") await runtime.halt();
     await runtime.coldReset();
-    runtime.block(0).discardChanges();
+    runtime.block(0).reset();
     await runtime.boot();
 });
 element("destroy").onclick = () => action("destroy()", async () => {
@@ -229,7 +232,7 @@ element("destroy").onclick = () => action("destroy()", async () => {
     await runtime.destroy(); workspace = null; setPhase("absent");
     element("files").replaceChildren();
 });
-element("load-tree").onclick = () => action("filesystem.clear(); writeFile() source tree", () => loadTree(element("source-tree").value));
+element("load-tree").onclick = () => action("filesystem.reset(); writeFile() source tree", () => loadTree(element("source-tree").value));
 element("share-reset").onclick = () => action("reload current 9p tree", () => loadTree(currentTree));
 element("share-clear").onclick = () => action("filesystem.clear()", () => workspace.clear());
 element("read-file").onclick = () => action("filesystem.readFile() → editor", readFile);

@@ -146,6 +146,7 @@ enum Operation<'a> {
     Readlink(&'a str),
     Link(&'a str, &'a str),
     Reset,
+    Clear,
     Tracking(bool),
     Attributes(&'a str, AttributeUpdate),
 }
@@ -171,6 +172,7 @@ impl<'a> Operation<'a> {
                 1 => true,
                 _ => return Err(Error::Packet),
             }),
+            15 => Self::Clear,
             14 => {
                 let path = reader.string()?;
                 let mode = reader.u32()?;
@@ -337,6 +339,7 @@ fn execute(
         Operation::Readlink(path) => output.extend(fs.readlink(path)?.as_bytes()),
         Operation::Link(existing, new) => fs.hard_link(existing, new)?,
         Operation::Reset => fs.reset()?,
+        Operation::Clear => fs.clear()?,
         Operation::Tracking(enabled) => fs.set_change_tracking(enabled),
         Operation::Stat(path) => stat(
             output,

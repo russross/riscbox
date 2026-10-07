@@ -4,6 +4,86 @@ import { join, resolve } from "node:path";
 import test from "node:test";
 import { runChromePage } from "./chrome.mjs";
 
+// Real focus events gate requests while delayed response bodies remain in flight.
+test("demo prefetch pauses on terminal focus and resumes after blur", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "riscbox-demo-prefetch-"));
+    try {
+        await runChromePage(`<!doctype html><div id="terminal"><textarea></textarea><button>Inside</button></div><button id="outside">Outside</button><script type="module">
+import { DiskPrefetch, prefetchImage } from '/demo/web/disk-prefetch.js';
+const check = (condition, message) => { if (!condition) throw new Error(message); };
+const settle = () => new Promise(resolve => setTimeout(resolve, 20));
+const realFetch = window.fetch;
+try {
+    // Headed Chrome must receive window focus before native focus events are observable.
+    window.focus();
+    for (let attempt = 0; !document.hasFocus() && attempt < 100; attempt++) await settle();
+    check(document.hasFocus(), 'Chrome document has focus');
+    const calls = [], bodies = [];
+    window.fetch = async (url, options) => {
+        calls.push({ url: String(url), cache: options.cache });
+        if (String(url).endsWith('riscbox.cfg')) return { ok: true, json: async () => ({ drive0: { file: 'drive-12345678/blk.txt' } }) };
+        if (String(url).endsWith('blk.txt')) return { ok: true, text: async () => '{ block_size: 512, n_block: 5, }' };
+        return { arrayBuffer: () => new Promise(resolve => bodies.push(resolve)) };
+    };
+    const host = document.getElementById('terminal');
+    const prefetch = prefetchImage(new URL('/image/riscbox.cfg', location.href), host);
+    await settle();
+    check(!host.contains(document.activeElement), 'terminal starts unfocused');
+    check(calls.length === 4 && bodies.length === 2, 'two concurrent bodies');
+    check(calls[2].url.endsWith('/image/drive-12345678/blk000000000.bin'), 'relative chunk URL');
+    check(calls[0].cache === 'no-cache' && calls.slice(1).every(call => call.cache === 'force-cache'), 'cache policy');
+
+    // Completing both transfers while focused must leave the remaining chunks untouched.
+    host.querySelector('textarea').focus();
+    bodies.splice(0).forEach(resolve => resolve(new ArrayBuffer(0)));
+    await settle();
+    check(calls.length === 4, 'focus pauses subsequent requests: ' + calls.length + ', paused=' + prefetch.paused + ', active=' + document.activeElement.tagName + ', document focus=' + document.hasFocus());
+    host.querySelector('button').focus();
+    await settle();
+    check(calls.length === 4, 'focus within terminal remains paused');
+    document.getElementById('outside').focus();
+    await settle();
+    check(calls.length === 6 && bodies.length === 2, 'blur resumes two transfers');
+    bodies.splice(0).forEach(resolve => resolve(new ArrayBuffer(0)));
+    await settle();
+    check(calls.length === 7 && bodies.length === 1, 'last chunk requested once');
+    bodies.pop()(new ArrayBuffer(0));
+    await settle();
+    await prefetch.start(new URL('/image/riscbox.cfg', location.href));
+    check(calls.length === 7, 'completed prefetch does not restart');
+
+    // Focus before startup also gates metadata, and failed chunks do not stop warmup.
+    calls.length = 0;
+    host.querySelector('textarea').focus();
+    prefetchImage(new URL('/image/riscbox.cfg', location.href), host);
+    await settle();
+    check(calls.length === 0, 'initial focus gates metadata');
+    window.fetch = async (url) => {
+        calls.push(String(url));
+        if (String(url).endsWith('riscbox.cfg')) return { ok: true, json: async () => ({ drive0: { file: 'drive/blk.txt' } }) };
+        if (String(url).endsWith('blk.txt')) return { ok: true, text: async () => '{ block_size: 512, n_block: 3 }' };
+        throw new Error('offline');
+    };
+    document.getElementById('outside').focus();
+    await settle();
+    check(calls.length === 5, 'failed chunks continue');
+    for (const metadata of ['invalid', '{ block_size: 0, n_block: 3 }', '{ block_size: 512, n_block: 9007199254740992 }']) {
+        let requests = 0;
+        window.fetch = async url => {
+            requests++;
+            return String(url).endsWith('riscbox.cfg')
+                ? { ok: true, json: async () => ({ drive0: { file: 'drive/blk.txt' } }) }
+                : { ok: true, text: async () => metadata };
+        };
+        await new DiskPrefetch().start(new URL('/image/riscbox.cfg', location.href));
+        check(requests === 2, 'malformed metadata does not request chunks');
+    }
+    await realFetch('/result?status=pass');
+} catch (error) { await realFetch('/result?status=' + encodeURIComponent(error.stack ?? String(error))); }
+</script>`, directory);
+    } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
 // Documentation links share a fixed revision and point to rendered GitHub files.
 test("demo documentation links pin GitHub guides to one revision", { timeout: 60_000 }, async () => {
     const directory = await mkdtemp(join(tmpdir(), "riscbox-demo-docs-"));
@@ -29,6 +109,9 @@ try {
         check(rest.slice(slash + 1) === paths[i], 'documentation source path');
     }
     check((await fetch('/riscbox/docs/riscbox/API.html')).status === 404, 'no rendered documentation tree');
+    const config = await (await fetch('/riscbox/riscbox.cfg')).json();
+    const manifest = await (await fetch(new URL(config.drive0.file, new URL('/riscbox/riscbox.cfg', location.href)))).text();
+    check(/block_size: 256,/.test(manifest), 'demo uses 256 KiB disk chunks');
     await fetch('/result?status=pass');
 } catch (error) { await fetch('/result?status=' + encodeURIComponent(error.stack ?? String(error))); }
 </script>`, directory, { root: resolve(import.meta.dirname, "../demo/dist"), basePath: "/riscbox", timeoutMs: 50_000 });
@@ -55,7 +138,8 @@ try {
     await until(() => frame.contentDocument?.getElementById('state')?.textContent === 'running', 'startup');
     app = await frame.contentWindow.eval('import("/riscbox/app.js")');
     const doc = frame.contentDocument;
-    check(doc.querySelector('h1').textContent === 'Riscbox demo: An Alpine Linux image that shares a live file system with the host app', 'demo heading');
+    check(!doc.getElementById('terminal').contains(doc.activeElement), 'VM terminal starts unfocused');
+    check(doc.querySelector('h1').textContent === 'Riscbox demo: An Alpine Linux image that shares a live file tree with the host app', 'demo heading');
     check(doc.querySelector('label[for="source-tree"]').textContent === 'Load source tree', 'source label');
     check(doc.getElementById('files-label').textContent === '/shared file tree', 'file tree label');
     check(doc.getElementById('editor-pane').classList.contains('empty'), 'empty editor begins gray');
@@ -104,13 +188,20 @@ try {
         if (['boot', 'reset', 'reboot', 'image-reset'].includes(id)) {
             app.terminal.reset();
             captured = '';
+            rawConsole = '';
         }
         doc.getElementById(id).click();
         await until(() => !doc.getElementById('vm-controls').disabled, id + ' completion');
         if (['boot', 'reset', 'image-reset'].includes(id)) {
             check(doc.getElementById('cpu-time').textContent === '0s', 'boot resets displayed uptime');
         }
-        if (['boot', 'reset', 'reboot', 'image-reset'].includes(id)) await prompt();
+        // Parser queues can retain older prompts; fresh console output confirms this boot.
+        if (['boot', 'reset', 'reboot', 'image-reset'].includes(id)) {
+            await until(() => {
+                const banner = rawConsole.indexOf('Riscbox demo');
+                return banner >= 0 && rawConsole.slice(banner).includes('riscbox:/shared$');
+            }, id + ' login');
+        }
     }
     let serial = 0;
     async function command(command, expected) {

@@ -4,6 +4,11 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Split the demo image into 256 KiB chunks and prefetch into the browser cache
+    with two concurrent transfers.
+    Start with the terminal unfocused, pause new prefetch requests during terminal
+    focus, and resume on blur while allowing in-flight transfers to finish.
+
 *   Show demo speed averages and clock/CPU uptime in the VM status legend,
     refreshing once per second while running and freezing at halt. Gray out
     empty/binary editor selections, remove VM pulses, and replace source trees

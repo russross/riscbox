@@ -91,6 +91,12 @@ row/column changes to the guest. It uses risclet's typography, colors, bracketed
 paste handling, and WebGL rendering with a DOM fallback. Boot output stays in
 terminal history across guest resets.
 
+The terminal starts unfocused. Two background transfers prefetch the immutable
+256 KiB image chunks into the browser cache. Terminal focus pauses new prefetch
+requests while active transfers finish; leaving the terminal resumes the remaining
+chunks.
+Prefetch failures leave normal VM loading responsible for fetching those chunks.
+
 `make test` compiles all games on resident 9p with the emulated RV64 TinyCC,
 checks terminal startup and live editing, and runs lifecycle and disk-persistence
 acceptance in real Chrome using only the assembled app. It is separate from

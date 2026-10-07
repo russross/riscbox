@@ -2,6 +2,7 @@ import { Compartment, EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import { createTerminal } from "./terminal.js";
 import { setupLayout } from "./layout.js";
+import { prefetchImage } from "./disk-prefetch.js";
 
 const element = id => document.getElementById(id);
 const encoder = new TextEncoder();
@@ -40,6 +41,8 @@ const terminal = createTerminal(element("terminal"), data => {
     queueInput(typeof data === "string" ? encoder.encode(data) : data);
 }, ({ cols, rows }) => { if (phase === "running") runtime.consoleResize(cols, rows); });
 setupLayout();
+terminal.blur();
+prefetchImage(new URL("riscbox.cfg", document.baseURI), element("terminal"));
 
 // Programmatic replacement cancels buffered writes before touching the document.
 function replaceEditor(path, text = "", writable = false) {

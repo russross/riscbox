@@ -242,6 +242,9 @@ editor, and terminal; a horizontal gutter separates collapsed details below.
 Image reset preserves the share and source selection leaves the disk alone.
 Terminal input retries partial FIFO acceptance and retires on lifecycle changes;
 boot/reset messages remain in terminal history. Demo validation is opt-in.
+The terminal starts unfocused. Two independent background transfers warm the
+browser cache with immutable 256 KiB image chunks. Terminal focus pauses new
+prefetch requests without cancelling active transfers; blur resumes remaining chunks.
 
 Rust sizes each execution quantum from a measured emulated cycle rate and a
 target duration, twenty milliseconds by default. Each quantum locks its rate

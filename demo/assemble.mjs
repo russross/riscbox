@@ -31,7 +31,7 @@ try {
     if (!bios || !kernel) throw new Error("release has no boot payloads");
 
     // Splitting uses the packaged executable, with its regular public command line.
-    const split = execFileSync(join(release, "splitimg.py"), ["build/rootfs.ext4", "dist"], { encoding: "utf8" });
+    const split = execFileSync(join(release, "splitimg.py"), ["build/rootfs.ext4", "dist", "256"], { encoding: "utf8" });
     const drive = split.trim().split(" ")[0];
     await writeFile("dist/riscbox.cfg", JSON.stringify({
         version: 1, machine: "riscv64", memory_size: 128,

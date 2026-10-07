@@ -230,8 +230,12 @@ UID/GID 1000. The indented file tree subscribes to host and guest changes.
 Selecting a file opens it immediately; editor changes sync on blur or after
 30 seconds of inactivity. External changes discard buffered edits immediately;
 deleted files clear and lock the editor. Change pulses mark affected rows and
-the editor or terminal pane. Source selection clears and repopulates the live
-share, preserving root identity and active fids, with no halt requirement.
+the editor pane. Empty and binary-file editor selections are blank and gray.
+The VM status legend shows 1/5/15-second active-time speed averages and clock/CPU
+uptime, updating once per second while running, freezing at halt, and resetting
+on boot. Source selection clears and repopulates the live share, preserving root
+identity and active fids, with no halt requirement. Full tree clears remove rows
+immediately; new entries pulse when loaded.
 The app uses pinned CDN xterm.js, fit/WebGL addons, and CodeMirror without an
 application build step. Draggable panes start at 10/45/45 percent for the tree,
 editor, and terminal; a horizontal gutter separates collapsed details below.

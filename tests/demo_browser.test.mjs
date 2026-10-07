@@ -55,6 +55,26 @@ try {
     await until(() => frame.contentDocument?.getElementById('state')?.textContent === 'running', 'startup');
     app = await frame.contentWindow.eval('import("/riscbox/app.js")');
     const doc = frame.contentDocument;
+    check(doc.querySelector('h1').textContent === 'Riscbox demo: An Alpine Linux image that shares a live file system with the host app', 'demo heading');
+    check(doc.querySelector('label[for="source-tree"]').textContent === 'Load source tree', 'source label');
+    check(doc.getElementById('files-label').textContent === '/shared file tree', 'file tree label');
+    check(doc.getElementById('editor-pane').classList.contains('empty'), 'empty editor begins gray');
+    const statusIds = ['speed-1s', 'speed-5s', 'speed-15s', 'clock-time', 'cpu-time'];
+    const tooltips = ['Mcycles/second average over most recent 1s', 'Mcycles/second average over most recent 5s',
+        'Mcycles/second average over most recent 15s', 'Total clock time since boot', 'Total cpu time emulated since boot'];
+    check(statusIds.every((id, index) => doc.getElementById(id).title === tooltips[index]), 'status tooltips');
+
+    // Exercise display boundaries through the same periodic update used by the running VM.
+    const realSpeed = app.runtime.speed;
+    try {
+        for (const [seconds, formatted] of [[59.9, '59s'], [60, '01:00'], [3599, '59:59'], [3600, '01:00:00'], [3661.9, '01:01:01']]) {
+            app.runtime.speed = () => ({ mcycles1s: 50.123, mcycles5s: 48.27, mcycles15s: 47.11,
+                uptimeSeconds: seconds, cyclingSeconds: seconds });
+            await until(() => doc.getElementById('clock-time').textContent === formatted, 'clock format ' + formatted);
+            check(doc.getElementById('cpu-time').textContent === formatted, 'CPU uptime format');
+            check(doc.getElementById('speed-1s').textContent === '50.12', 'speed decimal places');
+        }
+    } finally { app.runtime.speed = realSpeed; }
     check([...doc.querySelectorAll('details')].every(details => !details.open), 'details begin collapsed');
     const panes = ['tree-pane', 'editor-pane', 'terminal-pane'].map(id => doc.getElementById(id));
     const widths = panes.map(pane => pane.getBoundingClientRect().width);
@@ -87,6 +107,9 @@ try {
         }
         doc.getElementById(id).click();
         await until(() => !doc.getElementById('vm-controls').disabled, id + ' completion');
+        if (['boot', 'reset', 'image-reset'].includes(id)) {
+            check(doc.getElementById('cpu-time').textContent === '0s', 'boot resets displayed uptime');
+        }
         if (['boot', 'reset', 'reboot', 'image-reset'].includes(id)) await prompt();
     }
     let serial = 0;
@@ -175,11 +198,16 @@ try {
     async function selectTree(id) {
         doc.getElementById('source-tree').value = id;
         doc.getElementById('source-tree').dispatchEvent(new frame.contentWindow.Event('change'));
+        check(files.children.length === 0, 'source selection immediately removes old rows without pulses');
         await until(() => id === '' ? app.workspace.listDirectory('').length === 0 : hasFile('Makefile') && hasFile(id + '.c'), 'source selection ' + id);
     }
     check(!doc.getElementById('refresh-tree'), 'tree has no manual refresh control');
     await until(() => hasFile('arithmetic'), 'guest build updates tree');
+    row('arithmetic').click();
+    check(app.editor.state.doc.length === 0 && app.editor.state.readOnly, 'binary file is not loaded');
+    check(doc.getElementById('editor-pane').classList.contains('empty'), 'binary selection grays editor');
     row('Makefile').click();
+    check(!doc.getElementById('editor-pane').classList.contains('empty'), 'text selection enables editor appearance');
     const original = app.editor.state.doc.toString();
     check(original.includes('arithmetic'), 'selection copies immediately');
     await command('mkdir -p nested/deeper; echo guest > nested/deeper/file.txt', '');
@@ -198,6 +226,7 @@ try {
     await command('rm -r nested', '');
     await until(() => !hasFile('nested'), 'guest removal updates tree');
     check(app.editor.state.doc.length === 0 && app.editor.state.readOnly, 'deleted file clears and locks editor');
+    check(doc.getElementById('editor-pane').classList.contains('empty'), 'deleted file grays editor');
     app.workspace.writeFile('host-created.txt', 'host');
     await until(() => hasFile('host-created.txt'), 'host writes update tree');
     row('host-created.txt').click();
@@ -213,6 +242,7 @@ try {
     app.editor.dispatch({changes: {from: 0, insert: '# automatic save\\n'}});
     check(new TextDecoder().decode(app.workspace.readFile('Makefile')) === original, 'edit stays buffered');
     app.editor.contentDOM.dispatchEvent(new frame.contentWindow.FocusEvent('blur'));
+    check(!doc.getElementById('terminal-pane').querySelector('.pulse-overlay'), 'editor save does not pulse VM');
     await until(() => new TextDecoder().decode(app.workspace.readFile('Makefile')).startsWith('# automatic save'), 'blur sync');
     await command('head -1 Makefile; echo retained > /home/riscbox/marker', '# automatic save');
     await click('reboot');
@@ -220,6 +250,9 @@ try {
     check(rebootOutput.includes('# automatic save'), 'reboot retains disk and 9p edits');
     await click('halt');
     check(doc.getElementById('state').textContent === 'halted', 'halt');
+    const haltedStatus = statusIds.map(id => doc.getElementById(id).textContent).join(',');
+    await new Promise(resolve => setTimeout(resolve, 1200));
+    check(statusIds.map(id => doc.getElementById(id).textContent).join(',') === haltedStatus, 'halt freezes status display');
     const disk = app.runtime.block(0);
     const originalSector = await disk.read(0n, 512);
     const changedSector = originalSector.slice();

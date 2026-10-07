@@ -21,9 +21,15 @@
     <script type="module" src="app.js"></script>
 </head>
 <body>
-    <h1>Riscbox demo: A small Alpine Linux image that shares a 9p file system with the host app</h1>
+    <h1>Riscbox demo: An Alpine Linux image that shares a live file system with the host app</h1>
     <fieldset id="vm-controls" disabled>
-        <legend>VM lifecycle: currently <output id="state">loading app</output></legend>
+        <legend>VM status: cpu speed
+            <output id="speed-1s" title="Mcycles/second average over most recent 1s">0.00</output>,
+            <output id="speed-5s" title="Mcycles/second average over most recent 5s">0.00</output>,
+            <output id="speed-15s" title="Mcycles/second average over most recent 15s">0.00</output>;
+            uptime <output id="clock-time" title="Total clock time since boot">0s</output> clock,
+            <output id="cpu-time" title="Total cpu time emulated since boot">0s</output> cpu;
+            currently <output id="state">loading app</output></legend>
         <button id="prepare">Prepare new VM</button>
         <button id="boot">Boot</button>
         <button id="shutdown">Soft shutdown</button>
@@ -36,13 +42,13 @@
     </fieldset>
     <main id="panes">
         <section id="tree-pane">
-            <label for="source-tree">Source tree</label>
+            <label for="source-tree">Load source tree</label>
             <select id="source-tree"><option value="">&lt;clear&gt;</option></select>
-            <h2 id="files-label">Files and directories in 9p</h2>
+            <h2 id="files-label">/shared file tree</h2>
             <div id="files" role="group" aria-labelledby="files-label"></div>
         </section>
         <div class="gutter" role="separator" tabindex="0" aria-label="Resize file tree and editor" aria-orientation="vertical"></div>
-        <section id="editor-pane" aria-label="File editor"><div id="editor"></div></section>
+        <section id="editor-pane" class="empty" aria-label="File editor"><div id="editor"></div></section>
         <div class="gutter" role="separator" tabindex="0" aria-label="Resize editor and terminal" aria-orientation="vertical"></div>
         <section id="terminal-pane" aria-label="Guest terminal"><div id="terminal"></div></section>
     </main>

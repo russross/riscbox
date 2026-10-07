@@ -4,6 +4,11 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Show demo speed averages and clock/CPU uptime in the VM status legend,
+    refreshing once per second while running and freezing at halt. Gray out
+    empty/binary editor selections, remove VM pulses, and replace source trees
+    immediately with pulses on their new entries.
+
 *   Add `speed()` with 1/5/15-second active-time Mcycles/s averages and clock
     and cycling uptime in seconds. Rust retains whole quantum samples with
     rolling totals. Measurements reset on every boot and freeze at halt.

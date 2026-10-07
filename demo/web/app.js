@@ -18,6 +18,7 @@ let sourceSelection = 0;
 let dirty = false;
 let replacing = false;
 let saveTimer;
+let statusTimer;
 const access = new Compartment();
 
 // Edits remain buffered until blur or thirty seconds of inactivity.
@@ -52,12 +53,14 @@ function replaceEditor(path, text = "", writable = false) {
             effects: access.reconfigure([EditorState.readOnly.of(!writable), EditorView.editable.of(writable)]),
         });
     } finally { replacing = false; }
+    element("editor-pane").classList.toggle("empty", !writable);
     for (const [path, row] of rows) row.setAttribute("aria-current", String(path === editorPath));
 }
 function openFile(path) {
     const bytes = workspace.readFile(path);
-    try { replaceEditor(path, decoder.decode(bytes), !bytes.includes(0)); }
-    catch { replaceEditor(path); }
+    if (bytes.includes(0)) { replaceEditor(null); return; }
+    try { replaceEditor(path, decoder.decode(bytes), true); }
+    catch { replaceEditor(null); }
 }
 function syncEditor() {
     clearTimeout(saveTimer);
@@ -66,7 +69,6 @@ function syncEditor() {
         workspace.writeFile(editorPath, editor.state.doc.toString(), EDITOR_ORIGIN);
         dirty = false;
         pulseRow(rows.get(editorPath));
-        pulsePane("terminal-pane");
     } catch (error) { reportError(error); }
 }
 
@@ -127,7 +129,32 @@ function reportError(error) {
 function setPhase(value) {
     phase = value;
     element("state").textContent = phase;
+    clearInterval(statusTimer);
+    updateStatus();
+    if (phase === "running") statusTimer = setInterval(updateStatus, 1_000);
     updateControls();
+}
+
+// Clock and CPU uptime use elapsed seconds, with compact clock notation once
+// a minute has passed. Status sampling stops after the final halt reading.
+function formatUptime(seconds) {
+    const whole = Math.floor(seconds);
+    if (whole < 60) return `${whole}s`;
+    const padded = value => String(value).padStart(2, "0");
+    const minutes = Math.floor(whole / 60) % 60;
+    const remainder = padded(whole % 60);
+    if (whole < 3_600) return `${padded(minutes)}:${remainder}`;
+    return `${padded(Math.floor(whole / 3_600))}:${padded(minutes)}:${remainder}`;
+}
+function updateStatus() {
+    const speed = runtime && (runtime.state === "running" || runtime.state === "halted")
+        ? runtime.speed()
+        : { mcycles1s: 0, mcycles5s: 0, mcycles15s: 0, uptimeSeconds: 0, cyclingSeconds: 0 };
+    element("speed-1s").textContent = speed.mcycles1s.toFixed(2);
+    element("speed-5s").textContent = speed.mcycles5s.toFixed(2);
+    element("speed-15s").textContent = speed.mcycles15s.toFixed(2);
+    element("clock-time").textContent = formatUptime(speed.uptimeSeconds);
+    element("cpu-time").textContent = formatUptime(speed.cyclingSeconds);
 }
 
 // Lifecycle controls keep their existing preconditions; source selection stays enabled.
@@ -185,6 +212,7 @@ async function loadTree(id) {
     const share = workspace;
     if (!share) return;
     share.clear();
+    clearRows();
     if (editorPath !== null) pulsePane("editor-pane");
     replaceEditor(null);
     if (id === "") return;
@@ -237,6 +265,9 @@ function subscribeTree() {
 const rows = new Map();
 function clearView() {
     replaceEditor(null);
+    clearRows();
+}
+function clearRows() {
     for (const row of rows.values()) animations.get(row)?.cancel();
     rows.clear();
     element("files").replaceChildren();
@@ -258,6 +289,9 @@ function refreshTree(changes = []) {
         }
     }
     list();
+    // An empty namespace snaps away in one update; individual deletions retain
+    // their short pulse while files elsewhere in the tree remain visible.
+    if (entries.size === 0) clearRows();
     for (const [path, row] of rows) {
         if (entries.has(path) || row.classList.contains("deleted")) continue;
         row.disabled = true;

@@ -19,6 +19,7 @@ button, select { margin: .2rem; }
 .file-row.deleted { opacity: .65; }
 #editor, #terminal { height: 100%; width: 100%; box-sizing: border-box; }
 #editor { border: 1px solid #aaa; }
+#editor-pane.empty #editor { background: #eee; color: #777; }
 .cm-editor { height: 100%; }
 #editor .cm-scroller { overflow: auto; font-family: "Latin Modern Mono", monospace; }
 #terminal { padding: 4px; background: #000; }

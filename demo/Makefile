@@ -19,10 +19,10 @@ release:
 		./stage-release.sh "$$archive"; \
 	fi
 
-build/rootfs.erofs: $(IMAGE_SOURCES) build/release.sha256
+build/rootfs.ext4: $(IMAGE_SOURCES) build/release.sha256
 	./build-image.sh "build/release/$$(cat build/release.name)"
 
-dist/.built: build/rootfs.erofs build/release.sha256 $(APP_SOURCES) FORCE
+dist/.built: build/rootfs.ext4 build/release.sha256 $(APP_SOURCES) FORCE
 	DOCUMENTATION_REF="$(DOCUMENTATION_REF)" node assemble.mjs
 	touch $@
 

@@ -39,7 +39,7 @@ try {
 test("release demo boots, shares files, compiles games, and exercises lifecycle controls", { timeout: 600_000 }, async () => {
     const directory = await mkdtemp(join(tmpdir(), "riscbox-demo-"));
     try {
-        await runChromePage(`<!doctype html><iframe src="/riscbox/index.html"></iframe><script type="module">
+        await runChromePage(`<!doctype html><style>iframe { width: 98vw; height: 95vh; border: 0; }</style><iframe src="/riscbox/index.html"></iframe><script type="module">
 const frame = document.querySelector('iframe');
 const sleep = () => new Promise(resolve => setTimeout(resolve, 100));
 const check = (condition, message) => { if (!condition) throw new Error(message); };
@@ -55,10 +55,21 @@ try {
     await until(() => frame.contentDocument?.getElementById('state')?.textContent === 'running', 'startup');
     app = await frame.contentWindow.eval('import("/riscbox/app.js")');
     const doc = frame.contentDocument;
+    check([...doc.querySelectorAll('details')].every(details => !details.open), 'details begin collapsed');
+    const panes = ['tree-pane', 'editor-pane', 'terminal-pane'].map(id => doc.getElementById(id));
+    const widths = panes.map(pane => pane.getBoundingClientRect().width);
+    check(Math.abs(widths[0] / widths[1] - 10 / 45) < .02, 'initial pane proportions');
+    const gutter = doc.querySelector('.gutter');
+    check(frame.contentWindow.getComputedStyle(gutter).cursor === 'grab', 'gutter resting cursor');
+    const initialCols = app.terminal.cols;
+    const terminalGutter = doc.querySelectorAll('.gutter')[1];
+    terminalGutter.dispatchEvent(new frame.contentWindow.KeyboardEvent('keydown', {key: 'ArrowLeft'}));
+    await until(() => app.terminal.cols > initialCols, 'terminal fits resized pane');
+    check(panes[1].getBoundingClientRect().width < widths[1], 'gutter resizes adjacent panes');
     // Command delimiters use console output; screen capture can join wrapped lines.
     let rawConsole = '';
     const write = app.terminal.write.bind(app.terminal);
-    app.terminal.write = value => { rawConsole += value; return write(value); };
+    app.terminal.write = (value, callback) => { rawConsole += value; return write(value, callback); };
     let captured = '';
     async function text() {
         try {
@@ -67,11 +78,11 @@ try {
         }
         catch (error) { if (error.name === 'AbortError') return captured; throw error; }
     }
-    async function prompt() { await until(async () => (await text()).includes('demo@riscbox:'), 'login'); }
+    async function prompt() { await until(async () => (await text()).includes('riscbox:/shared$'), 'login'); }
     async function click(id) {
         check(!doc.getElementById(id).disabled, id + ' disabled');
         if (['boot', 'reset', 'reboot', 'image-reset'].includes(id)) {
-            doc.getElementById('clear-terminal').click();
+            app.terminal.reset();
             captured = '';
         }
         doc.getElementById(id).click();
@@ -83,7 +94,7 @@ try {
         const marker = 'DEMO_OK_' + ++serial;
         const start = 'DEMO_BEGIN_' + serial;
         rawConsole = '';
-        app.terminal.onData('echo ' + start + '; ' + command + '; printf "\\\\r\\\\n' + marker + '\\\\r\\\\n"\\r');
+        app.queueInput(new TextEncoder().encode('echo ' + start + '; ' + command + '; printf "\\\\r\\\\n' + marker + '\\\\r\\\\n"\\r'));
         await until(() => rawConsole.replace(/\\r/g, '').includes('\\n' + marker + '\\n'), command);
         const console = rawConsole.replace(/\\r/g, '');
         const output = console.slice(console.indexOf('\\n' + start + '\\n') + start.length + 2, console.lastIndexOf('\\n' + marker));
@@ -91,15 +102,16 @@ try {
         return output;
     }
     await prompt();
-    const initialOutput = await command('id; doas id; mount | grep overlay; make; ./arithmetic </dev/null', 'uid=1000(demo)');
+    await command('stty size', app.terminal.rows + ' ' + app.terminal.cols);
+    const initialOutput = await command("id; doas id; mount | grep 'on / type ext4'; make; ./arithmetic </dev/null", 'uid=1000(riscbox)');
     check(initialOutput.includes('uid=0(root)'), 'passwordless doas');
-    check(initialOutput.includes('type overlay'), 'tmpfs overlays');
+    check(initialOutput.includes('type ext4'), 'writable ext4 root');
     check(initialOutput.includes(' ='), 'arithmetic compiled and executed');
 
     // Compile every self-contained project on resident 9p with the guest compiler.
     const games = await (await fetch('/riscbox/examples.json')).json();
     check(games.length === 18, 'complete BSD games collection');
-    check(doc.getElementById('source-tree').options.length === games.length, 'all games selectable');
+    check(doc.getElementById('source-tree').options.length === games.length + 1, 'all games selectable');
     const directories = new Set();
     for (const game of games) {
         for (const path of game.files) {
@@ -134,59 +146,76 @@ try {
     };
     await command("printf 'Hello\\\\n' | games/caesar/caesar 13", 'Uryyb');
     for (const [id, expected] of Object.entries(screens)) {
-        doc.getElementById('clear-terminal').click();
+        app.terminal.reset();
         captured = '';
-        app.terminal.onData('(cd games/' + id + ' && ./' + id + ')\\r');
+        app.queueInput(new TextEncoder().encode('(cd games/' + id + ' && ./' + id + ')\\r'));
         await until(async () => (await text()).includes(expected), id + ' playable screen');
         check(!/Fatal error|Segmentation fault|Error:/.test(captured), id + ' startup');
         if (id === 'arithmetic') {
             const problem = captured.match(/(\\d+) ([+-]) (\\d+) =/);
             check(problem, 'arithmetic question');
             const left = Number(problem[1]), right = Number(problem[3]);
-            app.terminal.onData(String(problem[2] === '+' ? left + right : left - right) + '\\r');
+            app.queueInput(new TextEncoder().encode(String(problem[2] === '+' ? left + right : left - right) + '\\r'));
             await until(async () => (await text()).includes('Right!'), 'arithmetic answer');
         }
         if (id === 'sail') {
-            app.terminal.onData('\\r');
+            app.queueInput(new TextEncoder().encode('\\r'));
             await until(async () => (await text()).includes('Aye aye, Sir'), 'sail scenario');
         }
         const quit = { arithmetic: 'q\\r', hangman: '\\r', wump: 'q\\r' };
-        app.terminal.onData(quit[id] ?? '\\u0003');
-        await until(async () => (await text()).includes('demo@riscbox:'), id + ' terminal cleanup');
+        app.queueInput(new TextEncoder().encode(quit[id] ?? '\\u0003'));
+        await until(async () => (await text()).includes('riscbox:/shared$'), id + ' terminal cleanup');
     }
     await command('stty sane', '');
     const files = doc.getElementById('files');
-    const hasFile = path => [...files.options].some(option => option.value === path);
+    const row = path => [...files.querySelectorAll('.file-row')].find(row => row.dataset.path === path && !row.classList.contains('deleted'));
+    const hasFile = path => Boolean(row(path));
+    async function selectTree(id) {
+        doc.getElementById('source-tree').value = id;
+        doc.getElementById('source-tree').dispatchEvent(new frame.contentWindow.Event('change'));
+        await until(() => id === '' ? app.workspace.listDirectory('').length === 0 : hasFile('Makefile') && hasFile(id + '.c'), 'source selection ' + id);
+    }
     check(!doc.getElementById('refresh-tree'), 'tree has no manual refresh control');
     await until(() => hasFile('arithmetic'), 'guest build updates tree');
-    doc.getElementById('files').value = 'Makefile';
-    const initial = app.editor.state.doc.toString();
-    check(initial.includes('Choose a file'), 'selection must not copy');
-    await click('read-file');
+    row('Makefile').click();
     const original = app.editor.state.doc.toString();
+    check(original.includes('arithmetic'), 'selection copies immediately');
     await command('mkdir -p nested/deeper; echo guest > nested/deeper/file.txt', '');
     await until(() => hasFile('nested/deeper/file.txt'), 'guest creation updates tree');
-    const nestedFile = [...files.options].find(option => option.value === 'nested/deeper/file.txt');
+    const nestedFile = row('nested/deeper/file.txt');
     check(nestedFile.textContent.startsWith('\\u00a0'.repeat(4)), 'nested file indentation');
     check(frame.contentWindow.getComputedStyle(nestedFile).whiteSpace === 'pre', 'indentation retains whitespace');
-    check(files.value === 'Makefile', 'guest changes preserve selection');
-    check(app.editor.state.doc.toString() === original, 'guest changes do not copy into editor');
+    check(row('Makefile').getAttribute('aria-current') === 'true', 'guest changes preserve selection');
+    check(app.editor.state.doc.toString() === original, 'unrelated guest changes preserve editor');
     await command('mv nested/deeper/file.txt nested/deeper/renamed.txt', '');
     await until(() => hasFile('nested/deeper/renamed.txt') && !hasFile('nested/deeper/file.txt'), 'guest rename updates tree');
-    files.value = 'nested/deeper/renamed.txt';
+    row('nested/deeper/renamed.txt').click();
+    app.editor.dispatch({changes: {from: 0, insert: 'discard me'}});
+    await command('echo replaced > nested/deeper/renamed.txt', '');
+    await until(() => app.editor.state.doc.toString() === 'replaced\\n', 'guest write discards buffered editor edits');
     await command('rm -r nested', '');
     await until(() => !hasFile('nested'), 'guest removal updates tree');
-    check(files.value === '', 'removed selection is cleared');
+    check(app.editor.state.doc.length === 0 && app.editor.state.readOnly, 'deleted file clears and locks editor');
     app.workspace.writeFile('host-created.txt', 'host');
     await until(() => hasFile('host-created.txt'), 'host writes update tree');
-    files.value = 'Makefile';
-    app.editor.dispatch({changes: {from: 0, insert: '# explicit save\\n'}});
-    check(new TextDecoder().decode(app.workspace.readFile('Makefile')) === original, 'edit must not save');
-    await click('save-file');
-    await command('head -1 Makefile; echo retained > /home/demo/marker', '# explicit save');
+    row('host-created.txt').click();
+    app.editor.dispatch({changes: {from: 0, to: app.editor.state.doc.length, insert: 'idle save'}});
+    await until(() => new TextDecoder().decode(app.workspace.readFile('host-created.txt')) === 'idle save', 'idle sync');
+    app.workspace.writeFile('host-created.txt', 'external replacement');
+    await until(() => app.editor.state.doc.toString() === 'external replacement', 'host write updates editor');
+    app.workspace.remove('host-created.txt');
+    await until(() => app.editor.state.readOnly && app.editor.state.doc.length === 0, 'host deletion locks editor');
+    check([...files.children].some(item => item.dataset.path === 'host-created.txt' && item.classList.contains('deleted')), 'deleted file pulses before removal');
+    await until(() => ![...files.children].some(item => item.dataset.path === 'host-created.txt'), 'deletion pulse finishes');
+    row('Makefile').click();
+    app.editor.dispatch({changes: {from: 0, insert: '# automatic save\\n'}});
+    check(new TextDecoder().decode(app.workspace.readFile('Makefile')) === original, 'edit stays buffered');
+    app.editor.contentDOM.dispatchEvent(new frame.contentWindow.FocusEvent('blur'));
+    await until(() => new TextDecoder().decode(app.workspace.readFile('Makefile')).startsWith('# automatic save'), 'blur sync');
+    await command('head -1 Makefile; echo retained > /home/riscbox/marker', '# automatic save');
     await click('reboot');
-    const rebootOutput = await command('test ! -e /home/demo/marker && echo TMPFS_CLEAN; head -1 Makefile', 'TMPFS_CLEAN');
-    check(rebootOutput.includes('# explicit save'), 'reboot retains 9p edits');
+    const rebootOutput = await command('cat /home/riscbox/marker; head -1 Makefile', 'retained');
+    check(rebootOutput.includes('# automatic save'), 'reboot retains disk and 9p edits');
     await click('halt');
     check(doc.getElementById('state').textContent === 'halted', 'halt');
     const disk = app.runtime.block(0);
@@ -194,40 +223,45 @@ try {
     const changedSector = originalSector.slice();
     changedSector[0] ^= 1;
     disk.write(0n, changedSector);
-    doc.getElementById('source-tree').value = 'caesar';
-    await click('load-tree');
+    await selectTree('caesar');
     await click('boot');
     await command("make; printf 'Hello\\\\n' | ./caesar 13", 'Uryyb');
     await click('shutdown');
     await until(() => doc.getElementById('state').textContent === 'halted', 'soft shutdown');
-    doc.getElementById('source-tree').value = 'wump';
-    await click('load-tree');
+    await selectTree('wump');
     await click('boot');
     await command("make; printf 'q\\\\n' | ./wump", 'Wumpus');
     await click('reset');
     await command('test -f wump && echo SHARE_RETAINED', 'SHARE_RETAINED');
     await click('image-reset');
-    const resetOutput = await command('test ! -e /home/demo/marker && echo IMAGE_CLEAN; test -f wump && echo SHARE_KEPT', 'IMAGE_CLEAN');
+    const resetOutput = await command('test ! -e /home/riscbox/marker && echo IMAGE_CLEAN; test -f wump && echo SHARE_KEPT', 'IMAGE_CLEAN');
     check(resetOutput.includes('SHARE_KEPT'), 'image reset retains share');
+    row('Makefile').click();
+    app.editor.dispatch({changes: {from: 0, insert: 'discard on source change'}});
+    await selectTree('caesar');
+    check(app.editor.state.readOnly && app.editor.state.doc.length === 0, 'source change clears buffered editor');
+    await command("cd /shared; make; printf 'Live\\\\n' | ./caesar 13", 'Yvir');
+    await selectTree('wump');
+    await command('make; test -f wump && echo LIVE_SOURCE_REPLACED', 'LIVE_SOURCE_REPLACED');
     await command('exec 3<Makefile; mkdir removed; cd removed; echo DIRECTORY_OPEN', 'DIRECTORY_OPEN');
-    await click('share-clear');
+    await selectTree('');
     check(app.workspace.listDirectory('').length === 0, 'live clear empties host namespace');
-    const clearOutput = await command('cd /workspace; test -z "$(ls -A)" && echo LIVE_TREE_EMPTY; read line <&3 && echo OPEN_FID_RETAINED; exec 3<&-; echo LIVE_FID_CLOSED', 'LIVE_FID_CLOSED');
+    const clearOutput = await command('cd /shared; test -z "$(ls -A)" && echo LIVE_TREE_EMPTY; read line <&3 && echo OPEN_FID_RETAINED; exec 3<&-; echo LIVE_FID_CLOSED', 'LIVE_FID_CLOSED');
     check(clearOutput.includes('LIVE_TREE_EMPTY') && clearOutput.includes('OPEN_FID_RETAINED'), 'Linux leaves deleted directory and retains open file');
     await click('halt');
     check((await disk.read(0n, 512))[0] === originalSector[0], 'image reset discards HTTP overlay');
-    await click('share-reset');
+    await selectTree('wump');
     check(!app.workspace.listDirectory('').some(entry => entry.name === 'wump'), 'share reset removes built binary');
-    await click('share-clear');
+    await selectTree('');
     check(app.workspace.listDirectory('').length === 0, 'share clear');
-    await until(() => files.options.length === 0, 'share clear updates tree');
+    await until(() => files.children.length === 0, 'share clear updates tree');
     const retired = app.workspace;
     await click('destroy');
     let invalid = false;
     try { retired.listDirectory(''); } catch { invalid = true; }
     check(invalid, 'destroy invalidates share');
     await click('prepare');
-    await click('share-reset');
+    await selectTree('arithmetic');
     await until(() => hasFile('Makefile'), 'replacement VM has a tree subscription');
     await click('boot');
     await command('echo RECREATED', 'RECREATED');
@@ -239,6 +273,6 @@ try {
     try { output = await app?.terminal.readText(); } catch {}
     await fetch('/result?status=' + encodeURIComponent((error?.stack ?? String(error)) + '\\n' + output));
 }
-</script>`, directory, { root: resolve(import.meta.dirname, "../demo/dist"), basePath: "/riscbox", timeoutMs: 590_000 });
+</script>`, directory, { root: resolve(import.meta.dirname, "../demo/dist"), basePath: "/riscbox", timeoutMs: 590_000, chromeArgs: ["--window-size=1800,1000"] });
     } finally { await rm(directory, { recursive: true, force: true }); }
 });

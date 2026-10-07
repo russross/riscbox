@@ -7,7 +7,7 @@ This is a fork of Fabrice Bellard's TinyEMU, but there are so many forks out the
 
 I recommend starting here with a [live demo](https://russross.github.io/riscbox/)
 
-It runs a small Alpine Linux instance and exposes some of the main VM lifecycle controls. The demo's [source and build instructions](https://github.com/russross/riscbox/tree/main/demo) are part of the repo and show how to embed a VM in your page.
+It runs a small Alpine Linux instance with a writable ext4 disk, VM lifecycle controls, and a live 9p file tree and editor beside a resizable terminal. Editor changes sync automatically; guest changes update the editor immediately. The demo's [source and build instructions](https://github.com/russross/riscbox/tree/main/demo) are part of the repo and show how to embed a VM in your page.
 
 The docs for using riscbox are split into two parts:
 

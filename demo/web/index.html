@@ -4,14 +4,14 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Riscbox demo</title>
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@wterm/dom@0.5.4/src/terminal.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@6.0.0/css/xterm.css">
     <link rel="stylesheet" href="style.css">
     <script type="importmap">
     {
         "imports": {
-            "@wterm/core": "https://cdn.jsdelivr.net/npm/@wterm/core@0.5.4/dist/index.js",
-            "@wterm/dom": "https://cdn.jsdelivr.net/npm/@wterm/dom@0.5.4/dist/index.js",
-            "@wterm/ghostty": "https://cdn.jsdelivr.net/npm/@wterm/ghostty@0.5.4/dist/index.js",
+            "@xterm/xterm": "https://cdn.jsdelivr.net/npm/@xterm/xterm@6.0.0/lib/xterm.mjs",
+            "@xterm/addon-fit": "https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.11.0/lib/addon-fit.mjs",
+            "@xterm/addon-webgl": "https://cdn.jsdelivr.net/npm/@xterm/addon-webgl@0.19.0/lib/addon-webgl.mjs",
             "@codemirror/state": "https://esm.sh/@codemirror/state@6.7.6",
             "@codemirror/view": "https://esm.sh/@codemirror/view@6.43.13?external=@codemirror/state"
         }
@@ -21,12 +21,9 @@
     <script type="module" src="app.js"></script>
 </head>
 <body>
-    <h1>Riscbox demo</h1>
-    <p>A small Alpine Linux image that shares a 9p file system with the host. Controls are deliberately minimal and explicit to help clarify the embedding model.</p>
-    <p>VM: <output id="state">loading app</output> · <output id="message" aria-live="polite"></output></p>
-
+    <h1>Riscbox demo: A small Alpine Linux image that shares a 9p file system with the host app</h1>
     <fieldset id="vm-controls" disabled>
-        <legend>VM lifecycle</legend>
+        <legend>VM lifecycle: currently <output id="state">loading app</output></legend>
         <button id="prepare">Prepare new VM</button>
         <button id="boot">Boot</button>
         <button id="shutdown">Soft shutdown</button>
@@ -35,56 +32,32 @@
         <button id="reset">Hard reboot</button>
         <button id="image-reset">Reset image and boot</button>
         <button id="destroy">Destroy VM</button>
+        <output id="message" aria-live="polite"></output>
     </fieldset>
-
-    <main>
-        <section>
-            <h2>Console · (wterm at 80×25)</h2>
-            <p>At the prompt: <code>make</code>, then <code>make run</code>.</p>
-            <div id="terminal" aria-label="Guest terminal"></div>
-            <button id="clear-terminal" disabled>Clear terminal</button>
+    <main id="panes">
+        <section id="tree-pane">
+            <label for="source-tree">Source tree</label>
+            <select id="source-tree"><option value="">&lt;clear&gt;</option></select>
+            <h2 id="files-label">Files and directories in 9p</h2>
+            <div id="files" role="group" aria-labelledby="files-label"></div>
         </section>
-        <section>
-            <h2>9p file system mounted as /workspace and shared with the host</h2>
-            <fieldset id="share-controls" disabled>
-                <legend>Shared file tree</legend>
-                <label for="source-tree">Source tree</label>
-                <select id="source-tree">
-                    <option value="arithmetic">Arithmetic practice</option>
-                    <option value="wump">Hunt the Wumpus</option>
-                </select>
-                <button id="load-tree">Load tree</button>
-                <button id="share-reset">Reload current tree</button>
-                <button id="share-clear">Clear 9p</button>
-            </fieldset>
-            <p>Loading or reloading a tree requires halt. Clear 9p recursively deletes content while running or halted. The file tree updates automatically as the host or guest changes it. Copying to the editor and saving back remain explicit actions.</p>
-            <div class="files">
-                <div>
-                    <label for="files">Files and directories</label>
-                    <select id="files" size="12" disabled></select>
-                    <button id="read-file" disabled>Copy to editor</button>
-                    <button id="download-file" disabled>Download file</button>
-                </div>
-                <div>
-                    <p>Editor copy: <output id="editor-path">no file copied</output></p>
-                    <div id="editor"></div>
-                    <button id="save-file" disabled>Save to 9p</button>
-                </div>
-            </div>
-        </section>
+        <div class="gutter" role="separator" tabindex="0" aria-label="Resize file tree and editor" aria-orientation="vertical"></div>
+        <section id="editor-pane" aria-label="File editor"><div id="editor"></div></section>
+        <div class="gutter" role="separator" tabindex="0" aria-label="Resize editor and terminal" aria-orientation="vertical"></div>
+        <section id="terminal-pane" aria-label="Guest terminal"><div id="terminal"></div></section>
     </main>
-
-    <details>
-        <summary>Storage and lifecycle behavior</summary>
-        <p>Soft shutdown and reboot just send a request to guest OS and return immediately. Hard shutdown and reboot stop the guest instantly.</p>
-        <p>The demo uses a read-only EROFS base image and Linux is set up with a tmpfs overlay to capture writes. The system also support writable ext4 file systems that capture changes with a copy-on-write overlay. Reboots normally preserve the overlay but reset clears it for a clean restart.</p>
-        <p>The 9p file system also survives reboots normally, but the host can reset it while the guest is stopped. The host can also make arbitrary changes on the fly through individual file operations.</p>
-        <p>Boot output stays in terminal history on every boot, including reboot. Files in 9p and the HTTP disk overlay survive reboot until explicitly reset.</p>
-        <p>Copy to editor reads the selected file. Save to 9p replaces the copied file with the editor text. The file tree updates automatically; nothing saves automatically or checks for lost edits.</p>
-    </details>
-    <h2>Host actions and VM notifications</h2>
-    <pre id="events" aria-live="polite"></pre>
-    <p><a href="{{DOCUMENTATION_BASE}}API.md">Runtime API</a> · <a href="{{DOCUMENTATION_BASE}}HOWTO.md">Workflows</a> ·
-    <a href="{{DOCUMENTATION_BASE}}demo/bsd-games-3.3/README.md">Example source provenance</a></p>
+    <div id="bottom-split" class="gutter" role="separator" tabindex="0" aria-label="Resize panes and details" aria-orientation="horizontal"></div>
+    <footer id="bottom">
+        <details>
+            <summary>Storage and lifecycle behavior</summary>
+            <p>Soft shutdown and reboot request guest OS actions. Hard shutdown and reboot stop the guest instantly.</p>
+            <p>The writable ext4 disk retains session changes across reboots. Reset image discards disk changes and preserves 9p.</p>
+            <p>Source selection clears and repopulates 9p while running or halted. Open guest fids can still reference deleted files; use <code>cd /shared</code> to leave a deleted directory.</p>
+            <p>Editor changes sync on blur or after 30 seconds of inactivity. External changes replace editor contents immediately. Boot output stays in terminal history.</p>
+        </details>
+        <details><summary>Host actions and VM notifications</summary><pre id="events" aria-live="polite"></pre></details>
+        <p><a href="{{DOCUMENTATION_BASE}}API.md">Runtime API</a> · <a href="{{DOCUMENTATION_BASE}}HOWTO.md">Workflows</a> ·
+        <a href="{{DOCUMENTATION_BASE}}demo/bsd-games-3.3/README.md">Example source provenance</a></p>
+    </footer>
 </body>
 </html>

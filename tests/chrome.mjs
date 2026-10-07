@@ -38,6 +38,7 @@ export async function runChromePage(html, directory, options = {}) {
     // A display selects headed Chrome; each probe has an isolated temporary profile.
     const flags = process.env.DISPLAY ? [] : ["--headless=new"];
     const chrome = spawn("google-chrome", [...flags, "--no-sandbox", "--disable-gpu", "--disable-dev-shm-usage",
+        "--no-first-run", "--no-default-browser-check", "--password-store=basic",
         ...(options.chromeArgs ?? []),
         `--user-data-dir=${join(directory, "chrome")}`, `http://127.0.0.1:${server.address().port}/probe.html`],
         { stdio: ["ignore", "ignore", "pipe"] });

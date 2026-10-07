@@ -1,10 +1,10 @@
 
 Riscbox demo
 
-This VM shares files in /workspace with the web app, and
-updates in both direction are visible live.
+This VM shares files in /shared with the web app, and
+updates in both directions are visible live.
+
+You have doas access: try `doas reboot`
 
 Use `make` to build a game or `make run` to run it.
-
-You have doas access: try `doas poweroff`
 

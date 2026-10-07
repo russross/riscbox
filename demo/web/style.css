@@ -1,21 +1,36 @@
-/* Fixed widgets keep the example independent of application layout machinery. */
-body { margin: 1rem; font-family: sans-serif; }
-h1 { font-size: 1.4rem; }
-h2 { font-size: 1rem; }
-fieldset { margin: .75rem 0; }
+/* The viewport supplies the workspace; the bottom section has its own scroll area. */
+body { margin: .75rem; height: calc(100dvh - 1.5rem); display: flex; flex-direction: column; font-family: sans-serif; }
+h1 { font-size: 1rem; font-weight: normal; margin: 0 0 .5rem; }
+h2 { font-size: .9rem; font-weight: normal; margin: .6rem 0; }
+fieldset { margin: 0 0 .5rem; }
 button, select { margin: .2rem; }
-main { display: flex; flex-wrap: wrap; gap: 1.5rem; align-items: start; }
-/* Widgets set each panel's width; explanatory text wraps within that width. */
-main > section { width: min-content; }
-#terminal { width: 700px; height: 425px; }
-.files { display: flex; gap: 1rem; }
-.files label, .files p { margin: 0 0 .5rem; }
-.files label { display: block; }
-#files, #editor { box-sizing: border-box; height: 425px; }
-#files { display: block; width: 230px; margin: 0; }
-#files option { font-family: monospace; white-space: pre; }
-#editor { width: 600px; border: 1px solid #aaa; }
+#message { display: block; }
+#message:empty { display: none; }
+#panes { display: flex; flex: 1; min-height: 80px; overflow: hidden; }
+#panes > section { min-width: 0; min-height: 0; box-sizing: border-box; position: relative; overflow: hidden; }
+#tree-pane { flex: 10; display: flex; flex-direction: column; }
+#editor-pane, #terminal-pane { flex: 45; }
+#source-tree { max-width: 100%; }
+#files { overflow: auto; flex: 1; }
+/* Persistent rows keep their selection and can finish a deletion pulse. */
+.file-row { display: block; width: 100%; margin: 0; border: 0; text-align: left; background: transparent; font: inherit; font-family: monospace; white-space: pre; padding: .15rem .25rem; }
+.file-row[aria-current="true"] { background: #dce8f4; }
+.file-row:disabled { color: inherit; }
+.file-row.deleted { opacity: .65; }
+#editor, #terminal { height: 100%; width: 100%; box-sizing: border-box; }
+#editor { border: 1px solid #aaa; }
 .cm-editor { height: 100%; }
-.cm-scroller { overflow: auto; }
+#editor .cm-scroller { overflow: auto; font-family: "Latin Modern Mono", monospace; }
+#terminal { padding: 4px; background: #000; }
+#terminal .xterm { height: 100%; padding: 0; }
+/* Gutters match risclet's grab-to-grabbing transition in both directions. */
+.gutter { flex: 0 0 8px; cursor: grab; touch-action: none; background: #eee; }
+.gutter:hover, .gutter:focus-visible { background: #ccc; }
+body.dragging, body.dragging * { cursor: grabbing !important; user-select: none; }
+#bottom-split { margin-top: 4px; }
+#bottom { flex: 0 0 100px; min-height: 0; overflow: auto; padding-top: .4rem; }
+details { margin-bottom: .4rem; }
 #events { max-height: 15rem; overflow: auto; border: 1px solid #ccc; padding: .5rem; }
 output { white-space: pre-wrap; }
+/* Pane overlays stay above widgets without intercepting input or focus. */
+.pulse-overlay { position: absolute; inset: 0; pointer-events: none; z-index: 10; }

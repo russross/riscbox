@@ -214,8 +214,8 @@ Preparation cancellation releases partial machines and retires pending HTTP
 responses. Destroyed clients cannot be reused. Browser
 HTTP completions and errors are guarded by the VM lifecycle generation.
 
-The embedding demo loads the packaged Linux kernel through OpenSBI, mounts an
-EROFS root with tmpfs overlays for `/var` and `/home`, and autologins user `demo`
+The embedding demo loads the packaged Linux kernel through OpenSBI, mounts a
+writable 80 MiB ext4 root without tmpfs overlays, and autologins user `riscbox`
 on the VirtIO console. BusyBox acpid handles orderly power events. QEMU setup
 passes Linux `riscv_isa_fallback` for legacy CPU ISA device-tree bindings from
 older QEMU versions, including the release runner's QEMU 8.2.
@@ -225,14 +225,17 @@ vendored and distributed as selectable source trees. Alpine includes ncurses
 development files, terminal data, and a plain-text dictionary for Hangman.
 QEMU preparation builds every game; Chrome acceptance compiles each on resident
 9p and checks terminal startup in the real WASM emulator.
-The host populates a resident `workspace` share owned by UID/GID 1000.
-The indented file tree subscribes to host and guest filesystem changes while
-copying to and from the editor remains explicit.
-The app uses pinned CDN Wterm and CodeMirror modules without an application
-build step. It exposes explicit preparation, boot, shutdown, reboot, cold/image
-reset, share replacement, directory listing, file copying, and saving controls.
-Selecting or editing a file never transfers bytes implicitly. Image reset
-preserves the share; share replacement requires halt and leaves the disk alone.
+The host populates a resident `shared` share mounted at `/shared`, owned by
+UID/GID 1000. The indented file tree subscribes to host and guest changes.
+Selecting a file opens it immediately; editor changes sync on blur or after
+30 seconds of inactivity. External changes discard buffered edits immediately;
+deleted files clear and lock the editor. Change pulses mark affected rows and
+the editor or terminal pane. Source selection clears and repopulates the live
+share, preserving root identity and active fids, with no halt requirement.
+The app uses pinned CDN xterm.js, fit/WebGL addons, and CodeMirror without an
+application build step. Draggable panes start at 10/45/45 percent for the tree,
+editor, and terminal; a horizontal gutter separates collapsed details below.
+Image reset preserves the share and source selection leaves the disk alone.
 Terminal input retries partial FIFO acceptance and retires on lifecycle changes;
 boot/reset messages remain in terminal history. Demo validation is opt-in.
 
@@ -386,7 +389,7 @@ Validation
     GitHub runs these checks for untagged releases; tagged main pushes skip
     checks and ordinary PR checks are not automatic.
 *   `make test-demo` builds the optional release-only example and checks real
-    Chrome/WASM boot, TinyCC games, explicit host/guest file transfers, lifecycle
+    Chrome/WASM boot, TinyCC games, automatic host/guest file synchronization, lifecycle
     controls, image/share reset, and destroyed facade invalidation. Browser tests
     use temporary profiles, headed Chrome when a display is available, and
     headless Chrome otherwise. `make demo` builds without running acceptance.

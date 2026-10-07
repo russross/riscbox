@@ -4,7 +4,7 @@ Embedding workflows
 These examples use the current JavaScript adapter. [API.md](API.md) defines each
 call's arguments, state prerequisites, return values, and errors. The
 [release-based demo](https://github.com/russross/riscbox/tree/main/demo) provides
-a complete plain JavaScript application with explicit lifecycle and file controls.
+a complete plain JavaScript application with lifecycle controls and live 9p editing.
 
 Serve an application around a release
 -------------------------------------
@@ -122,6 +122,9 @@ For an automatically updating file view, use `subscribe()` and relist on `rescan
 Give your writes a distinct bigint origin if you want to ignore their reflected
 notifications. Subscriptions report namespace changes; they do not save editor
 text or resolve conflicts. An application chooses its own buffering policy.
+The demo saves on editor blur or after 30 seconds of inactivity and replaces
+buffered edits immediately when an external change arrives. Its source selector
+clears and repopulates the live share without halting the VM.
 
 Terminal input also needs explicit buffering. `consoleInput(bytes)` returns the
 number accepted, which can be smaller than the input length. Retain and retry
@@ -201,8 +204,9 @@ await runtime.boot();
 Add `workspace.reset()` and your source-loading writes before boot only when
 you also want to reset the project. Array disks have no discardable overlay;
 restore their bytes explicitly or destroy/prepare them again. Every boot
-recreates guest tmpfs, so home/tmp contents are distinct from retained disk and
-9p storage. Neither page reload nor destroy preserves VM-owned stores.
+recreates any guest tmpfs configured by the image. The demo uses writable ext4
+for home/tmp and retains those files across reboots. Neither page reload nor
+destroy preserves VM-owned stores.
 
 Cancel preparation or replace the VM
 -----------------------------------

@@ -11,7 +11,7 @@ mount -t 9p -o trans=virtio,version=9p2000.L output /mnt/output
 trap 'echo "guest preparation failed" > /mnt/output/failed; poweroff -f' EXIT
 ip link set eth0 up
 udhcpc -q -n -i eth0
-apk add --no-cache tcc tcc-libs-static musl-dev make doas nano less \
+apk add --no-cache tcc tcc-libs-static musl-dev make doas \
     ncurses-dev ncurses-terminfo-base cracklib-words
 
 # Hangman reads plain text; retain the package's dictionary and license metadata.
@@ -26,15 +26,15 @@ printf 'Hello\n' | /tmp/examples/caesar/caesar 13 | grep -q 'Uryyb'
 printf 'q\n' | /tmp/examples/wump/wump | grep -q 'Wumpus'
 /tmp/examples/arithmetic/arithmetic </dev/null | grep -q ' = '
 
-addgroup -g 1000 demo
-adduser -D -u 1000 -G demo -h /home/demo demo
-passwd -d demo
+addgroup -g 1000 riscbox
+adduser -D -u 1000 -G riscbox -h /home/riscbox riscbox
+passwd -d riscbox
 passwd -l root
-mkdir -p /workspace /dev/pts /run /proc /sys /tmp /mnt /home/demo
-chown demo:demo /workspace /home/demo
+mkdir -p /shared /dev/pts /run /proc /sys /tmp /mnt /home/riscbox
+chown riscbox:riscbox /shared /home/riscbox
 chmod 1777 /tmp
 chmod 600 /etc/doas.conf
-printf '/dev/vda / erofs ro,noatime 0 0\n' > /etc/fstab
+printf '/dev/vda / ext4 rw,noatime 0 0\n' > /etc/fstab
 
 # Export only the prepared filesystem, retaining guest ownership and permissions.
 rm -rf /tmp/examples /var/cache/apk/*
@@ -42,7 +42,7 @@ rm -f /sbin/demo-prepare
 tar -C / -cf /mnt/output/rootfs.tar \
     --exclude='./dev/*' --exclude='./proc/*' --exclude='./sys/*' \
     --exclude='./tmp/*' --exclude='./run/*' --exclude='./mnt/*' \
-    ./bin ./dev ./etc ./home ./lib ./mnt ./proc ./root ./run ./sbin ./sys ./tmp ./usr ./var ./workspace
+    ./bin ./dev ./etc ./home ./lib ./mnt ./proc ./root ./run ./sbin ./sys ./tmp ./usr ./var ./shared
 tar -tf /mnt/output/rootfs.tar | grep -q '^./usr/include/sys/types.h$'
 touch /mnt/output/complete
 trap - EXIT

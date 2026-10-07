@@ -1,2 +1,2 @@
 #!/bin/sh
-exec /bin/login -f demo
+exec /bin/login -f riscbox

@@ -35,7 +35,7 @@ jobs:
       - name: Install demo build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y qemu-system-misc fakeroot cpio erofs-utils
+          sudo apt-get install -y qemu-system-misc fakeroot cpio e2fsprogs
           command -v google-chrome
       - name: Build and test demo
         env:

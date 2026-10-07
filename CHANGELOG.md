@@ -4,6 +4,16 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Simplify the demo into draggable file/editor/terminal panes with a compact
+    lifecycle legend and collapsed details. Replace Wterm with container-fitted
+    xterm.js using risclet's terminal setup. Source selection replaces live 9p
+    content; selection opens files immediately, editor blur or idle saves them,
+    and external changes replace buffered edits. Pulse affected files and panes.
+*   Use an 80 MiB writable ext4 demo image without tmpfs overlays. Rename the
+    share to `/shared` and the login user to `riscbox`, use Alpine's shell prompt,
+    and omit nano and standalone less. Reboot retains home and temporary files;
+    image reset discards disk changes while preserving the share.
+
 *   Split GitHub automation into Release and Demo workflows. Every main push
     checks the current version tag first; untagged versions pass core checks
     and packaging before tag creation and publication. Failed builds retry on

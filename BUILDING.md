@@ -47,7 +47,7 @@ available, and headless Chrome otherwise. Validation is run explicitly with the
 targets above. GitHub runs checks only as part of the release cycle. Core tests
 use small firmware probes
 and require no guest root filesystem, QEMU, mounted source, or UI framework.
-The optional demo build needs QEMU, fakeroot, cpio, and erofs-utils; see
+The optional demo build needs QEMU, fakeroot, cpio, and e2fsprogs; see
 [demo/README.md](demo/README.md).
 
 Release automation

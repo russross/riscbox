@@ -7,7 +7,9 @@ if [ "$#" -ne 1 ]; then
     exit 2
 fi
 release=$(realpath "$1")
-for command in curl sha256sum fakeroot cpio gzip tar timeout qemu-system-riscv64 mkfs.erofs; do
+PATH="$PATH:/usr/sbin:/sbin"
+export PATH
+for command in curl sha256sum fakeroot cpio gzip tar timeout qemu-system-riscv64 truncate mkfs.ext4; do
     command -v "$command" >/dev/null 2>&1 || { echo "missing command: $command" >&2; exit 1; }
 done
 kernel=$(find "$release" -maxdepth 1 -name 'linux-*.gz')
@@ -29,7 +31,7 @@ printf '%s  %s\n' 57132e6e4f3a4ba9ffdf24e485513ce507e45471e7fd565aeed91c055cd63f
 }
 stage=$(mktemp -d "$(pwd)/build/rootfs.XXXXXX")
 output=$(mktemp -d "$(pwd)/build/output.XXXXXX")
-trap 'rm -rf "$stage" "$output" build/rootfs.erofs.part' EXIT HUP INT TERM
+trap 'rm -rf "$stage" "$output" build/rootfs.ext4.part' EXIT HUP INT TERM
 
 # Fakeroot preserves the minirootfs's numeric ownership in cpio without host privileges.
 gzip -dc "$kernel" > build/linux
@@ -62,7 +64,13 @@ if [ ! -f "$output/complete" ] || [ -f "$output/failed" ]; then
     exit 1
 fi
 
-# Guest tar headers retain root ownership, the demo UID, symlinks, and setuid doas.
-mkfs.erofs --tar=f build/rootfs.erofs.part "$output/rootfs.tar"
-mv build/rootfs.erofs.part build/rootfs.erofs
-echo 'Prepared Alpine EROFS image; TinyCC built all 18 vendored BSD games.'
+# One fakeroot session retains numeric ownership and setuid doas through population.
+rm -rf "$stage"
+mkdir -p "$stage"
+fakeroot sh -eu -c '
+    tar -xpf "$1" -C "$2"
+    truncate -s 80M "$3"
+    mkfs.ext4 -q -F -m 0 -d "$2" "$3"
+' sh "$output/rootfs.tar" "$stage" "$(pwd)/build/rootfs.ext4.part"
+mv build/rootfs.ext4.part build/rootfs.ext4
+echo 'Prepared 80 MiB writable Alpine ext4 image; TinyCC built all 18 vendored BSD games.'

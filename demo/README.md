@@ -38,9 +38,8 @@ Guest image
 
 QEMU boots a verified Alpine 3.24.2 riscv64 minirootfs as an initramfs, installs
 TinyCC (including its runtime archive), musl headers, make, doas, ncurses
-development files and terminal data, and the CrackLib word list. BusyBox supplies
-`less`; nano is omitted. Hangman's dictionary is `/usr/share/dict/words`.
-Preparation compiles all 18 vendored BSD games and runs text-mode smoke checks.
+development files and terminal data. BusyBox supplies `less`; nano is omitted.
+Preparation compiles the five vendored BSD games.
 It exports a root-owned tar over 9p. A single fakeroot session extracts the tar
 and populates an 80 MiB writable ext4 image with `mkfs.ext4 -d`, retaining numeric
 ownership and setuid doas without mounting the disk.
@@ -62,8 +61,8 @@ Playground workflow
 -------------------
 
 1. Select a **Source tree** to clear and load 9p immediately, while running or
-    halted. Arithmetic is loaded before the first boot. **<clear>** empties 9p.
-2. Run `make` and `make run` under `/shared`. All 18 self-contained
+    halted. Robots is loaded before the first boot. **<clear>** empties 9p.
+2. Run `make` and `make run` under `/shared`. All five self-contained
     [BSD games](bsd-games-3.3/README.md) retain their upstream licenses.
     Assembly excludes binaries, objects, dependency files, and saved state.
 3. Select a file to open it immediately. The selected row stays highlighted.

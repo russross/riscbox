@@ -217,14 +217,15 @@ try {
     }
     await prompt();
     await command('stty size', app.terminal.rows + ' ' + app.terminal.cols);
-    const initialOutput = await command("id; doas id; mount | grep 'on / type ext4'; make; ./arithmetic </dev/null", 'uid=1000(riscbox)');
+    const initialOutput = await command("id; doas id; mount | grep 'on / type ext4'; make && test -x robots && echo INITIAL_BUILT", 'uid=1000(riscbox)');
     check(initialOutput.includes('uid=0(root)'), 'passwordless doas');
     check(initialOutput.includes('type ext4'), 'writable ext4 root');
-    check(initialOutput.includes(' ='), 'arithmetic compiled and executed');
+    check(initialOutput.includes('INITIAL_BUILT'), 'default Robots project compiles');
+    await command("test ! -e /usr/share/dict/words && test ! -d /usr/share/cracklib && ! apk info -e cracklib-words && echo NO_DICTIONARY", 'NO_DICTIONARY');
 
     // Compile every self-contained project on resident 9p with the guest compiler.
     const games = await (await fetch('/riscbox/examples.json')).json();
-    check(games.length === 18, 'complete BSD games collection');
+    check(games.map(game => game.id).sort().join(',') === 'adventure,atc,robots,snake,spirhunt', 'selected BSD games collection');
     check(doc.getElementById('source-tree').options.length === games.length + 1, 'all games selectable');
     const directories = new Set();
     for (const game of games) {
@@ -250,36 +251,20 @@ try {
         check(!/warning:|error:/.test(build), 'clean TinyCC build: ' + game.id);
     }
 
-    // Real terminal startup covers curses, dictionary access, random state, and timers.
+    // Real terminal startup covers plain text, curses, random state, and timers.
     const screens = {
-        adventure: 'Colossal Cave', arithmetic: ' =', atc: 'Time:',
-        battlestar: 'B A T T L E S T A R', cribbage: 'Your score:',
-        dab: 'human', drop4: 'Level:', gofish: 'Cards:', gomoku: 'Your move',
-        hangman: 'Word:', klondike: 'Klondike', robots: 'Commands:',
-        sail: 'Round', snake: '@', spirhunt: 'Condition', worm: 'Worm', wump: 'Wumpus',
+        adventure: 'Colossal Cave', atc: 'Time:', robots: 'Commands:',
+        snake: '@', spirhunt: 'Condition',
     };
-    await command("printf 'Hello\\\\n' | games/caesar/caesar 13", 'Uryyb');
     for (const [id, expected] of Object.entries(screens)) {
         app.terminal.reset();
         captured = '';
         app.queueInput(new TextEncoder().encode('(cd games/' + id + ' && ./' + id + ')\\r'));
         await until(async () => (await text()).includes(expected), id + ' playable screen');
         check(!/Fatal error|Segmentation fault|Error:/.test(captured), id + ' startup');
-        if (id === 'arithmetic') {
-            const problem = captured.match(/(\\d+) ([+-]) (\\d+) =/);
-            check(problem, 'arithmetic question');
-            const left = Number(problem[1]), right = Number(problem[3]);
-            app.queueInput(new TextEncoder().encode(String(problem[2] === '+' ? left + right : left - right) + '\\r'));
-            await until(async () => (await text()).includes('Right!'), 'arithmetic answer');
-        }
-        if (id === 'sail') {
-            app.queueInput(new TextEncoder().encode('\\r'));
-            await until(async () => (await text()).includes('Aye aye, Sir'), 'sail scenario');
-        }
-        const quit = { arithmetic: 'q\\r', hangman: '\\r', wump: 'q\\r' };
         // Only output after quitting can confirm that the shell regained input.
         rawConsole = '';
-        app.queueInput(new TextEncoder().encode(quit[id] ?? '\\u0003'));
+        app.queueInput(new TextEncoder().encode('\\u0003'));
         await until(() => rawConsole.includes('riscbox:/shared$'), id + ' terminal cleanup');
     }
     await command('stty sane', '');
@@ -293,14 +278,14 @@ try {
         await until(() => id === '' ? app.workspace.listDirectory('').length === 0 : hasFile('Makefile') && hasFile(id + '.c'), 'source selection ' + id);
     }
     check(!doc.getElementById('refresh-tree'), 'tree has no manual refresh control');
-    await until(() => hasFile('arithmetic'), 'guest build updates tree');
-    row('arithmetic').click();
+    await until(() => hasFile('robots'), 'guest build updates tree');
+    row('robots').click();
     check(app.editor.state.doc.length === 0 && app.editor.state.readOnly, 'binary file is not loaded');
     check(doc.getElementById('editor-pane').classList.contains('empty'), 'binary selection grays editor');
     row('Makefile').click();
     check(!doc.getElementById('editor-pane').classList.contains('empty'), 'text selection enables editor appearance');
     const original = app.editor.state.doc.toString();
-    check(original.includes('arithmetic'), 'selection copies immediately');
+    check(original.includes('robots'), 'selection copies immediately');
     await command('mkdir -p nested/deeper; echo guest > nested/deeper/file.txt', '');
     await until(() => hasFile('nested/deeper/file.txt'), 'guest creation updates tree');
     const nestedFile = row('nested/deeper/file.txt');
@@ -349,26 +334,26 @@ try {
     const changedSector = originalSector.slice();
     changedSector[0] ^= 1;
     disk.write(0n, changedSector);
-    await selectTree('caesar');
+    await selectTree('atc');
     await click('boot');
-    await command("make; printf 'Hello\\\\n' | ./caesar 13", 'Uryyb');
+    await command('make && test -x atc && echo ATC_BUILT', 'ATC_BUILT');
     await click('shutdown');
     await until(() => doc.getElementById('state').textContent === 'halted', 'soft shutdown');
-    await selectTree('wump');
+    await selectTree('snake');
     await click('boot');
-    await command("make; printf 'q\\\\n' | ./wump", 'Wumpus');
+    await command('make && test -x snake && echo SNAKE_BUILT', 'SNAKE_BUILT');
     await click('reset');
-    await command('test -f wump && echo SHARE_RETAINED', 'SHARE_RETAINED');
+    await command('test -f snake && echo SHARE_RETAINED', 'SHARE_RETAINED');
     await click('image-reset');
-    const resetOutput = await command('test ! -e /home/riscbox/marker && echo IMAGE_CLEAN; test -f wump && echo SHARE_KEPT', 'IMAGE_CLEAN');
+    const resetOutput = await command('test ! -e /home/riscbox/marker && echo IMAGE_CLEAN; test -f snake && echo SHARE_KEPT', 'IMAGE_CLEAN');
     check(resetOutput.includes('SHARE_KEPT'), 'image reset retains share');
     row('Makefile').click();
     app.editor.dispatch({changes: {from: 0, insert: 'discard on source change'}});
-    await selectTree('caesar');
+    await selectTree('atc');
     check(app.editor.state.readOnly && app.editor.state.doc.length === 0, 'source change clears buffered editor');
-    await command("cd /shared; make; printf 'Live\\\\n' | ./caesar 13", 'Yvir');
-    await selectTree('wump');
-    await command('make; test -f wump && echo LIVE_SOURCE_REPLACED', 'LIVE_SOURCE_REPLACED');
+    await command('cd /shared; make && test -x atc && echo LIVE_ATC_BUILT', 'LIVE_ATC_BUILT');
+    await selectTree('snake');
+    await command('make; test -f snake && echo LIVE_SOURCE_REPLACED', 'LIVE_SOURCE_REPLACED');
     await command('exec 3<Makefile; mkdir removed; cd removed; echo DIRECTORY_OPEN', 'DIRECTORY_OPEN');
     await selectTree('');
     check(app.workspace.listDirectory('').length === 0, 'live clear empties host namespace');
@@ -376,8 +361,8 @@ try {
     check(clearOutput.includes('LIVE_TREE_EMPTY') && clearOutput.includes('OPEN_FID_RETAINED'), 'Linux leaves deleted directory and retains open file');
     await click('halt');
     check((await disk.read(0n, 512))[0] === originalSector[0], 'image reset discards HTTP overlay');
-    await selectTree('wump');
-    check(!app.workspace.listDirectory('').some(entry => entry.name === 'wump'), 'share reset removes built binary');
+    await selectTree('snake');
+    check(!app.workspace.listDirectory('').some(entry => entry.name === 'snake'), 'share reset removes built binary');
     await selectTree('');
     check(app.workspace.listDirectory('').length === 0, 'share clear');
     await until(() => files.children.length === 0, 'share clear updates tree');
@@ -387,7 +372,7 @@ try {
     try { retired.listDirectory(''); } catch { invalid = true; }
     check(invalid, 'destroy invalidates share');
     await click('prepare');
-    await selectTree('arithmetic');
+    await selectTree('robots');
     await until(() => hasFile('Makefile'), 'replacement VM has a tree subscription');
     await click('boot');
     await command('echo RECREATED', 'RECREATED');

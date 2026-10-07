@@ -4,6 +4,9 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Trim demo examples to Adventure, ATC, Robots, Snake, and Spirhunt. Load
+    Robots by default and remove Hangman's dictionary package and image data.
+
 *   Split the demo image into 256 KiB chunks and prefetch into the browser cache
     with two concurrent transfers.
     Start with the terminal unfocused, pause new prefetch requests during terminal

@@ -1,5 +1,5 @@
 # Optional convenience targets; every game also builds independently.
-GAMES = adventure arithmetic atc battlestar caesar cribbage dab drop4 gofish gomoku hangman klondike robots sail snake spirhunt worm wump
+GAMES = adventure atc robots snake spirhunt
 
 .PHONY: all clean $(GAMES)
 all: $(GAMES)

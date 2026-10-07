@@ -73,4 +73,4 @@ fakeroot sh -eu -c '
     mkfs.ext4 -q -F -m 0 -d "$2" "$3"
 ' sh "$output/rootfs.tar" "$stage" "$(pwd)/build/rootfs.ext4.part"
 mv build/rootfs.ext4.part build/rootfs.ext4
-echo 'Prepared 80 MiB writable Alpine ext4 image; TinyCC built all 18 vendored BSD games.'
+echo 'Prepared 80 MiB writable Alpine ext4 image; TinyCC built all five vendored BSD games.'

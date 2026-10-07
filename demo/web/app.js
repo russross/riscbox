@@ -361,8 +361,8 @@ try {
     if (!examples.ok) throw new Error(`Examples HTTP ${examples.status}`);
     trees = await examples.json();
     element("source-tree").replaceChildren(new Option("<clear>", ""), ...trees.map(tree => new Option(tree.id, tree.id)));
-    element("source-tree").value = "arithmetic";
-    await action("prepare VM; load arithmetic; boot", async () => { await prepare(); await runtime.boot(); });
+    element("source-tree").value = "robots";
+    await action("prepare VM; load robots; boot", async () => { await prepare(); await runtime.boot(); });
 } catch (error) { reportError(error); }
 
 export { runtime, workspace, terminal, editor, queueInput };

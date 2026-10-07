@@ -12,19 +12,12 @@ trap 'echo "guest preparation failed" > /mnt/output/failed; poweroff -f' EXIT
 ip link set eth0 up
 udhcpc -q -n -i eth0
 apk add --no-cache tcc tcc-libs-static musl-dev make doas \
-    ncurses-dev ncurses-terminfo-base cracklib-words
-
-# Hangman reads plain text; retain the package's dictionary and license metadata.
-mkdir -p /usr/share/dict
-gzip -dc /usr/share/cracklib/cracklib-words.gz > /usr/share/dict/words
+    ncurses-dev ncurses-terminfo-base
 
 # The image contains tools, while independently loaded source trees stay on 9p.
 cp -R /mnt/source/bsd-games-3.3 /tmp/examples
 make -C /tmp/examples clean
 make -C /tmp/examples
-printf 'Hello\n' | /tmp/examples/caesar/caesar 13 | grep -q 'Uryyb'
-printf 'q\n' | /tmp/examples/wump/wump | grep -q 'Wumpus'
-/tmp/examples/arithmetic/arithmetic </dev/null | grep -q ' = '
 
 addgroup -g 1000 riscbox
 adduser -D -u 1000 -G riscbox -h /home/riscbox riscbox

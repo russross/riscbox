@@ -1,9 +1,8 @@
 # BSD-GAMES
 
-This is the bsd-games package for Linux, containing classic text mode
-games from UNIX folklore. `wump`, developed in 1973, `trek` from
-1976 (called `spirhunt` in this version), and `adventure` from 1977,
-are the oldest.
+This is a selection of five BSD-GAMES 3.3 games for Linux, containing
+classic games from UNIX folklore. Adventure retains its plain-text interface;
+ATC, Robots, Snake, and Spirhunt use ncurses terminal interfaces.
 
 ## Standalone demos
 
@@ -19,8 +18,6 @@ make
 Build requirements are TinyCC, GNU Make, libc development headers, and
 ncurses development headers/libraries. Terminal data must cover your `TERM`.
 On Alpine Linux, install `tcc tcc-libs-static make musl-dev ncurses-dev ncurses-terminfo-base`.
-Hangman also needs a text dictionary; use `-d /path/to/words` when it is not
-available at `/usr/share/dict/words`.
 
 Scores and saved games are created in the current working directory, so run
 each binary from its own demo directory. `make clean` keeps scores and saves.
@@ -48,23 +45,10 @@ If you find bugs, report them on the SourceForge
 This package contains the following games:
 
 * adventure:	the original adventure by Crowther and Woods
-* arithmetic:	asks you to do simple calculations
 * atc:		air traffic control simulator
-* battlestar:	a tropical adventure
-* caesar:	performs rotated-alphabet cryptography (like rot13)
-* cribbage:	cribbage card game
-* dab:		dots and boxes
-* drop4:	tetromino packing game
-* gofish:	go fish card game
-* gomoku:	connect-5 version of tic-tac-toe
-* hangman:	guess the word before it is too late
-* klondike:	curses-based solitaire
 * robots:	avoid the evil robots
-* sail:		sail your ship into battle
 * snake:	grab the cash, avoid the snake, and exit
 * spirhunt:	hunt space pirates
-* worm:		eat the numbers without running into anything
-* wump:		hunt the wumpus
 
 ## Excluded
 

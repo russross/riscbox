@@ -4,6 +4,13 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Split GitHub automation into Release and Demo workflows. Every main push
+    checks the current version tag first; untagged versions pass core checks
+    and packaging before tag creation and publication. Failed builds retry on
+    a later push. Publication calls Demo, which also runs manually against the
+    published workspace version. Check deployment freshness and serialize
+    automatic and manual Pages deployments together.
+
 2026.10.5 — 2026-10-05
 ----------------------
 

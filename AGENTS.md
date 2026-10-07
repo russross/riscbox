@@ -48,18 +48,19 @@ Repository map and terminology
     unsafe ABI code isolated there. Main-crate unsafe code is confined to the
     TinyEMU FFI module.
 *   The workspace version in root `Cargo.toml` is inherited by both Rust
-    crates. A push to `main` that increases it builds and publishes one GitHub
+    crates. Every push to `main` runs Release, which stops if the current version
+    tag exists. Otherwise it checks and builds the core before creating the tag
+    and publishing one GitHub
     release archive with the WASM runtime, browser modules, canonical Linux
     Image, OpenSBI firmware, U-Boot binary, and API documentation. The release
     archive excludes guest images and image build scripts.
-    The same workflow builds and Chrome-tests the demo against that archive
-    before publication, then deploys it to GitHub Pages. Manual `test` runs on
-    any branch upload runtime/demo artifacts with no publication; manual
-    `publish` requires main and verifies existing tags before reusing a release
-    archive to retry demo deployment. Manual `demo` runs require main, select
-    the latest published release or an explicit `demo_release_tag`, and rebuild
-    and Chrome-test the current demo sources using that unchanged archive.
-    They skip core builds and release publication, then deploy Pages on success.
+    Failed checks leave the version untagged for the next main push to retry.
+    Publication calls the separate reusable Demo workflow, which also accepts
+    manual runs on main. Demo requires the published release matching its
+    checked-out workspace version, then builds and Chrome-tests the demo against
+    that unchanged archive before deploying Pages. Release and Demo have
+    separate serialized queues. Deployment skips superseded runtime versions;
+    manual Demo runs also check that their source commit remains current.
     Pages uses the GitHub Actions source and
     the `github-pages` environment. Builds have read-only repository access;
     separate publication and deployment jobs receive their write permissions.
@@ -89,7 +90,7 @@ Repository map and terminology
     only packaged runtime, boot payloads, and splitter assets. Historical image
     projects and the shared application client live outside this repository.
     Assembly links to GitHub-rendered guides and example provenance at the
-    archive version tag; local and manual test builds use their source commit.
+    archive version tag; local source builds use their source commit.
 *   Root `package.json` owns the pinned build-only TypeScript compiler.
     Core tests own their Chrome harness and require no mounted client source.
 *   `kernel/` owns the canonical custom Linux kernel consumed by image builds.
@@ -382,8 +383,8 @@ Validation
     named contents and documentation links, excludes development artifacts, and
     instantiates its packaged WASM through its packaged client adapter. Typed
     example consumers compile against deployable declarations in `js-check`.
-    GitHub runs these checks for releases and manual tests; ordinary push/PR
-    checks are not automatic.
+    GitHub runs these checks for untagged releases; tagged main pushes skip
+    checks and ordinary PR checks are not automatic.
 *   `make test-demo` builds the optional release-only example and checks real
     Chrome/WASM boot, TinyCC games, explicit host/guest file transfers, lifecycle
     controls, image/share reset, and destroyed facade invalidation. Browser tests

@@ -5,213 +5,139 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 
-// Stub remote and revision discovery while exercising the actual release decisions.
-function plan(overrides = {}) {
-    const directory = mkdtempSync(join(tmpdir(), "riscbox-release-plan-"));
+// Run the real scripts with isolated manifests and observable remote commands.
+function runScript(script, overrides = {}, metadata = {}) {
+    const directory = mkdtempSync(join(tmpdir(), "riscbox-release-"));
     const output = join(directory, "outputs");
     const calls = join(directory, "calls");
+    const release = { tagName: "v2026.9.31", isDraft: false,
+        assets: [{ name: "riscbox-2026.9.31.tar.gz" }], ...metadata };
     const commands = {
         cargo: 'printf \'{"packages":[{"name":"riscbox","version":"%s"},{"name":"riscbox-wasm","version":"%s"}]}\\n\' "$CURRENT" "$WASM_VERSION"',
-        git: `
-            echo "$*" >> "$CALLS"
-            if [ "$1" = show ]; then
-                printf '[workspace.package]\\nversion = "%s"\\n' "$PREVIOUS"
-            elif [ "$TAGGED_SHA" != absent ]; then
-                echo "$TAGGED_SHA"
-            else
-                exit 1
-            fi`,
-        gh: 'echo "$*" >> "$CALLS"; test "$API_FAILURE" = false || exit 1; printf "%s\\n" "$RELEASE_TAGS"',
+        git: `echo "$*" >> "$CALLS"
+            if [ "$1" = show-ref ]; then test "$TAG_EXISTS" = true
+            elif [ "$1" = ls-remote ]; then test "$REMOTE_TAG" = true
+            else echo 'unexpected git operation' >&2; exit 1; fi`,
+        gh: `echo "$*" >> "$CALLS"
+            test "$API_FAILURE" = false || exit 1
+            if [ "$1 $2" = 'release view' ]; then cat "$METADATA"
+            elif [ "$1 $2" = 'release download' ]; then
+                test "$DOWNLOAD_FAILURE" = false || exit 1
+                printf 'posted bytes' > build/releases/riscbox-2026.9.31.tar.gz
+            elif [ "$1" = api ]; then
+                case "$2" in
+                    */contents/*) printf '[workspace.package]\\nversion = "%s"\\n' "$MAIN_VERSION" | base64 ;;
+                    */commits/main) echo "$MAIN_SHA" ;;
+                    *) exit 1 ;;
+                esac
+            else echo 'unexpected GitHub operation' >&2; exit 1; fi`,
     };
     try {
         for (const [name, body] of Object.entries(commands)) {
             writeFileSync(join(directory, name), `#!/bin/sh\nset -eu\n${body}\n`, { mode: 0o755 });
         }
+        writeFileSync(join(directory, "Cargo.toml"), '[workspace.package]\nversion = "2026.9.31"\n');
+        writeFileSync(join(directory, "metadata"), JSON.stringify(release));
         writeFileSync(output, "");
         writeFileSync(calls, "");
-        const result = spawnSync(resolve(".github/scripts/release-plan.sh"), [], {
-            encoding: "utf8",
-            env: {
-                ...process.env,
-                PATH: `${directory}:${process.env.PATH}`,
-                GITHUB_OUTPUT: output, CALLS: calls,
-                EVENT_NAME: "workflow_dispatch", RELEASE_MODE: "test",
-                GITHUB_REF: "refs/heads/experiment", GITHUB_SHA: "selected",
-                GITHUB_REPOSITORY: "russross/riscbox", BEFORE_SHA: "previous",
-                CURRENT: "2026.9.31", WASM_VERSION: "2026.9.31", PREVIOUS: "2026.9.30",
-                TAGGED_SHA: "absent", RELEASE_TAGS: "", API_FAILURE: "false",
-                ...overrides,
-            },
+        const result = spawnSync(resolve(`.github/scripts/${script}.sh`), [], {
+            cwd: directory, encoding: "utf8",
+            env: { ...process.env, PATH: `${directory}:${process.env.PATH}`,
+                GITHUB_OUTPUT: output, CALLS: calls, METADATA: join(directory, "metadata"),
+                GITHUB_REF: "refs/heads/main", GITHUB_SHA: "selected",
+                GITHUB_EVENT_NAME: "push", GITHUB_REPOSITORY: "russross/riscbox",
+                CURRENT: "2026.9.31", WASM_VERSION: "2026.9.31", TAG_EXISTS: "false",
+                REMOTE_TAG: "true", API_FAILURE: "false", DOWNLOAD_FAILURE: "false",
+                BUILT_VERSION: "2026.9.31", MAIN_VERSION: "2026.9.31", MAIN_SHA: "selected",
+                ...overrides },
         });
-        return {
-            status: result.status, stderr: result.stderr,
-            outputs: Object.fromEntries(readFileSync(output, "utf8").trim().split("\n").filter(Boolean).map(line => line.split("="))),
+        const outputs = Object.fromEntries(readFileSync(output, "utf8").trim().split("\n").filter(Boolean).map(line => line.split("=")));
+        return { status: result.status, stderr: result.stderr, outputs,
             calls: readFileSync(calls, "utf8"),
-        };
+            archive: outputs.archive ? readFileSync(join(directory, outputs.archive), "utf8") : undefined };
     } finally {
         rmSync(directory, { recursive: true, force: true });
     }
 }
 
-// Test builds remain independent of existing releases, even on another branch.
-test("manual test builds a tagged version on another branch without publication", () => {
-    const result = plan({ TAGGED_SHA: "other", RELEASE_TAGS: "v2026.9.31" });
+// Tag existence gates all builds; no prior push revision or release API is needed.
+test("a tagged version stops even when its tag names an older commit", () => {
+    const result = runScript("release-plan", { TAG_EXISTS: "true" });
     assert.equal(result.status, 0, result.stderr);
-    assert.equal(result.outputs.build, "true");
-    assert.equal(result.outputs.publish, "false");
-    assert.equal(result.calls, "");
+    assert.deepEqual(result.outputs, { build: "false" });
+    assert.equal(result.calls, "show-ref --verify --quiet refs/tags/v2026.9.31\n");
 });
 
-test("unchanged push skips builds and remote discovery", () => {
-    const result = plan({ EVENT_NAME: "push", GITHUB_REF: "refs/heads/main", PREVIOUS: "2026.9.31" });
+test("an untagged version builds, including a corrected push at the same version", () => {
+    const result = runScript("release-plan");
     assert.equal(result.status, 0, result.stderr);
-    assert.equal(result.outputs.build, "false");
-    assert.equal(result.outputs.publish, undefined);
-    assert.doesNotMatch(result.calls, /api /);
+    assert.deepEqual(result.outputs, { build: "true", version: "2026.9.31", tag: "v2026.9.31" });
+    assert.doesNotMatch(result.calls, /api|show /);
 });
 
-test("increasing version on main publishes a new release", () => {
-    const result = plan({ EVENT_NAME: "push", GITHUB_REF: "refs/heads/main" });
-    assert.equal(result.status, 0, result.stderr);
-    assert.equal(result.outputs.publish, "true");
-    assert.equal(result.outputs.tag, "v2026.9.31");
-    assert.equal(result.outputs.release_exists, "false");
-});
-
-test("decreasing version fails before remote discovery", () => {
-    const result = plan({ EVENT_NAME: "push", GITHUB_REF: "refs/heads/main", PREVIOUS: "2026.10.1" });
-    assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /must increase/);
-    assert.doesNotMatch(result.calls, /api /);
-});
-
-// Retries preserve published bytes, and conflicting tags never replace releases.
-test("manual publish retries an existing release at the selected commit", () => {
-    const result = plan({ RELEASE_MODE: "publish", GITHUB_REF: "refs/heads/main", TAGGED_SHA: "selected", RELEASE_TAGS: "v2026.9.30\nv2026.9.31" });
-    assert.equal(result.status, 0, result.stderr);
-    assert.equal(result.outputs.build, "true");
-    assert.equal(result.outputs.publish, "true");
-    assert.equal(result.outputs.tag_exists, "true");
-    assert.equal(result.outputs.release_exists, "true");
-});
-
-test("manual publish can complete a tag with no release", () => {
-    const result = plan({ RELEASE_MODE: "publish", GITHUB_REF: "refs/heads/main", TAGGED_SHA: "selected" });
-    assert.equal(result.status, 0, result.stderr);
-    assert.equal(result.outputs.tag_exists, "true");
-    assert.equal(result.outputs.release_exists, "false");
-});
-
-test("manual publish rejects another branch", () => {
-    const result = plan({ RELEASE_MODE: "publish" });
-    assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /Publishing requires main/);
-});
-
-test("manual publish rejects an existing tag on another commit", () => {
-    const result = plan({ RELEASE_MODE: "publish", GITHUB_REF: "refs/heads/main", TAGGED_SHA: "other" });
-    assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /points to another commit/);
-});
-
-test("remote API failure does not masquerade as an unpublished release", () => {
-    const result = plan({ RELEASE_MODE: "publish", GITHUB_REF: "refs/heads/main", API_FAILURE: "true" });
-    assert.notEqual(result.status, 0);
-    assert.equal(result.outputs.publish, undefined);
-});
-
-test("mismatched crate versions fail in test mode", () => {
-    const result = plan({ WASM_VERSION: "2026.9.30" });
-    assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /versions differ/);
-});
-
-// Demo selection owns a read-only release lookup and a pinned archive download, without Cargo or tags.
-function demoArchive(overrides = {}, metadata = {}) {
-    const directory = mkdtempSync(join(tmpdir(), "riscbox-demo-release-"));
-    const output = join(directory, "outputs");
-    const calls = join(directory, "calls");
-    const release = { tagName: "v2026.9.31", isDraft: false,
-        assets: [{ name: "riscbox-2026.9.31.tar.gz" }], ...metadata };
-    try {
-        writeFileSync(join(directory, "gh"), `#!/bin/sh
-set -eu
-echo "$*" >> "$CALLS"
-test "$API_FAILURE" = false || exit 1
-if [ "$1 $2" = 'release view' ]; then
-    cat "$METADATA"
-elif [ "$1 $2" = 'release download' ]; then
-    test "$DOWNLOAD_FAILURE" = false || exit 1
-    printf 'posted bytes' > build/releases/riscbox-2026.9.31.tar.gz
-else
-    echo 'unexpected GitHub operation' >&2; exit 1
-fi
-`, { mode: 0o755 });
-        writeFileSync(join(directory, "metadata"), JSON.stringify(release));
-        writeFileSync(output, "");
-        writeFileSync(calls, "");
-        const result = spawnSync(resolve(".github/scripts/demo-release.sh"), [], {
-            cwd: directory, encoding: "utf8",
-            env: { ...process.env, PATH: `${directory}:${process.env.PATH}`,
-                GITHUB_REF: "refs/heads/main", GITHUB_REPOSITORY: "russross/riscbox",
-                GITHUB_OUTPUT: output, CALLS: calls, METADATA: join(directory, "metadata"),
-                API_FAILURE: "false", DOWNLOAD_FAILURE: "false", DEMO_RELEASE_TAG: "", ...overrides },
-        });
-        const outputs = Object.fromEntries(readFileSync(output, "utf8").trim().split("\n").filter(Boolean).map(line => line.split("=")));
-        return { status: result.status, stderr: result.stderr, outputs,
-            calls: readFileSync(calls, "utf8"),
-            archive: result.status === 0 ? readFileSync(join(directory, outputs.archive), "utf8") : undefined };
-    } finally { rmSync(directory, { recursive: true, force: true }); }
-}
-
-test("demo defaults to the latest posted release and pins its archive download", () => {
-    const result = demoArchive();
-    assert.equal(result.status, 0, result.stderr);
-    assert.equal(result.outputs.tag, "v2026.9.31");
-    assert.equal(result.outputs.archive, "build/releases/riscbox-2026.9.31.tar.gz");
-    assert.equal(result.archive, "posted bytes");
-    assert.match(result.calls, /^release view --repo russross\/riscbox --json tagName,isDraft,assets\n/);
-    assert.match(result.calls, /release download v2026\.9\.31 --repo russross\/riscbox --pattern riscbox-2026\.9\.31\.tar\.gz/);
-});
-
-test("demo can select an explicit published release independently of the source version", () => {
-    const result = demoArchive({ DEMO_RELEASE_TAG: "v2026.9.31" });
-    assert.equal(result.status, 0, result.stderr);
-    assert.match(result.calls, /release view .* -- v2026\.9\.31\n/);
-    assert.equal(result.outputs.tag, "v2026.9.31");
-});
-
-test("demo deployment rejects another branch before release lookup", () => {
-    const result = demoArchive({ GITHUB_REF: "refs/heads/experiment" });
-    assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /requires main/);
-    assert.equal(result.calls, "");
-});
-
-test("demo rejects draft releases and missing or mismatched runtime archives", () => {
-    for (const metadata of [{ isDraft: true }, { assets: [] },
-        { assets: [{ name: "riscbox-2026.9.30.tar.gz" }] }]) {
-        const result = demoArchive({}, metadata);
+test("release planning rejects another branch and mismatched crate versions", () => {
+    for (const overrides of [{ GITHUB_REF: "refs/heads/experiment" }, { WASM_VERSION: "2026.9.30" }]) {
+        const result = runScript("release-plan", overrides);
         assert.notEqual(result.status, 0);
-        assert.equal(result.outputs.archive, undefined);
+        assert.deepEqual(result.outputs, {});
+        assert.equal(result.calls, "");
+    }
+});
+
+// Demo builds pin the source version rather than selecting a changing latest release.
+test("demo downloads the published workspace version", () => {
+    const result = runScript("demo-release");
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.outputs.version, "2026.9.31");
+    assert.equal(result.outputs.tag, "v2026.9.31");
+    assert.equal(result.archive, "posted bytes");
+    assert.match(result.calls, /ls-remote --exit-code --tags origin refs\/tags\/v2026.9.31/);
+    assert.match(result.calls, /release view .* -- v2026.9.31/);
+    assert.match(result.calls, /release download v2026.9.31 .* --pattern riscbox-2026.9.31.tar.gz/);
+});
+
+test("demo rejects drafts, different versions, and missing archives before download", () => {
+    for (const metadata of [{ isDraft: true }, { tagName: "v2026.9.30" }, { assets: [] },
+        { assets: [{ name: "riscbox-2026.9.30.tar.gz" }] }]) {
+        const result = runScript("demo-release", {}, metadata);
+        assert.notEqual(result.status, 0);
+        assert.deepEqual(result.outputs, {});
         assert.doesNotMatch(result.calls, /release download/);
     }
 });
 
-test("demo reports remote lookup or download failures without deployment outputs", () => {
-    for (const failure of [{ API_FAILURE: "true" }, { DOWNLOAD_FAILURE: "true" }]) {
-        const result = demoArchive(failure);
+test("demo rejects another branch, missing tags, and remote failures", () => {
+    for (const overrides of [{ GITHUB_REF: "refs/heads/experiment" }, { REMOTE_TAG: "false" },
+        { API_FAILURE: "true" }, { DOWNLOAD_FAILURE: "true" }]) {
+        const result = runScript("demo-release", overrides);
         assert.notEqual(result.status, 0);
-        assert.equal(result.outputs.archive, undefined);
-        if (failure.API_FAILURE) assert.doesNotMatch(result.calls, /release download/);
-        else assert.match(result.calls, /release download/);
+        assert.deepEqual(result.outputs, {});
     }
 });
 
-test("demo rejects unsafe release tags before writing workflow outputs", () => {
-    const result = demoArchive({}, { tagName: "v2026.9.31\narchive=other" });
+// Freshness gates publication after a queued build finishes, for either entry point.
+test("demo freshness accepts the current runtime for automatic and manual runs", () => {
+    for (const event of ["push", "workflow_dispatch"]) {
+        const result = runScript("demo-freshness", { GITHUB_EVENT_NAME: event });
+        assert.equal(result.status, 0, result.stderr);
+        assert.equal(result.outputs.current, "true");
+    }
+});
+
+test("demo freshness rejects a superseded runtime version", () => {
+    const result = runScript("demo-freshness", { MAIN_VERSION: "2026.10.1" });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.outputs.current, "false");
+});
+
+test("manual demo freshness rejects superseded sources at the same version", () => {
+    const result = runScript("demo-freshness", { GITHUB_EVENT_NAME: "workflow_dispatch", MAIN_SHA: "newer" });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.outputs.current, "false");
+});
+
+test("freshness API failure supplies no deployment decision", () => {
+    const result = runScript("demo-freshness", { API_FAILURE: "true" });
     assert.notEqual(result.status, 0);
-    assert.match(result.stderr, /Unsupported release tag/);
     assert.deepEqual(result.outputs, {});
-    assert.doesNotMatch(result.calls, /release download/);
 });

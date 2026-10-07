@@ -2,14 +2,14 @@ Release-based demo
 ==================
 
 The [published demo](https://russross.github.io/riscbox/) updates after successful
-releases or manual **demo** runs. The Release workflow builds this directory
-against the release archive and runs Chrome acceptance before publishing. Manual test runs provide a
-downloadable `riscbox-demo.tar.gz` without replacing the public site; see
+releases or manual **Demo** runs. The separate Demo workflow builds this directory
+against the published workspace version and runs Chrome acceptance before
+Pages deployment. Successful builds provide `riscbox-demo.tar.gz`; see
 [release automation](../BUILDING.md#release-automation).
 
-To redeploy demo changes without releasing the core, open **Actions → Release →
-Run workflow**, select **main**, and choose **demo**. The runtime comes from the
-latest published release, or the optional **demo_release_tag**. The workflow
+To redeploy demo changes without releasing the core, open **Actions → Demo →
+Run workflow** and select **main**. The workspace version must already have a
+published release, which supplies the unchanged runtime archive. The workflow
 rebuilds the demo image and app and checks them in Chrome before deployment.
 
     make
@@ -32,7 +32,7 @@ payloads. Assembly invokes its packaged `splitimg.py`. No application code or
 image helper reads the repository's runtime source or internal ABI.
 
 Assembly links guides and example provenance to GitHub at the archive
-version tag. Local source builds and manual workflow tests use their source
+version tag. Local source builds use their source
 commit instead. Override the revision with `DOCUMENTATION_REF=TAG_OR_COMMIT`
 when building against an unpublished archive. The copied release under
 `dist/riscbox/` remains unchanged.

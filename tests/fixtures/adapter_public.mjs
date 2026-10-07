@@ -124,6 +124,7 @@ export async function publicAdapterRegression(Adapter, wasm, firmware) {
     await rejects(() => client.requestReboot(), "soft reboot requires running VM");
 
     // Public execution is automatic; calls reject invalid states and scalar truncation.
+    check(Object.values(client.speed()).every(value => value === 0), "speed is zero before boot");
     await client.boot();
     check(client.state === "running" && client.started, "boot updates state before return");
     await rejects(() => client.boot(), "boot cannot silently reset running VM");
@@ -143,7 +144,21 @@ export async function publicAdapterRegression(Adapter, wasm, firmware) {
     check(client.consoleResize(80, 25) === 0, "terminal dimensions");
     check(client.keyEvent(true, 30) === 0 && client.pointerEvent(10, 20, 1) === 0, "input devices");
     check(client.wheelEvent(-1) === 0, "wheel input");
+    // Real WASM execution supplies samples even with diagnostics disabled.
+    for (let attempt = 0; attempt < 100 && client.speed().cyclingSeconds === 0; attempt++) {
+        await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    const speed = client.speed();
+    check(speed.cyclingSeconds > 0 && speed.uptimeSeconds >= speed.cyclingSeconds, "boot uptimes advance");
+    check(speed.mcycles1s > 0 && speed.mcycles5s > 0 && speed.mcycles15s > 0, "active speed windows");
     await client.reset();
+    check(client.speed().cyclingSeconds === 0 && client.speed().mcycles15s === 0, "reset clears speed");
+    await client.halt();
+    const haltedSpeed = JSON.stringify(client.speed());
+    await new Promise(resolve => setTimeout(resolve, 20));
+    check(JSON.stringify(client.speed()) === haltedSpeed, "halt freezes all five figures");
+    await client.boot();
+    check(client.speed().cyclingSeconds === 0 && client.speed().mcycles1s === 0, "boot clears speed");
     await client.halt();
     await client.coldReset();
     check(client.state === "halted" && share.readFile("file").length > 0, "cold reset retains share");
@@ -152,6 +167,7 @@ export async function publicAdapterRegression(Adapter, wasm, firmware) {
     check(client.state === "destroyed" && !client.started && destroyedState === "destroyed", "destroy is terminal before notification");
     await rejects(() => client.boot(), "destroyed VM cannot boot");
     await rejects(() => client.destroy(), "destroyed VM cannot destroy twice");
+    await rejects(() => client.speed(), "destroyed VM cannot report speed");
     await rejects(() => client.networkCarrier(true), "destroyed VM carrier");
     await rejects(() => client.networkInput(Uint8Array.of(1)), "destroyed VM ingress");
     await rejects(() => share.listFiles(), "destroyed share");

@@ -221,7 +221,8 @@
                 typeof exports.riscbox_quantum_run !== "function" ||
                 typeof exports.riscbox_quantum_finish !== "function" ||
                 typeof exports.riscbox_quantum_abort !== "function" ||
-                typeof exports.riscbox_timing_stat !== "function")
+                typeof exports.riscbox_timing_stat !== "function" ||
+                typeof exports.riscbox_speed_stat !== "function")
                 throw new TypeError("Riscbox WASM has an incompatible run interface");
             const targetQuantumMs = options.targetQuantumMs ?? 20;
             if (!Number.isFinite(targetQuantumMs) || targetQuantumMs <= 0 || targetQuantumMs > 100)
@@ -248,6 +249,9 @@
             this.wakeupChannel = null;
             this.started = false;
             this.state = "empty";
+            this.bootStartedAt = null;
+            this.haltedAt = null;
+            this.pendingHaltNotification = null;
             this.consoleDecoder = new TextDecoder();
             this.pendingControls = [];
             this.disks = new Map();
@@ -589,8 +593,19 @@
             } finally {
                 if (!completed)
                     this.exports.riscbox_quantum_abort();
-                this.quantumRunning = false;
-                for (const control of this.pendingControls.splice(0)) control();
+                // Publish guest halt only after the final quantum sample has
+                // reached Rust, so callbacks can read the frozen statistics.
+                const haltCause = this.pendingHaltNotification;
+                this.pendingHaltNotification = null;
+                try {
+                    if (haltCause !== null) {
+                        this.haltedAt = performance.now();
+                        this.options.onVmHalted?.(haltCause);
+                    }
+                } finally {
+                    this.quantumRunning = false;
+                    for (const control of this.pendingControls.splice(0)) control();
+                }
             }
             if (wfiSleep && this.timing)
                 this.wfiStartedAt = performance.now();
@@ -668,6 +683,8 @@
                         this.options.onError?.(error);
                     });
                 } else if (kind === 2) {
+                    this.bootStartedAt = performance.now();
+                    this.haltedAt = null;
                     this.started = true;
                     this.state = "running";
                     this.options.onVmStarted?.();
@@ -691,6 +708,7 @@
                         { x, y, width, height, stride },
                     );
                 } else if (kind === 10) {
+                    this.haltedAt = performance.now();
                     this.httpGeneration++;
                     const cause = LIFECYCLE_CAUSES[value];
                     if (cause === undefined)
@@ -700,8 +718,11 @@
                     this.cancelWakeup();
                     const tail = this.consoleDecoder.decode();
                     if (tail) this.options.consoleWrite?.(tail);
-                    this.options.onVmHalted?.(cause);
+                    if (this.quantumRunning) this.pendingHaltNotification = cause;
+                    else this.options.onVmHalted?.(cause);
                 } else if (kind === 11) {
+                    this.bootStartedAt = performance.now();
+                    this.haltedAt = null;
                     this.httpGeneration++;
                     const cause = LIFECYCLE_CAUSES[value];
                     if (cause === undefined)
@@ -896,6 +917,21 @@
         }
         get state() { return this.#runtime.state; }
         get started() { return this.#runtime.started; }
+
+        // Completed quanta supply rates and cycling time; the monotonic host
+        // clock supplies uptime, frozen at the most recent halt notification.
+        speed() {
+            this.#requireState("speed", ["halted", "running"]);
+            const runtime = this.#runtime;
+            const now = runtime.haltedAt ?? performance.now();
+            return {
+                mcycles1s: runtime.exports.riscbox_speed_stat(0),
+                mcycles5s: runtime.exports.riscbox_speed_stat(1),
+                mcycles15s: runtime.exports.riscbox_speed_stat(2),
+                uptimeSeconds: runtime.bootStartedAt === null ? 0 : (now - runtime.bootStartedAt) / 1_000,
+                cyclingSeconds: runtime.exports.riscbox_speed_stat(3),
+            };
+        }
 
         // Controls check state again when queued execution reaches the WASM boundary.
         boot() { return this.#runtime.control("reset", ["halted"]); }

@@ -15,6 +15,7 @@ export async function embed(wasmUrl: string, config: VmConfig): Promise<Riscbox>
     share.writeFile("hello.c", "int main(void) { return 0; }\n", 1n);
     const unsubscribe = share.subscribe(change => console.log(change.path, change.origin));
     await runtime.boot();
+    console.log(runtime.speed().mcycles5s, runtime.speed().cyclingSeconds);
     unsubscribe();
     return runtime;
 }

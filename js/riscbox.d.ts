@@ -83,6 +83,14 @@ export type VmState = "halted" | "running" | "destroyed";
 export type HaltCause = "guest-poweroff" | "host-halt" | "guest-failure";
 export type ResetCause = "guest-reboot" | "host-reset" | "host-boot";
 
+export interface Speed {
+    readonly mcycles1s: number;
+    readonly mcycles5s: number;
+    readonly mcycles15s: number;
+    readonly uptimeSeconds: number;
+    readonly cyclingSeconds: number;
+}
+
 // The client boundary exposes owned storage and automatic VM execution.
 export declare class Riscbox {
     private constructor();
@@ -90,6 +98,7 @@ export declare class Riscbox {
     static readonly BlockError: typeof BlockError;
     readonly state: VmState;
     readonly started: boolean;
+    speed(): Speed;
     static prepare(options: PreparationOptions): Promise<Riscbox>;
     filesystem(name: string): Filesystem;
     block(index: number): BlockDisk;

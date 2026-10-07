@@ -30,6 +30,7 @@ function fakeModule() {
         riscbox_quantum_finish() { return 0; },
         riscbox_quantum_abort() {},
         riscbox_timing_stat() { return 0; },
+        riscbox_speed_stat() { return 0; },
         riscbox_action_value() { return 0; },
         riscbox_action_data_address() { return 0; },
         riscbox_action_data_length() { return 0; },
@@ -104,6 +105,27 @@ test("lifecycle controls forward to WASM and report guest and host causes", asyn
         ["halted", "guest-poweroff"], ["terminal reset"], ["screen clear"],
         ["reset", "host-reset"],
     ]);
+});
+
+test("guest halt notification can read the final completed quantum statistics", async () => {
+    const fake = fakeModule();
+    let actionPending = true;
+    let finished = false;
+    fake.exports.riscbox_next_action = () => {
+        if (!actionPending) return 0;
+        actionPending = false;
+        return 10;
+    };
+    fake.exports.riscbox_quantum_finish = () => { finished = true; return 0; };
+    const runtime = new Riscbox(fake.exports, {
+        onVmHalted(cause) {
+            assert.equal(cause, "guest-poweroff");
+            assert.equal(finished, true);
+            assert.equal(runtime.state, "halted");
+        },
+    });
+    await runtime.runQuantum();
+    assert.equal(runtime.pendingHaltNotification, null);
 });
 
 test("halt retires late HTTP completions and failures before the next boot", async () => {

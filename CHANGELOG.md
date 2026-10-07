@@ -4,6 +4,10 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Add `speed()` with 1/5/15-second active-time Mcycles/s averages and clock
+    and cycling uptime in seconds. Rust retains whole quantum samples with
+    rolling totals. Measurements reset on every boot and freeze at halt.
+
 *   Wait for fresh shell output after demo game exits so Chrome acceptance
     cannot send the next command to a game still shutting down. Disable uv's
     dependency cache in Release and Demo because standalone scripts have no

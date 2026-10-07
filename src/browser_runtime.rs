@@ -162,6 +162,70 @@ impl RateEstimate {
     }
 }
 
+#[derive(Clone, Copy, Default)]
+struct SpeedSample {
+    cycles: u64,
+    elapsed_ms: f64,
+}
+
+#[derive(Default)]
+struct SpeedHistory {
+    samples: VecDeque<SpeedSample>,
+    starts: [usize; 3],
+    totals: [SpeedSample; 3],
+    cycling_ms: f64,
+}
+
+impl SpeedHistory {
+    fn observe(&mut self, cycles: u64, elapsed_ms: f64) {
+        if elapsed_ms <= 0.0 {
+            return;
+        }
+        self.cycling_ms += elapsed_ms;
+        self.samples.push_back(SpeedSample { cycles, elapsed_ms });
+
+        // Each window retains the entire oldest quantum needed to cover its
+        // duration. Short histories use all available completed quanta.
+        for (index, duration) in [1_000.0, 5_000.0, 15_000.0].into_iter().enumerate() {
+            let total = &mut self.totals[index];
+            total.cycles += cycles;
+            total.elapsed_ms += elapsed_ms;
+            while self.starts[index] + 1 < self.samples.len() {
+                let oldest = self.samples[self.starts[index]];
+                if total.elapsed_ms - oldest.elapsed_ms < duration {
+                    break;
+                }
+                total.cycles -= oldest.cycles;
+                total.elapsed_ms -= oldest.elapsed_ms;
+                self.starts[index] += 1;
+            }
+        }
+
+        // The longest window owns retention; shorter windows only move their
+        // cursors. Every sample enters and leaves each total once.
+        let expired = self.starts[2];
+        self.samples.drain(..expired);
+        for start in &mut self.starts {
+            *start -= expired;
+        }
+    }
+
+    fn stat(&self, kind: u32) -> f64 {
+        match kind {
+            0..=2 => {
+                let total = self.totals[usize::try_from(kind).expect("window index fits")];
+                if total.elapsed_ms > 0.0 {
+                    integer_as_f64(total.cycles) / total.elapsed_ms / 1_000.0
+                } else {
+                    0.0
+                }
+            }
+            3 => self.cycling_ms / 1_000.0,
+            _ => 0.0,
+        }
+    }
+}
+
 #[derive(Debug)]
 struct AdaptiveSkew {
     weights: [f64; SKEW_BUCKETS],
@@ -447,6 +511,9 @@ pub struct BrowserRuntime {
     guest_clock_floor_ticks: u64,
     active_quantum: Option<ActiveQuantum>,
     last_quantum: QuantumStatistics,
+    speed: SpeedHistory,
+    boot_generation: u64,
+    quantum_boot_generation: u64,
     auto_boot: bool,
 }
 
@@ -467,6 +534,9 @@ impl Default for BrowserRuntime {
             guest_clock_floor_ticks: 0,
             active_quantum: None,
             last_quantum: QuantumStatistics::default(),
+            speed: SpeedHistory::default(),
+            boot_generation: 0,
+            quantum_boot_generation: 0,
             auto_boot: true,
         }
     }
@@ -637,6 +707,7 @@ impl BrowserRuntime {
         let applied_guest_clock_skew = 1.0
             - integer_as_f64(guest_ticks_per_host_second)
                 / (integer_as_f64(GUEST_TICKS_PER_MILLISECOND) * 1_000.0);
+        self.quantum_boot_generation = self.boot_generation;
         self.active_quantum = Some(ActiveQuantum {
             start_guest_ticks: host_ticks.max(self.guest_clock_floor_ticks),
             cycles_per_host_second: locked_rate_cycles_per_host_second,
@@ -789,6 +860,11 @@ impl BrowserRuntime {
             self.active_quantum = Some(quantum);
             return Err(RuntimeError::Machine("unfinished browser quantum".into()));
         }
+        // A guest reboot can occur inside a CPU run. Its mixed-boot quantum
+        // cannot contribute a whole sample to the new boot's history.
+        if self.quantum_boot_generation == self.boot_generation {
+            self.speed.observe(quantum.consumed_cycles, host_elapsed_ms);
+        }
         self.guest_clock_floor_ticks = quantum.guest_ticks();
         let host_ticks = host_epoch_ms.saturating_mul(GUEST_TICKS_PER_MILLISECOND);
         self.previous_fast_quantum_rate = if quantum.terminal == Some(QuantumOutcome::BudgetReached)
@@ -859,6 +935,17 @@ impl BrowserRuntime {
             7 => integer_as_f64(self.last_quantum.carried_guest_ticks),
             _ => 0.0,
         }
+    }
+
+    /// Returns active-time Mcycles/s windows or cumulative cycling seconds.
+    #[must_use]
+    pub fn speed_stat(&self, kind: u32) -> f64 {
+        self.speed.stat(kind)
+    }
+
+    fn reset_speed(&mut self) {
+        self.speed = SpeedHistory::default();
+        self.boot_generation = self.boot_generation.wrapping_add(1);
     }
 
     pub fn set_entropy_callback(&mut self, callback: EntropyCallback) {
@@ -1365,6 +1452,7 @@ impl BrowserRuntime {
             .load_boot_at(running.boot.images(), running.boot.addresses)?;
         running.network_output.borrow_mut().clear();
         self.state = State::Running(running);
+        self.reset_speed();
         self.actions.push_back(HostAction::Reset(cause));
         self.pump_http_requests()
     }
@@ -1483,6 +1571,7 @@ impl BrowserRuntime {
         };
         machine.load_boot_at(boot.images(), boot.addresses)?;
         self.filesystems = filesystems;
+        self.reset_speed();
         let running = Box::new(Running {
             machine,
             boot,
@@ -1587,13 +1676,71 @@ impl NetworkBackend for OutputNetwork {
 mod tests {
     use super::{
         ActiveQuantum, AdaptiveSkew, BrowserRuntime, CALIBRATION_HALFLIFE_HOST_MS, HostAction,
-        LifecycleCause, QuantumOutcome, RateEstimate, RuntimeStart, State, guest_tick_rate,
-        scale_pointer_coordinate,
+        LifecycleCause, QuantumOutcome, RateEstimate, RuntimeStart, SpeedHistory, State,
+        guest_tick_rate, scale_pointer_coordinate,
     };
     use crate::browser_input::BrowserInputQueue;
     use crate::config::VmConfig;
     use crate::guest_memory::{AccessWidth, GuestAddress};
     use crate::machine::VIRTIO_BASE;
+
+    #[test]
+    fn speed_windows_weight_time_and_retain_whole_boundary_samples() {
+        let mut history = SpeedHistory::default();
+        assert!(history.stat(0).abs() < f64::EPSILON);
+        history.observe(1_000_000, 1_000.0);
+        history.observe(2_000_000, 500.0);
+        assert!((history.stat(0) - 2.0).abs() < 1e-12);
+        history.observe(3_000_000, 500.0);
+        assert!((history.stat(0) - 5.0).abs() < 1e-12);
+        assert!((history.stat(1) - 3.0).abs() < 1e-12);
+        assert!((history.stat(3) - 2.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn speed_history_expires_samples_but_preserves_cycling_uptime() {
+        let mut history = SpeedHistory::default();
+        history.observe(10_000_000, 1_000.0);
+        for _ in 0..30_000 {
+            history.observe(1_000, 1.0);
+        }
+        for kind in 0..3 {
+            assert!((history.stat(kind) - 1.0).abs() < 1e-12);
+        }
+        assert_eq!(history.samples.len(), 15_000);
+        assert!((history.stat(3) - 31.0).abs() < 1e-12);
+        history.observe(1_000, 0.0);
+        assert!((history.stat(3) - 31.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn speed_ignores_the_quantum_spanning_a_guest_reboot() {
+        let mut runtime = BrowserRuntime::default();
+        runtime.speed.observe(1_000_000, 20.0);
+        runtime.active_quantum = Some(ActiveQuantum {
+            start_guest_ticks: 0,
+            cycles_per_host_second: 1,
+            guest_ticks_per_host_second: 1,
+            applied_guest_clock_skew: 0.0,
+            carried_guest_ticks: 0,
+            budget_cycles: 1,
+            consumed_cycles: 1,
+            stalled_cpu_runs: 0,
+            cpu_runs: 0,
+            timer_reprogramming_exits: 0,
+            timer_intervals_guest_ticks: Vec::new(),
+            record_timer_interval: false,
+            wfi_wake_delay_guest_ticks: 0,
+            terminal: Some(QuantumOutcome::VmInactive),
+        });
+
+        // Reset during CPU execution advances the boot generation before the
+        // adapter delivers elapsed time for the interrupted quantum.
+        runtime.reset_speed();
+        runtime.finish_quantum(20.0, 0).unwrap();
+        assert!(runtime.speed_stat(0).abs() < f64::EPSILON);
+        assert!(runtime.speed_stat(3).abs() < f64::EPSILON);
+    }
 
     #[test]
     fn every_halt_path_powers_off_interfaces_and_preserves_final_output() {

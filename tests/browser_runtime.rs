@@ -212,6 +212,14 @@ fn complete_quantum_resumes_after_host_action_and_updates_rate() {
     assert_eq!(runtime.finish_quantum(2.0, 1_000_002).expect("finish"), 0);
     assert!(runtime.timing_stat(0) > 0.0);
     assert!(runtime.timing_stat(1) >= 1.0);
+    assert!(runtime.speed_stat(0) > 0.0);
+    assert!((runtime.speed_stat(3) - 0.002).abs() < 1e-12);
+    runtime.halt().expect("halt retains speed");
+    assert!((runtime.speed_stat(3) - 0.002).abs() < 1e-12);
+    runtime.reset().expect("boot clears speed");
+    for kind in 0..4 {
+        assert!(runtime.speed_stat(kind).abs() < f64::EPSILON);
+    }
     assert_eq!(runtime.begin_quantum(1_000_000), QuantumStart::Ready);
     runtime.abort_quantum();
 }

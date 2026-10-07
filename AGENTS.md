@@ -267,6 +267,15 @@ The C interpreter may pass a requested cycle limit at a code-block boundary,
 and Rust accounts for the actual emulated cycles consumed.
 Split HTTP disks use 512 KiB chunks by default.
 
+The public `speed()` API reports 1/5/15-second active-time Mcycles/s averages,
+clock uptime, and cycling uptime in seconds. Rust owns one deque of completed
+quantum samples and rolling totals for each window, retaining the whole oldest
+sample needed to cover a window. Short histories use available samples. The
+adapter supplies monotonic quantum durations and measures clock uptime.
+Collection is independent of diagnostics. Every boot/reset clears measurements;
+quanta spanning guest reboot are omitted. Halt freezes all five values, and
+cold reset retains them until boot.
+
 Timing and execution lexicon
 ----------------------------
 

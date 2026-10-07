@@ -84,6 +84,27 @@ Unknown option names, HTTP failures, syntax errors, and preparation failures
 reject the promise. Failures release partially created VM storage. Cancellation
 retires pending responses; no partially prepared client is returned.
 
+Speed and uptime
+----------------
+
+`vm.speed()` synchronously returns `{mcycles1s, mcycles5s, mcycles15s,
+uptimeSeconds, cyclingSeconds}` while running or halted. Rates are millions of
+emulated CPU cycles per host second, averaged over the most recent 1, 5, and
+15 seconds of accumulated cycling time. Each window includes the whole oldest
+quantum needed to cover its duration; shorter histories use available samples.
+These are cycle rates, not strictly retired-instruction MIPS.
+
+Cycling time measures completed quanta with the monotonic browser clock,
+including WASM crossings and synchronous host action handling. Scheduling gaps,
+WFI sleep, and asynchronous HTTP waiting between quanta are excluded. Clock
+uptime includes those gaps. Rates divide total cycles by total measured time.
+
+All five figures are zero before the first boot and reset at every boot,
+forced reset, or guest reboot. A quantum spanning guest reboot is omitted from
+the new boot's measurements. All figures freeze at halt; `coldReset()` retains
+them until boot. Destroyed clients reject `speed()`. Collection is always enabled
+and does not require `debugTiming`.
+
 Lifecycle controls
 ------------------
 

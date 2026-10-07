@@ -302,6 +302,11 @@ pub extern "C" fn riscbox_timing_stat(kind: u32) -> f64 {
 }
 
 #[must_use]
+pub extern "C" fn riscbox_speed_stat(kind: u32) -> f64 {
+    STATE.with_borrow(|state| state.runtime.speed_stat(kind))
+}
+
+#[must_use]
 pub extern "C" fn riscbox_next_action() -> u32 {
     STATE.with_borrow_mut(|state| {
         state.action = state.runtime.next_action();

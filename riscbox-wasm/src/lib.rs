@@ -169,6 +169,11 @@ pub extern "C" fn riscbox_timing_stat(kind: u32) -> f64 {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn riscbox_speed_stat(kind: u32) -> f64 {
+    browser_abi::riscbox_speed_stat(kind)
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn riscbox_next_action() -> u32 {
     browser_abi::riscbox_next_action()
 }

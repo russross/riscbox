@@ -4,6 +4,11 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Wait for fresh shell output after demo game exits so Chrome acceptance
+    cannot send the next command to a game still shutting down. Disable uv's
+    dependency cache in Release and Demo because standalone scripts have no
+    package dependencies or dependency manifests.
+
 *   Simplify the demo into draggable file/editor/terminal panes with a compact
     lifecycle legend and collapsed details. Replace Wterm with container-fitted
     xterm.js using risclet's terminal setup. Source selection replaces live 9p

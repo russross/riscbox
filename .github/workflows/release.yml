@@ -44,6 +44,8 @@ jobs:
           targets: wasm32-unknown-unknown
           components: clippy
       - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: false
       - name: Install build tools
         run: |
           sudo apt-get update

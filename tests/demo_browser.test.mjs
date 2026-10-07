@@ -163,8 +163,10 @@ try {
             await until(async () => (await text()).includes('Aye aye, Sir'), 'sail scenario');
         }
         const quit = { arithmetic: 'q\\r', hangman: '\\r', wump: 'q\\r' };
+        // Only output after quitting can confirm that the shell regained input.
+        rawConsole = '';
         app.queueInput(new TextEncoder().encode(quit[id] ?? '\\u0003'));
-        await until(async () => (await text()).includes('riscbox:/shared$'), id + ' terminal cleanup');
+        await until(() => rawConsole.includes('riscbox:/shared$'), id + ' terminal cleanup');
     }
     await command('stty sane', '');
     const files = doc.getElementById('files');

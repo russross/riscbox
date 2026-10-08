@@ -1,0 +1,27 @@
+#!/bin/sh
+set -eu
+trap 'echo "@@ERROR benchmark init exited"' EXIT
+
+# Linux starts this process directly on the VirtIO console, without a login UI.
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+if ! mountpoint -q /dev; then
+    mount -t devtmpfs devtmpfs /dev
+fi
+mkdir -p /dev/pts /tmp
+mount -t devpts devpts /dev/pts
+mount -o remount,rw /
+stty -echo
+export LC_ALL=C
+echo '@@READY'
+
+# The host sends only a workload name and bounded positive decimal count.
+while read -r workload count; do
+    case "$count" in ''|*[!0-9]*) echo '@@ERROR invalid count'; continue;; esac
+    if [ "$count" -lt 1 ] || [ "$count" -gt 1000000000 ]; then
+        echo '@@ERROR count out of range'
+        continue
+    fi
+    if [ "$workload" = quit ]; then sync; poweroff -f; fi
+    /sbin/bench-run "$workload" "$count" || echo '@@ERROR workload failed'
+done

@@ -4,6 +4,15 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Add a manual Chrome/WASM benchmark image with a checked integer loop,
+    in-memory SQLite, and serial TinyCC builds of the five BSD games on ext4.
+    Warm immutable disk chunks in the browser cache while preserving normal
+    Rust HTTP-cache eviction and disk overlays; fail on transport cache misses.
+    Save fixed-workload timings, correctness output, disk fetch counts, exact
+    runtime/fixture fingerprints, and optional per-workload CPU profiles.
+    Compare independently saved runtime results. Keep benchmarks outside all
+    routine builds, tests, releases, acceptance checks, and GitHub workflows.
+
 *   Trim demo examples to Adventure, ATC, Robots, Snake, and Spirhunt. Load
     Robots by default and remove Hangman's dictionary package and image data.
 

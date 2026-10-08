@@ -12,3 +12,6 @@ uboot/u-boot.bin-*.gz
 node_modules/
 demo/build/
 demo/dist/
+bench/build/
+bench/dist/
+bench/results/

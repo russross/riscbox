@@ -93,6 +93,16 @@ Repository map and terminology
     archive version tag; local source builds use their source commit.
 *   Root `package.json` owns the pinned build-only TypeScript compiler.
     Core tests own their Chrome harness and require no mounted client source.
+*   `bench/` owns a separate manual-only Alpine benchmark image and public-client
+    Chrome runner: integer loop, in-memory SQLite, and serial TinyCC game builds
+    on ext4. It warms immutable chunks in Chrome's HTTP cache, requires cache-only
+    transport during execution, retains the normal Rust block cache/overlays,
+    uses a fresh VM per measured sample after a separate warm-up, and drops
+    Linux caches before workloads. Runtime selection and saved JSON
+    comparisons are independent of compiler settings. Generated fixtures,
+    results, and optional per-workload CPU profiles are ignored and never
+    packaged. No benchmark target belongs to ordinary builds, tests, acceptance,
+    or CI.
 *   `kernel/` owns the canonical custom Linux kernel consumed by image builds.
 *   `opensbi/` and `uboot/` own pinned firmware and bootloader builds. Each
     tracks its Makefile, version, and config; downloads, sources, and outputs
@@ -411,6 +421,10 @@ Validation
     use temporary profiles, headed Chrome when a display is available, and
     headless Chrome otherwise. `make demo` builds without running acceptance.
 *   `make wasm` builds the deployed Rust WebAssembly artifact.
+*   `make bench-image`, `make bench`, and `make bench-profile` explicitly prepare
+    or run the manual performance suite. See `bench/README.md` for fixed workload
+    counts, arbitrary runtime inputs, cache policy, results, and comparison.
+    GitHub workflows must never invoke these benchmarks.
 *   `make kernel`, `make opensbi`, and `make uboot` build the pinned guest
     components and their hash-named gzip assets. The default `make` builds
     those with the core WASM and JavaScript and packages the release archive.

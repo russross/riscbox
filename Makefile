@@ -38,6 +38,16 @@ demo:
 test-demo:
 	$(MAKE) -C demo test
 
+# Benchmarks are manual development tools, excluded from all validation chains.
+bench-image: kernel opensbi
+	$(MAKE) -C bench dist
+
+bench: wasm js kernel opensbi
+	$(MAKE) -C bench run
+
+bench-profile: wasm js kernel opensbi
+	$(MAKE) -C bench profile
+
 wasm: $(RUSTBOX_WASM)
 
 js: build/js/.built
@@ -88,4 +98,4 @@ clean:
 
 clean-all: clean
 
-.PHONY: all release test-unit test check check-release demo test-demo wasm js js-check kernel opensbi uboot dist release-path clean clean-all
+.PHONY: all release test-unit test check check-release demo test-demo bench-image bench bench-profile wasm js js-check kernel opensbi uboot dist release-path clean clean-all

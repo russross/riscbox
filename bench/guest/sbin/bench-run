@@ -1,0 +1,48 @@
+#!/bin/sh
+set -eu
+workload=$1
+count=$2
+trap 'status=$?; if [ "$status" -ne 0 ]; then cat /tmp/bench-build.log 2>/dev/null || :; fi' EXIT
+
+# Setup and cleaning precede the marker. Dropping guest caches preserves device
+# work while immutable HTTP chunks remain warm in the browser's disk cache.
+case "$workload" in
+    loop|sqlite) ;;
+    compile) make -s -C /bench/games clean ;;
+    *) echo '@@ERROR unknown workload'; exit 2;;
+esac
+sync
+echo 3 > /proc/sys/vm/drop_caches
+printf '@@START %s %s\n' "$workload" "$count"
+
+# Results stay on ext4 so console formatting is outside the timed interval.
+case "$workload" in
+    loop) /bench/loop "$count" > /tmp/bench-output ;;
+    sqlite)
+        /bench/speedtest1 --memdb --testset main --size "$count" \
+            --threads 0 --verify --stats > /tmp/bench-output
+        ;;
+    compile)
+        iteration=0
+        while [ "$iteration" -lt "$count" ]; do
+            make -s -C /bench/games -j1 > /tmp/bench-build.log 2>&1
+            if grep -E 'warning:|error:' /tmp/bench-build.log; then exit 1; fi
+            for game in adventure atc robots snake spirhunt; do
+                test -x "/bench/games/$game/$game"
+            done
+            iteration=$((iteration + 1))
+            if [ "$iteration" -lt "$count" ]; then
+                make -s -C /bench/games clean
+                sync
+                echo 3 > /proc/sys/vm/drop_caches
+            fi
+        done
+        sync
+        sha256sum /bench/games/adventure/adventure /bench/games/atc/atc \
+            /bench/games/robots/robots /bench/games/snake/snake \
+            /bench/games/spirhunt/spirhunt > /tmp/bench-output
+        ;;
+esac
+printf '@@END %s %s\n' "$workload" "$count"
+cat /tmp/bench-output
+echo '@@RESULT'

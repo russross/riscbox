@@ -35,6 +35,9 @@ Targets
 | `make check-release` | Core checks, package build, archive validation/loading     |
 | `make demo`          | Build the release-based Alpine embedding app               |
 | `make test-demo`     | Opt-in Chrome acceptance of the assembled demo             |
+| `make bench-image`   | Prepare and split the manual Alpine benchmark image        |
+| `make bench`         | Run three manual Chrome/WASM performance workloads         |
+| `make bench-profile` | Run manual workloads with per-workload Chrome CPU profiles |
 
 `make kernel`, `make opensbi`, and `make uboot` build their pinned components.
 `make release` builds the optimized Rust workspace for development.
@@ -49,6 +52,12 @@ use small firmware probes
 and require no guest root filesystem, QEMU, mounted source, or UI framework.
 The optional demo build needs QEMU, fakeroot, cpio, and e2fsprogs; see
 [demo/README.md](demo/README.md).
+
+The independent [benchmark suite](bench/README.md) measures a small integer
+loop, in-memory SQLite, and clean TinyCC builds on ext4. It warms immutable
+chunks in the browser cache while retaining the normal HTTP block device and
+Rust cache. Saved JSON results support arbitrary runtime comparisons. Benchmark
+targets are excluded from all ordinary checks and GitHub workflows.
 
 Release automation
 ------------------

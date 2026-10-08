@@ -23,7 +23,7 @@ prepare a fresh client to create another VM.
 
 Most users will just a [packaged release from github](https://github.com/russross/riscbox/releases) that includes riscbox assets, plus a Linux kernel image, OpenSBI firmware, and a U-boot bootloader, all customized and pre-built.
 
-See [BUILDING.md](https://github.com/russross/riscbox/blob/main/BUILDING.md) if you want to build from source, run tests, etc.
+See [BUILDING.md](https://github.com/russross/riscbox/blob/main/BUILDING.md) to build from source, run tests, or invoke manual performance benchmarks.
 
 
 The platform

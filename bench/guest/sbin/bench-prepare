@@ -1,0 +1,38 @@
+#!/bin/sh
+set -eu
+
+# QEMU supplies networking only during preparation. Measurements have no NIC.
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev
+mkdir -p /mnt/source /mnt/output
+mount -t 9p -o trans=virtio,version=9p2000.L source /mnt/source
+mount -t 9p -o trans=virtio,version=9p2000.L output /mnt/output
+trap 'echo failed > /mnt/output/failed; poweroff -f' EXIT
+ip link set eth0 up
+udhcpc -q -n -i eth0
+apk add --no-cache musl-dev tcc tcc-libs-static make ncurses-dev
+
+# SQLite is compiled once; its database and temporary pages stay in memory.
+mkdir -p /bench
+cp /mnt/source/build/programs/loop /mnt/source/build/programs/speedtest1 /bench/
+cp -R /mnt/source/build/games /bench/games
+make -s -C /bench/games -j1
+make -s -C /bench/games clean
+/bench/loop 1000 | grep -qx 'loop-checksum=bce58c6ddb337645'
+/bench/speedtest1 --memdb --testset main --size 1 --verify > /tmp/sqlite-check
+
+# The image records package versions after validating the guest programs.
+apk info -v | sort > /bench/packages.txt
+rm -f /sbin/bench-prepare
+rm -rf /var/cache/apk/*
+mkdir -p /dev/pts /run /proc /sys /tmp
+chmod 1777 /tmp
+tar -C / -cf /mnt/output/rootfs.tar \
+    --exclude='./dev/*' --exclude='./proc/*' --exclude='./sys/*' \
+    --exclude='./tmp/*' --exclude='./run/*' --exclude='./mnt/*' \
+    ./bin ./dev ./etc ./lib ./mnt ./proc ./root ./run ./sbin ./sys ./tmp ./usr ./var ./bench
+touch /mnt/output/complete
+trap - EXIT
+sync
+poweroff -f

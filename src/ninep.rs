@@ -1675,7 +1675,8 @@ impl Filesystem {
 #[cfg(test)]
 mod tests {
     use super::{
-        ByteRangeLock, ChangeKind, ChangeSource, Filesystem, FilesystemError, Limits, LockKind,
+        ByteRangeLock, ChangeKind, ChangeSource, Filesystem, FilesystemError, Limits, ListedEntry,
+        LockKind,
     };
 
     // 9P2000.L Tlock/Tgetlock use fcntl process/client ownership and range
@@ -1955,8 +1956,11 @@ mod tests {
         fs.clear().unwrap();
         assert_eq!(fs.root(), root);
         assert_eq!(fs.generation(), generation);
-        assert!(fs.directory_entries(root).unwrap().is_empty());
-        assert!(fs.directory_entries(directory).unwrap().is_empty());
+        assert_eq!(fs.directory_entries(root).unwrap(), [] as [ListedEntry; 0]);
+        assert_eq!(
+            fs.directory_entries(directory).unwrap(),
+            [] as [ListedEntry; 0]
+        );
         assert_eq!(fs.inode(directory).unwrap().parent, None);
         assert_eq!(fs.inode(file).unwrap().link_count, 0);
         assert_eq!(fs.inode(file).unwrap().fid_refs, 2);

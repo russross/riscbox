@@ -4,6 +4,12 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Measure Rust `-Os` versus `-O3` with C fixed at `-O3` using six browser
+    samples per workload. Find no repeatable performance gain across the
+    loop, SQLite, and TinyCC workloads, while `-O3` increases WASM size by
+    30.0% raw and 20.6% gzipped. Retain the Rust `-Os` default and record
+    the comparison in the benchmark guide.
+
 *   Add a manual Chrome/WASM benchmark image with a checked integer loop,
     in-memory SQLite, and serial TinyCC builds of the five BSD games on ext4.
     Warm immutable disk chunks in the browser cache while preserving normal

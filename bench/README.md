@@ -136,6 +136,39 @@ C remains `-O3`, LTO remains enabled, and the same `wasm-opt -O3` pass is applie
 The suite itself has no special knowledge of compiler variants and also
 supports interpreter, platform, scheduling, and storage comparisons.
 
+Rust optimization comparison
+----------------------------
+
+On 2026-10-07, source `f2cb4ce5ee02cbc63f8843140cc6afe5398d6f9c` was
+measured on an Intel Core i9-9900K with Linux 6.1.0-42-amd64 and headed
+Chrome 152.0.7977.82. Isolated builds used Rust 1.98.1, Clang 19.1.7,
+and wasm-opt 120. Only Rust release optimization changed: `s` versus `3`.
+C stayed at `-O3` with byte-identical core archives; LTO and `wasm-opt -O3`
+were identical, as were the browser adapter and guest image.
+
+Four default, unprofiled suite runs used the order `Os, O3, O3, Os`, giving
+six measured samples per workload per variant. All correctness signatures
+matched and all timed disk fetches came from the browser cache.
+
+| Workload       | Rust Os median | Rust O3 median | O3 time change |
+| -------------- | -------------- | -------------- | -------------- |
+| Integer loop   | 13.609 s       | 13.397 s       | -1.6%          |
+| SQLite memory  | 13.072 s       | 13.117 s       | +0.3%          |
+| TinyCC builds  | 14.351 s       | 14.319 s       | -0.2%          |
+
+| WASM size      | Rust Os        | Rust O3        | O3 increase    |
+| -------------- | -------------- | -------------- | -------------- |
+| Raw bytes      | 374,730        | 487,264        | 30.0%          |
+| Gzip bytes     | 166,095        | 200,268        | 20.6%          |
+
+The aggregate loop difference did not repeat in the reverse-order pair:
+the final Os batch median was 13.417 s versus 13.427 s for the preceding
+O3 batch. SQLite and compilation showed no consistent meaningful gain.
+These measurements support retaining the default Rust `-Os` for its size
+advantage; they do not establish a repeatable performance benefit from `-O3`.
+Local raw batches, combined records, build metadata, and summary are saved
+under `bench/results/rust-opt-*.json`; generated results remain untracked.
+
 Results and profiles
 --------------------
 

@@ -1,0 +1,10 @@
+Demo image preparation
+======================
+
+`make -C demo` stages a selected release archive, then rebuilds `build/rootfs.ext4` when image sources or the staged release digest change. Image sources include guest setup files, vendored game sources, the image builder, and the Makefile. Preparation uses only the release's Linux and OpenSBI boot payloads.
+
+`build-image.sh` verifies the pinned Alpine minirootfs checksum and uses fakeroot to combine it with the guest setup files into an initramfs. QEMU boots that initramfs with networking, a read-only source share, and a writable output share. Guest preparation installs development tools, compiles all five games, creates UID/GID 1000 and password-free doas, and exports the prepared root as a tar retaining numeric ownership and permissions. Runtime pseudo-filesystem contents, temporary game builds, and package caches are excluded. The guest writes a completion marker only after the export succeeds; QEMU failure, a missing completion marker, or a failure marker stops the host build.
+
+A single fakeroot session extracts the exported tar and populates an 80 MiB ext4 image without mounting it. The volume has no reserved block percentage and no journal: `mkfs.ext4` explicitly disables `has_journal`, rather than disabling journal use through mount options. Numeric ownership and setuid permissions survive population. The builder writes a `.part` image and renames it to `build/rootfs.ext4` only after successful population; its exit trap removes temporary directories and incomplete output.
+
+Assembly copies the release runtime unchanged and invokes its packaged splitter to produce immutable 256 KiB disk chunks. The generated configuration boots the packaged Linux kernel through OpenSBI and mounts the disk writable as `/dev/vda`, with ext4 as the root filesystem and VirtIO console output. Home, temporary files, and system writes use this root volume without tmpfs overlays. Browser writes live in the VM's HTTP disk overlay, survive reboot, and are discarded by image reset or VM destruction. The resident `/shared` 9p tree remains independent of disk contents and image reset.

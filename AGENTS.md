@@ -225,7 +225,7 @@ responses. Destroyed clients cannot be reused. Browser
 HTTP completions and errors are guarded by the VM lifecycle generation.
 
 The embedding demo loads the packaged Linux kernel through OpenSBI, mounts a
-writable 80 MiB ext4 root without tmpfs overlays, and autologins user `riscbox`
+writable 80 MiB ext4 root without a journal or tmpfs overlays, and autologins user `riscbox`
 on the VirtIO console. BusyBox acpid handles orderly power events. QEMU setup
 passes Linux `riscv_isa_fallback` for legacy CPU ISA device-tree bindings from
 older QEMU versions, including the release runner's QEMU 8.2.

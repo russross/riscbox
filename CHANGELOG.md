@@ -4,6 +4,8 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Create the demo's ext4 volume without a journal.
+
 *   Measure Rust `-Os` versus `-O3` with C fixed at `-O3` using six browser
     samples per workload. Find no repeatable performance gain across the
     loop, SQLite, and TinyCC workloads, while `-O3` increases WASM size by

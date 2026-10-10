@@ -64,13 +64,13 @@ if [ ! -f "$output/complete" ] || [ -f "$output/failed" ]; then
     exit 1
 fi
 
-# One fakeroot session retains numeric ownership and setuid doas through population.
+# One fakeroot session retains ownership and setuid doas in a journal-free volume.
 rm -rf "$stage"
 mkdir -p "$stage"
 fakeroot sh -eu -c '
     tar -xpf "$1" -C "$2"
     truncate -s 80M "$3"
-    mkfs.ext4 -q -F -m 0 -d "$2" "$3"
+    mkfs.ext4 -q -F -m 0 -O ^has_journal -d "$2" "$3"
 ' sh "$output/rootfs.tar" "$stage" "$(pwd)/build/rootfs.ext4.part"
 mv build/rootfs.ext4.part build/rootfs.ext4
 echo 'Prepared 80 MiB writable Alpine ext4 image; TinyCC built all five vendored BSD games.'

@@ -41,8 +41,7 @@ TinyCC (including its runtime archive), musl headers, make, doas, ncurses
 development files and terminal data. BusyBox supplies `less`; nano is omitted.
 Preparation compiles the five vendored BSD games.
 It exports a root-owned tar over 9p. A single fakeroot session extracts the tar
-and populates an 80 MiB writable ext4 image with `mkfs.ext4 -d`, retaining numeric
-ownership and setuid doas without mounting the disk.
+and populates an 80 MiB writable ext4 image with `mkfs.ext4 -O ^has_journal -d`, retaining numeric ownership and setuid doas without mounting the disk. The filesystem has no journal.
 
 Package resolution uses the pinned Alpine branch; rebuilding can pick up updates
 within that branch. Setup output is `build/image-setup.log`. Linux's

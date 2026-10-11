@@ -91,7 +91,7 @@ mkdir -p "$stage"
 fakeroot sh -eu -c '
     tar -xpf "$1" -C "$2"
     truncate -s 96M "$3"
-    mkfs.ext4 -q -F -m 0 -d "$2" "$3"
+    mkfs.ext4 -q -F -m 0 -O ^has_journal -d "$2" "$3"
 ' sh "$output/rootfs.tar" "$stage" "$(pwd)/build/rootfs.ext4.part"
 cp "$stage/bench/packages.txt" build/packages.txt
 mv build/rootfs.ext4.part build/rootfs.ext4

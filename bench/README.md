@@ -209,6 +209,12 @@ retain the same generated fixture for comparisons. Package versions and the
 full image hash make that distinction explicit. Delete
 `bench/build/rootfs.ext4` to deliberately rebuild it.
 
+QEMU preparation logs to `bench/build/image-setup.log` without reading terminal
+input. It has a ten-minute deadline; timeout or interruption escalates to SIGKILL
+after five seconds if QEMU does not exit. A failed build removes temporary
+filesystem trees and the partial image. See [SEMANTICS.md](SEMANTICS.md) for the
+image preparation contract.
+
 ```sh
 node --test bench/report.test.mjs
 node bench/run.mjs --loop-count 1000 --sqlite-size 1 --compile-count 1 \

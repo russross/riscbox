@@ -103,6 +103,8 @@ Repository map and terminology
     results, and optional per-workload CPU profiles are ignored and never
     packaged. No benchmark target belongs to ordinary builds, tests, acceptance,
     or CI.
+    Benchmark and demo QEMU image preparation detach terminal input and escalate
+    timeout/interruption to SIGKILL after five seconds; retain setup logs on failure.
 *   `kernel/` owns the canonical custom Linux kernel consumed by image builds.
 *   `opensbi/` and `uboot/` own pinned firmware and bootloader builds. Each
     tracks its Makefile, version, and config; downloads, sources, and outputs

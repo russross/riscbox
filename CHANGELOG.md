@@ -4,6 +4,10 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Bound benchmark and demo image-builder QEMU termination with a five-second
+    forced-kill fallback, detach console input from the terminal, and exit on
+    interrupted preparation before cleaning temporary files.
+
 *   Create the demo's ext4 volume without a journal.
 
 *   Measure Rust `-Os` versus `-O3` with C fixed at `-O3` using six browser

@@ -31,7 +31,10 @@ printf '%s  %s\n' 57132e6e4f3a4ba9ffdf24e485513ce507e45471e7fd565aeed91c055cd63f
 }
 stage=$(mktemp -d "$(pwd)/build/rootfs.XXXXXX")
 output=$(mktemp -d "$(pwd)/build/output.XXXXXX")
-trap 'rm -rf "$stage" "$output" build/rootfs.ext4.part' EXIT HUP INT TERM
+trap 'rm -rf "$stage" "$output" build/rootfs.ext4.part' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # Fakeroot preserves the minirootfs's numeric ownership in cpio without host privileges.
 gzip -dc "$kernel" > build/linux
@@ -43,9 +46,11 @@ fakeroot sh -eu -c '
     find . -print0 | cpio --null --quiet -o -H newc | gzip -1 > "$4"
 ' sh "$archive" "$stage" "$(pwd)/guest" "$(pwd)/build/setup-initramfs.gz"
 
-# QEMU supplies apk networking; ISA fallback accepts older QEMU device trees.
-if ! timeout 300 qemu-system-riscv64 \
-    -machine virt -m 512M -smp 1 -nographic -no-reboot \
+# QEMU supplies apk networking; ISA fallback accepts older device trees. Its
+# console has no terminal input, and unresponsive termination escalates to a kill.
+if ! timeout --kill-after=5s 300 qemu-system-riscv64 \
+    -machine virt -m 512M -smp 1 -display none -monitor none \
+    -serial stdio -no-reboot \
     -bios build/fw_dynamic.bin -kernel build/linux -initrd build/setup-initramfs.gz \
     -append 'console=ttyS0,115200 rdinit=/sbin/demo-prepare riscv_isa_fallback panic=-1' \
     -netdev user,id=net -device virtio-net-device,netdev=net \
@@ -53,7 +58,7 @@ if ! timeout 300 qemu-system-riscv64 \
     -device virtio-9p-device,fsdev=source,mount_tag=source \
     -fsdev "local,id=output,path=$output,security_model=none" \
     -device virtio-9p-device,fsdev=output,mount_tag=output \
-    > build/image-setup.log 2>&1; then
+    < /dev/null > build/image-setup.log 2>&1; then
     echo 'QEMU image preparation failed; see build/image-setup.log' >&2
     tail -20 build/image-setup.log >&2
     exit 1

@@ -51,7 +51,10 @@ gzip -dc "../kernel/$kernel" > build/linux
 gzip -dc "../opensbi/$firmware" > build/fw_dynamic.bin
 stage=$(mktemp -d "$(pwd)/build/rootfs.XXXXXX")
 output=$(mktemp -d "$(pwd)/build/output.XXXXXX")
-trap 'rm -rf "$stage" "$output" build/rootfs.ext4.part' EXIT HUP INT TERM
+trap 'rm -rf "$stage" "$output" build/rootfs.ext4.part' EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 fakeroot sh -eu -c '
     tar -xpf "$1" -C "$2"
     cp -R "$3/." "$2/"
@@ -59,9 +62,11 @@ fakeroot sh -eu -c '
     find . -print0 | cpio --null --quiet -o -H newc | gzip -1 > "$4"
 ' sh "$(pwd)/build/downloads/alpine.tar.gz" "$stage" "$(pwd)/guest" "$(pwd)/build/setup-initramfs.gz"
 
-# The preparation guest exports a complete filesystem or a clean failure marker.
-if ! timeout 600 qemu-system-riscv64 \
-    -machine virt -m 512M -smp 1 -nographic -no-reboot \
+# The guest exports a complete filesystem or a failure marker. QEMU has no
+# terminal input, and termination escalates if its shutdown path stops responding.
+if ! timeout --kill-after=5s 600 qemu-system-riscv64 \
+    -machine virt -m 512M -smp 1 -display none -monitor none \
+    -serial stdio -no-reboot \
     -bios build/fw_dynamic.bin -kernel build/linux -initrd build/setup-initramfs.gz \
     -append 'console=ttyS0,115200 rdinit=/sbin/bench-prepare riscv_isa_fallback panic=-1' \
     -netdev user,id=net -device virtio-net-device,netdev=net \
@@ -69,7 +74,7 @@ if ! timeout 600 qemu-system-riscv64 \
     -device virtio-9p-device,fsdev=source,mount_tag=source \
     -fsdev "local,id=output,path=$output,security_model=none" \
     -device virtio-9p-device,fsdev=output,mount_tag=output \
-    > build/image-setup.log 2>&1; then
+    < /dev/null > build/image-setup.log 2>&1; then
     echo 'QEMU preparation failed; see bench/build/image-setup.log' >&2
     tail -20 build/image-setup.log >&2
     exit 1

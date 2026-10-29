@@ -96,7 +96,7 @@ Repository boundaries
 README, API, and HOWTO are packaged for embedding applications. Storage and
 protocol guides document implementation boundaries. `AGENTS.md`, `DEV.md`, and
 this file describe contributor workflow and architecture. `demo/` is an example
-consumer, excluded from the archive and core checks. Its `dist/riscbox/` directory is copied from the release
+consumer, excluded from the archive and core checks. Its hash-named runtime directory is copied from the release
 archive, and its browser code accesses only that directory and demo-owned assets.
 
 Guest image definitions and their full-system acceptance tests belong to the

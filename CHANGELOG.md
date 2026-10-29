@@ -4,6 +4,9 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Deploy the demo's hash-named runtime beside its app, with the image
+    configuration and split drive under `images/`; Pages keeps only current assets.
+
 *   Generate optional Brotli quality 11 siblings for split disk blocks, keeping
     the original blocks and warning when the Brotli executable is unavailable.
 

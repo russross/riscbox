@@ -20,9 +20,17 @@ same build. Install QEMU's RISC-V system emulator, Brotli, fakeroot, cpio, e2fsp
 No sudo or host filesystem mounts are needed.
 
 The default build runs `make -C ..`, extracts the resulting release archive
-under `build/release/riscbox-VERSION/`, expands its Brotli assets, and copies that tree
-to `dist/riscbox/`. It adds the app, source examples, configuration, and split
-disk beside it. To use a downloaded archive without building the parent repo:
+under `build/release/riscbox-VERSION/`, and expands its Brotli assets. It copies
+the resulting `riscbox-HASH/` runtime directory to `dist/`, with both compressed
+and original files. The application and examples live beside it, while
+`dist/images/riscbox.cfg` and `dist/images/drive-HASH/` hold the image
+configuration and split disk. Documentation remains in the staged archive;
+the demo links to the release's guides on GitHub. Pages retains only the current
+runtime and disk, so an already open page can lose access after an update.
+Pages controls HTTP compression; the `.br` siblings are also available for
+servers configured to serve precompressed Brotli files.
+To use a downloaded archive
+without building the parent repo:
 
     make RELEASE_ARCHIVE=/absolute/path/riscbox-VERSION.tar.gz
 

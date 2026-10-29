@@ -89,6 +89,8 @@ Repository map and terminology
     plain browser app. Its Makefile stages the release and expands its assets, and uses
     only packaged runtime, boot payloads, and splitter assets. Historical image
     projects and the shared application client live outside this repository.
+    The demo Pages artifact keeps only the current runtime and disk directories;
+    open pages may lose their assets after a deployment.
     Assembly links to GitHub-rendered guides and example provenance at the
     archive version tag; local source builds use their source commit.
 *   Root `package.json` owns the pinned build-only TypeScript compiler.
@@ -377,7 +379,8 @@ Architecture rules
     browser subsystems by calling their WASM operations, since an unused
     implementation can build successfully while retaining unsupported calls.
 *   Deploy the content-hashed runtime directory and split disks before updating
-    configuration and script URLs; retain old assets until an explicit cleanup.
+    configuration and script URLs; retain old assets until an explicit cleanup,
+    except for the demo Pages deployment described above.
 
 Development workflow
 --------------------

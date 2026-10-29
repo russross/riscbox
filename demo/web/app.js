@@ -42,7 +42,7 @@ const terminal = createTerminal(element("terminal"), data => {
 }, ({ cols, rows }) => { if (phase === "running") runtime.consoleResize(cols, rows); });
 setupLayout();
 terminal.blur();
-prefetchImage(new URL("riscbox.cfg", document.baseURI), element("terminal"));
+prefetchImage(new URL("images/riscbox.cfg", document.baseURI), element("terminal"));
 
 // Programmatic replacement cancels buffered writes before touching the document.
 function replaceEditor(path, text = "", writable = false) {
@@ -182,7 +182,7 @@ async function prepare() {
     setPhase("preparing");
     try {
         runtime = await Riscbox.prepare({
-            config: { url: "riscbox.cfg" },
+            config: { url: "images/riscbox.cfg" },
             consoleWrite: text => terminal.write(text),
             onVmStarted: () => {
                 element("message").textContent = "";

@@ -1,16 +1,43 @@
-import { access, mkdtemp, rm } from "node:fs/promises";
+import { access, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import assert from "node:assert/strict";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
+import { brotliDecompressSync } from "node:zlib";
 import { runChromePage } from "./chrome.mjs";
 
 test("demo keeps documentation uncompressed and supplies compressed app assets", async () => {
     const dist = resolve(import.meta.dirname, "../demo/dist");
     await access(join(dist, "app.js.br"));
-    await access(join(dist, "riscbox", "README.md"));
-    await assert.rejects(access(join(dist, "riscbox", "README.md.br")));
+    await access(join(dist, "examples", "adventure", "README.md"));
     await assert.rejects(access(join(dist, "examples", "adventure", "README.md.br")));
+});
+
+test("demo links its hashed runtime and image directory", async () => {
+    const dist = resolve(import.meta.dirname, "../demo/dist");
+    const index = await readFile(join(dist, "index.html"), "utf8");
+    const match = index.match(/src="(riscbox-[0-9a-f]{8})\/riscbox\.js"/);
+    assert(match, "missing hashed runtime script");
+    const config = JSON.parse(await readFile(join(dist, "images", "riscbox.cfg"), "utf8"));
+    assert.equal(config.bios, `../${match[1]}/fw_dynamic.bin`);
+    assert.equal(config.kernel, `../${match[1]}/linux`);
+    assert.match(config.drive0.file, /^drive-[0-9a-f]{8}\/blk\.txt$/);
+    for (const file of ["riscbox.js", "riscbox.wasm", "linux", "fw_dynamic.bin", "u-boot.bin", "network.js"]) {
+        const original = await readFile(join(dist, match[1], file));
+        const compressed = await readFile(join(dist, match[1], `${file}.br`));
+        assert.deepEqual(brotliDecompressSync(compressed), original);
+    }
+    await access(join(dist, "images", config.drive0.file));
+    await assert.rejects(access(join(dist, "images", `${config.drive0.file}.br`)));
+    const block = join(dist, "images", config.drive0.file, "..", "blk000000000.bin");
+    assert.deepEqual(brotliDecompressSync(await readFile(`${block}.br`)), await readFile(block));
+    await assert.rejects(access(join(dist, "images", "riscbox.cfg.br")));
+    assert.deepEqual((await readdir(dist)).filter(name => /^riscbox-[0-9a-f]{8}$/.test(name)), [match[1]]);
+    assert.deepEqual((await readdir(dist)).filter(name => /^drive-[0-9a-f]{8}$/.test(name)), []);
+    assert.deepEqual((await readdir(join(dist, "images"))).filter(name => /^drive-[0-9a-f]{8}$/.test(name)),
+        [config.drive0.file.split("/")[0]]);
+    await assert.rejects(access(join(dist, "riscbox.cfg")));
+    await assert.rejects(access(join(dist, "riscbox")));
 });
 
 // Real focus events gate requests while delayed response bodies remain in flight.
@@ -118,8 +145,9 @@ try {
         check(rest.slice(slash + 1) === paths[i], 'documentation source path');
     }
     check((await fetch('/riscbox/docs/riscbox/API.html')).status === 404, 'no rendered documentation tree');
-    const config = await (await fetch('/riscbox/riscbox.cfg')).json();
-    const manifest = await (await fetch(new URL(config.drive0.file, new URL('/riscbox/riscbox.cfg', location.href)))).text();
+    const configUrl = new URL('/riscbox/images/riscbox.cfg', location.href);
+    const config = await (await fetch(configUrl)).json();
+    const manifest = await (await fetch(new URL(config.drive0.file, configUrl))).text();
     check(/block_size: 256,/.test(manifest), 'demo uses 256 KiB disk chunks');
     await fetch('/result?status=pass');
 } catch (error) { await fetch('/result?status=' + encodeURIComponent(error.stack ?? String(error))); }

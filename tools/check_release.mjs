@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 
@@ -11,15 +12,16 @@ async function checkRelease(archive) {
     const name = basename(archive).replace(/\.tar\.gz$/, "");
     const files = execFileSync("tar", ["-tzf", archive], { encoding: "utf8" }).trim().split("\n");
     for (const file of files) assert(file.startsWith(`${name}/`) && !file.split("/").includes(".."), `invalid archive path ${file}`);
-    for (const file of ["riscbox.wasm", "riscbox.js", "riscbox.d.ts", "splitimg.py", "README.md",
-        "API.md", "HOWTO.md", "STORAGE-ABI.md", "NINEP.md", "CHANGELOG.md", "LICENSE",
-        "network/index.js", "network/index.d.ts", "network/README.md"]) {
+    for (const file of ["riscbox.d.ts", "network.d.ts", "NETWORK.md", "splitimg.py", "README.md",
+        "API.md", "HOWTO.md", "STORAGE-ABI.md", "NINEP.md", "CHANGELOG.md", "LICENSE"]) {
         assert(files.includes(`${name}/${file}`), `missing ${file}`);
     }
-    for (const prefix of ["linux-", "fw_dynamic.bin-", "u-boot.bin-"]) {
-        assert.equal(files.filter(file => file.startsWith(`${name}/${prefix}`) && file.endsWith(".gz")).length, 1,
-            `expected one ${prefix} payload`);
-    }
+    const assetDirs = files.filter(file => new RegExp(`^${name}/riscbox-[0-9a-f]{8}/$`).test(file));
+    assert.equal(assetDirs.length, 1, "expected one asset directory");
+    const assetDir = assetDirs[0];
+    for (const asset of ["riscbox.wasm", "riscbox.js", "network.js", "linux", "fw_dynamic.bin", "u-boot.bin"])
+        assert(files.includes(`${assetDir}${asset}.br`), `missing ${asset}.br`);
+    assert(!files.some(file => file.startsWith(`${name}/network/`)), "unexpected network directory");
     assert(!files.some(file => /internal|build\/|demo\/|images\//.test(file)), "development assets in archive");
 
     // Extraction checks executable metadata, documentation links, and actual WASM loading.
@@ -27,6 +29,13 @@ async function checkRelease(archive) {
     try {
         execFileSync("tar", ["-xzf", archive, "-C", directory]);
         const root = join(directory, name);
+        const assets = join(directory, assetDir);
+        for (const asset of ["riscbox.wasm", "riscbox.js", "network.js", "linux", "fw_dynamic.bin", "u-boot.bin"])
+            execFileSync("brotli", ["-d", "-k", join(assets, `${asset}.br`)]);
+        const names = ["riscbox.wasm", "riscbox.js", "network.js", "linux", "fw_dynamic.bin", "u-boot.bin"].sort();
+        let hashes = "";
+        for (const asset of names) hashes += `${createHash("sha256").update(await readFile(join(assets, asset))).digest("hex")}  ${asset}\n`;
+        assert(assetDir.endsWith(`riscbox-${createHash("sha256").update(hashes).digest("hex").slice(0, 8)}/`), "asset hash mismatch");
         const details = execFileSync("tar", ["-tvzf", archive, `${name}/splitimg.py`], { encoding: "utf8" });
         assert(details.startsWith("-rwx"), "splitter must be executable");
         for (const file of files.filter(file => file.endsWith(".md"))) {
@@ -38,12 +47,12 @@ async function checkRelease(archive) {
                 await readFile(target);
             }
         }
-        const { Riscbox } = createRequire(import.meta.url)(join(root, "riscbox.js"));
+        const { Riscbox } = createRequire(import.meta.url)(join(assets, "riscbox.js"));
         const declarations = await readFile(join(root, "riscbox.d.ts"), "utf8");
         for (const internal of ["StorageRuntime", "StorageExports", "FilesystemHandle", "DiskHandle", "runQuantum", "hostImports"]) {
             assert(!declarations.includes(internal), `internal declaration ${internal}`);
         }
-        const wasm = await readFile(join(root, "riscbox.wasm"));
+        const wasm = await readFile(join(assets, "riscbox.wasm"));
         const module = await WebAssembly.compile(wasm);
         const exports = WebAssembly.Module.exports(module).map(entry => entry.name);
         assert(!exports.includes("riscbox_start") && !exports.includes("riscbox_start_resolved"), "unused startup exports");

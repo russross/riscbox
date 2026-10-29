@@ -2,7 +2,7 @@ IMAGE_SOURCES := $(shell find guest src ../demo/bsd-games-3.3 -type f \( -name '
 
 image: build/rootfs.ext4
 
-build/rootfs.ext4: $(IMAGE_SOURCES) ../kernel/.asset-name ../opensbi/.asset-name
+build/rootfs.ext4: $(IMAGE_SOURCES) ../kernel/linux ../opensbi/fw_dynamic.bin
 	./build-image.sh
 
 dist: image

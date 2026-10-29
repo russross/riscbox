@@ -9,30 +9,60 @@ a complete plain JavaScript application with lifecycle controls and live 9p edit
 Serve an application around a release
 -------------------------------------
 
-Extract `riscbox-VERSION.tar.gz` into `dist/riscbox/`. Keep that subtree unchanged:
-it contains the matching JavaScript/WASM/declarations, Linux/OpenSBI/U-Boot boot
-payloads, splitter, and documentation. Put your HTML, configuration, source
-trees, and guest disk beside it. The archive contains no guest root filesystem.
+Extract `riscbox-VERSION.tar.gz` into a working directory. It contains guides,
+declarations, the splitter, and one `riscbox-HASH` directory of compressed
+client assets. Copy that asset directory into `dist/` and expand each `.br`
+file alongside its compressed original:
+
+```sh
+mkdir -p dist
+cp -R riscbox-VERSION/riscbox-HASH dist/
+for file in dist/riscbox-HASH/*.br; do brotli -d -k "$file"; done
+```
+
+Configure the server to prefer the `.br` sibling when Brotli is accepted and
+fall back to normal content encoding or the original file. For Caddy, use
+the following directives in the site block:
+
+```caddyfile
+encode zstd gzip
+file_server {
+    precompressed br
+}
+```
+
+Verify the response has `Content-Encoding: br` when requested and that WASM has
+content type `application/wasm`, for example with:
+
+```sh
+curl -I -H 'Accept-Encoding: br' https://example.org/riscbox-HASH/riscbox.wasm
+```
+
+URLs always name the original file, without `.br`.
+The archive contains no guest root filesystem.
 
 Prepare a raw root filesystem appropriate for your application. EROFS works for
 a read-only base with guest tmpfs overlays; ext4 works for a writable disk. Split
 the image using the release's executable; `uv` supplies Python 3.13 or later:
 
 ```sh
-mkdir -p dist
-./dist/riscbox/splitimg.py rootfs.erofs dist
+mkdir -p dist/images
+./riscbox-VERSION/splitimg.py rootfs.erofs dist/images
 ```
 
 The command prints a content-named directory and block count. Default chunks
 are 512 KiB; an optional third argument selects a power-of-two size in KiB.
-Use the printed directory for `drive0.file` in `dist/riscbox.cfg`, replacing the
-boot payload hash suffixes with filenames from the archive:
+When `brotli` is installed, each block also has a quality 11 `.br` sibling;
+the original block remains available. Without Brotli the splitter warns and
+continues with the original blocks.
+Use the printed directory for `drive0.file` in `dist/images/rootfs.cfg`. You can
+rename `drive-HASH` to `rootfs-drive-HASH` to distinguish multiple images:
 
 ```js
 {
     version: 1, machine: "riscv64", memory_size: 128,
-    bios: "riscbox/fw_dynamic.bin-HASH.gz",
-    kernel: "riscbox/linux-HASH.gz",
+    bios: "../riscbox-HASH/fw_dynamic.bin",
+    kernel: "../riscbox-HASH/linux",
     cmdline: "root=/dev/vda ro rootfstype=erofs console=hvc0",
     console: "virtio", uart_output: true,
     drive0: { file: "drive-HASH/blk.txt" },
@@ -53,8 +83,9 @@ python3 -m http.server --directory dist 8000
 
 Open <http://localhost:8000/>. Riscbox has no JavaScript runtime dependencies;
 the demo's CDN terminal/editor require Internet access. For deployment updates,
-upload hash-named assets first and replace configuration last. Keep old assets
-while old pages can request them. Serve matching JavaScript and WASM together.
+upload the new asset directory and image drives first, then replace configuration
+and update the HTML script URL. Keep old directories while old pages can request
+them. Each image can use a separate named drive directory under `images/`.
 
 Prepare storage before the first boot
 ------------------------------------
@@ -64,7 +95,7 @@ Preparation downloads boot assets without guest execution, so no guest can race
 the initial host writes. Load the browser script before your application module:
 
 ```html
-<script src="riscbox/riscbox.js"></script>
+<script src="riscbox-HASH/riscbox.js"></script>
 <script type="module" src="app.js"></script>
 ```
 
@@ -75,7 +106,7 @@ from these callbacks. Startup means CPU execution began, not that login is ready
 ```js
 let finishShutdown;
 const runtime = await Riscbox.prepare({
-    config: { url: "riscbox.cfg" },
+    config: { url: "images/rootfs.cfg" },
     consoleWrite: text => terminal.write(text),
     onVmHalted: cause => { finishShutdown?.(cause); },
     onError: error => console.error(error),
@@ -251,12 +282,12 @@ lifetimes with the runtime.
 Boot with firmware or installation media
 ---------------------------------------
 
-The packaged `fw_dynamic.bin-HASH.gz` starts the packaged Linux kernel in S-mode
+The packaged `fw_dynamic.bin` starts the packaged Linux kernel in S-mode
 through OpenSBI. Without firmware, a flat kernel starts in M-mode, useful for
 bare-metal guests such as xv6. Initrd bytes are passed unchanged; compressed
 firmware/kernel output is bounded by the configured RAM layout.
 
-To use U-Boot, select the packaged `u-boot.bin-HASH.gz` as `kernel` with OpenSBI
+To use U-Boot, select the packaged `u-boot.bin` as `kernel` with OpenSBI
 as `bios`. Boot media must contain a compatible RISC-V EFI loader at
 `/EFI/BOOT/BOOTRISCV64.EFI`. Split a raw ISO with the same splitter or use an array
 drive; Alpine standard media needs 512 MiB RAM. U-Boot scans FAT EFI partitions
@@ -272,7 +303,7 @@ preparation flag. Attach/connect the release's WebSocket frontend before boot;
 it can report transport carrier while the prepared VM is halted:
 
 ```js
-import { WebSocketNetwork } from "./riscbox/network/index.js";
+import { WebSocketNetwork } from "./riscbox-HASH/network.js";
 const network = new WebSocketNetwork("wss://your-origin.example/ethernet");
 const runtime = await Riscbox.prepare({
     config: { url: configUrl }, hasNetwork: true, networkWrite: network.transmit,
@@ -285,4 +316,4 @@ await runtime.boot();
 The repository supplies no production origin service. Your origin owns routing,
 authentication, isolation, filtering, and DHCP/DNS/NAT where needed. Close the
 frontend when disposing of its application. The Ethernet/WebSocket wire format
-and frontend contract are in the release's `network/README.md`.
+and frontend contract are in the release's `NETWORK.md`.

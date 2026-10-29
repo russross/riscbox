@@ -5,8 +5,7 @@ import { createHash } from "node:crypto";
 try {
     // Assembly owns the guest fixture; runtime selection belongs to the runner.
     await mkdir("dist", { recursive: true });
-    const bios = (await readFile("../opensbi/.asset-name", "utf8")).trim();
-    const kernel = (await readFile("../kernel/.asset-name", "utf8")).trim();
+    const bios = "fw_dynamic.bin", kernel = "linux";
     await cp(`../opensbi/${bios}`, `dist/${bios}`);
     await cp(`../kernel/${kernel}`, `dist/${kernel}`);
     const split = execFileSync("../tools/splitimg.py", ["build/rootfs.ext4", "dist", "512"], { encoding: "utf8" });

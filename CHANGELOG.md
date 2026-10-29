@@ -4,6 +4,19 @@ Riscbox changelog
 Unreleased
 ----------
 
+*   Generate optional Brotli quality 11 siblings for split disk blocks, keeping
+    the original blocks and warning when the Brotli executable is unavailable.
+
+*   Cache WASM in a hash-named path with `force-cache`; continue revalidating
+    configuration and WASM without a content-hash path.
+
+*   Update the Linux LTS kernel to 6.18.59 and U-Boot to 2026.10, fetching
+    U-Boot from its new upstream release host. Allow U-Boot to relocate the
+    device tree to satisfy its updated memory reservation checks.
+
+*   Package client assets as Brotli files in one content-hashed directory,
+    with stable individual names and root-level network documentation and types.
+
 *   Bound benchmark and demo image-builder QEMU termination with a five-second
     forced-kill fallback, detach console input from the terminal, and exit on
     interrupted preparation before cleaning temporary files.

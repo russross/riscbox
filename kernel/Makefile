@@ -17,12 +17,7 @@ BUILT := $(BUILD_DIR)/.image-built
 CROSS_COMPILE ?= riscv64-linux-gnu-
 JOBS ?= $(shell getconf _NPROCESSORS_ONLN)
 
-all: .asset-name
-
-.asset-name: linux Makefile
-	name=linux-$$(sha256sum linux | cut -c 1-8).gz; \
-	gzip -9 -n -c linux > "$$name.part" && mv "$$name.part" "$$name"; \
-	printf '%s\n' "$$name" > $@.part && mv $@.part $@
+all: linux
 
 linux: $(BUILT)
 	install -m 644 $(IMAGE) $@

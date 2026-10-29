@@ -86,7 +86,7 @@ dist:
 release-path:
 	@printf '%s\n' '$(abspath $(ARCHIVE))'
 
-$(ARCHIVE): Makefile $(RUSTBOX_WASM) build/js/.built js/riscbox.js kernel/.asset-name opensbi/.asset-name uboot/.asset-name .github/scripts/package-release.sh README.md STORAGE-ABI.md NINEP.md API.md HOWTO.md CHANGELOG.md LICENSE tools/splitimg.py js/storage.ts js/network/README.md
+$(ARCHIVE): Makefile $(RUSTBOX_WASM) build/js/.built js/riscbox.js kernel/linux opensbi/fw_dynamic.bin uboot/u-boot.bin .github/scripts/package-release.sh README.md STORAGE-ABI.md NINEP.md API.md HOWTO.md CHANGELOG.md LICENSE tools/splitimg.py js/storage.ts js/network/README.md
 	.github/scripts/package-release.sh $@
 
 clean:

@@ -1,7 +1,7 @@
 VERSION := $(strip $(shell cat version))
-BASE_URL := https://ftp.denx.de/pub/u-boot
+BASE_URL := https://git.u-boot-project.org/u-boot/u-boot/-/releases/v$(VERSION)/downloads
 ARCHIVE := downloads/u-boot-$(VERSION).tar.bz2
-ARCHIVE_SHA256 := 78e8bfc382fe388f9b55aa1daf8c563522a037779b5d4c349d1415e381f1243e
+ARCHIVE_SHA256 := 3f856da3cbbc93af51ff95fde18588a348b4a26723b01d9841e999d988481015
 VERIFIED := downloads/.u-boot-$(VERSION).verified
 SOURCE_DIR := sources/u-boot-$(VERSION)
 SOURCE_READY := sources/.u-boot-$(VERSION).ready
@@ -13,12 +13,7 @@ BUILT := $(BUILD_DIR)/.image-built
 CROSS_COMPILE ?= riscv64-linux-gnu-
 JOBS ?= $(shell getconf _NPROCESSORS_ONLN)
 
-all: .asset-name
-
-.asset-name: u-boot.bin Makefile
-	name=u-boot.bin-$$(sha256sum u-boot.bin | cut -c 1-8).gz; \
-	gzip -9 -n -c u-boot.bin > "$$name.part" && mv "$$name.part" "$$name"; \
-	printf '%s\n' "$$name" > $@.part && mv $@.part $@
+all: u-boot.bin
 
 u-boot.bin: $(BUILT)
 	install -m 644 $(IMAGE) $@

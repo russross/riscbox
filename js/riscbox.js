@@ -8,6 +8,7 @@
     // Capture the adapter's location while its script is executing, before application calls.
     const adapterUrl = typeof document === "object" ? document.currentScript?.src : undefined;
     const defaultWasmUrl = adapterUrl ? new URL("riscbox.wasm", adapterUrl).href : undefined;
+    const hasContentHash = url => /(?:^|\/)[^/?#]*-[0-9a-f]{8,64}(?:\.|\/|[?#]|$)/i.test(String(url));
     // Guest timer deadlines use 10 MHz ticks; host wakeup delays use milliseconds.
     const GUEST_TICKS_PER_MILLISECOND = 10_000;
     const QUANTUM_BUDGET_REACHED = 0;
@@ -645,8 +646,7 @@
                     const fetchRequest = this.options.fetch ?? globalThis.fetch;
                     if (typeof fetchRequest !== "function")
                         throw new Error("Riscbox HTTP fetch is not available");
-                    const hashedPath = /(?:^|\/)[^/?#]*-[0-9a-f]{8,64}(?:\.|\/|[?#]|$)/i.test(url);
-                    const cache = hashedPath ? "force-cache" : "default";
+                    const cache = hasContentHash(url) ? "force-cache" : "default";
                     const disk = this.exports.riscbox_action_disk();
                     let completed = false;
                     const load = async () => {
@@ -877,9 +877,10 @@
                     }
                     return resolveConfig(merged, source.baseUrl, commandLine);
                 };
-                // Streaming compilation uses the same validated fetch policy as configuration loading.
+                // Immutable runtime paths can reuse cached WASM without revalidation.
                 const loadRuntime = async () => {
-                    const response = await fetchRequest(wasmUrl, { cache: "no-cache", signal: controller.signal });
+                    const cache = hasContentHash(wasmUrl) ? "force-cache" : "no-cache";
+                    const response = await fetchRequest(wasmUrl, { cache, signal: controller.signal });
                     if (!response.ok) throw new Error(`WASM HTTP ${response.status}`);
                     const host = RiscboxRuntime.hostImports(runtimeOptions);
                     const result = await WebAssembly.instantiateStreaming(response, { riscbox_host: host.imports });

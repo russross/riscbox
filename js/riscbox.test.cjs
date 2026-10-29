@@ -1,7 +1,7 @@
 const assert = require("node:assert/strict");
 const test = require("node:test");
 
-const { RiscboxRuntime: Riscbox } = require("../build/js/riscbox-internal.js");
+const { RiscboxRuntime: Riscbox, Riscbox: Client } = require("../build/js/riscbox-internal.js");
 
 function fakeModule() {
     const memory = new WebAssembly.Memory({ initial: 1 });
@@ -50,6 +50,27 @@ function fakeModule() {
     exports.riscbox_action_disk = () => 0;
     return { exports, calls };
 }
+
+test("WASM caching follows the asset path while configuration revalidates", async () => {
+    for (const [wasmUrl, expected] of [
+        ["https://host/riscbox-abcd1234/riscbox.wasm", "force-cache"],
+        ["https://host/riscbox.wasm", "no-cache"],
+    ]) {
+        const requests = [];
+        await assert.rejects(Client.prepare({
+            wasmUrl,
+            config: { url: "https://host/riscbox-abcd1234/vm.cfg" },
+            fetch: async (url, options) => {
+                requests.push([String(url), options.cache]);
+                return new Response("unavailable", { status: 404 });
+            },
+        }));
+        assert.deepEqual(requests.sort(), [
+            [wasmUrl, expected],
+            ["https://host/riscbox-abcd1234/vm.cfg", "no-cache"],
+        ].sort());
+    }
+});
 
 test("resolved configuration supplies defaults before the WASM call", async () => {
     const fake = fakeModule();
@@ -192,6 +213,7 @@ test("HTTP actions complete requests and continue draining startup", async () =>
 for (const [assetUrl, expectedCache] of [
     ["https://host/drive-abcd1234/blk.txt", "force-cache"],
     ["https://host/drive-abcd1234/blk000000001.bin", "force-cache"],
+    ["https://host/riscbox-abcd1234/linux", "force-cache"],
     ["https://host/linux-a837bc72.gz", "force-cache"],
     ["https://host/fw_dynamic.bin-81ceef21.gz", "force-cache"],
     ["https://host/initrd.img", "default"],

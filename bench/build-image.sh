@@ -45,10 +45,8 @@ printf '%s\n' 'RV64GC/lp64d, static, -O2; SQLITE_TEMP_STORE=3, SQLITE_THREADSAFE
 rm -rf build/games
 mkdir -p build/games
 (cd ../demo/bsd-games-3.3 && find . -type f \( -name '*.c' -o -name '*.h' -o -name Makefile -o -name LICENSE -o -name '*.md' \) -print0 | tar --null -T - -cf -) | tar -xf - -C build/games
-kernel=$(cat ../kernel/.asset-name)
-firmware=$(cat ../opensbi/.asset-name)
-gzip -dc "../kernel/$kernel" > build/linux
-gzip -dc "../opensbi/$firmware" > build/fw_dynamic.bin
+cp ../kernel/linux build/linux
+cp ../opensbi/fw_dynamic.bin build/fw_dynamic.bin
 stage=$(mktemp -d "$(pwd)/build/rootfs.XXXXXX")
 output=$(mktemp -d "$(pwd)/build/output.XXXXXX")
 trap 'rm -rf "$stage" "$output" build/rootfs.ext4.part' EXIT

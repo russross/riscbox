@@ -15,18 +15,18 @@ published release, which supplies the unchanged runtime archive.
     python3 -m http.server --directory dist 8000
 
 Open <http://localhost:8000/>. From the repository root, `make demo` performs the
-same build. Install QEMU's RISC-V system emulator, fakeroot, cpio, e2fsprogs,
+same build. Install QEMU's RISC-V system emulator, Brotli, fakeroot, cpio, e2fsprogs,
 `curl`, Node.js, and `uv`, plus the core prerequisites in [BUILDING.md](../BUILDING.md).
 No sudo or host filesystem mounts are needed.
 
 The default build runs `make -C ..`, extracts the resulting release archive
-unchanged under `build/release/riscbox-VERSION/`, and copies that complete tree
+under `build/release/riscbox-VERSION/`, expands its Brotli assets, and copies that tree
 to `dist/riscbox/`. It adds the app, source examples, configuration, and split
 disk beside it. To use a downloaded archive without building the parent repo:
 
     make RELEASE_ARCHIVE=/absolute/path/riscbox-VERSION.tar.gz
 
-The image builder consumes only the release's compressed Linux and OpenSBI
+The image builder consumes only the release's Linux and OpenSBI
 payloads. Assembly invokes its packaged `splitimg.py`. No application code or
 image helper reads the repository's runtime source or internal ABI.
 Assembly links guides and provenance to GitHub at the archive version tag.

@@ -10,10 +10,15 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 from pathlib import Path
+import shutil
+import subprocess
 import tempfile
 import types
 import unittest
+from contextlib import redirect_stderr
+from unittest.mock import patch
 
 SCRIPT = Path(__file__).parents[1] / "tools" / "splitimg.py"
 
@@ -78,6 +83,32 @@ class SplitImageTests(unittest.TestCase):
             block = (output / "blk000000000.bin").read_bytes()
             self.assertEqual(block[:3], b"abc")
             self.assertEqual(block[3:], bytes(1021))
+
+    @unittest.skipUnless(shutil.which("brotli"), "brotli is not installed")
+    def test_compressed_block_matches_original(self) -> None:
+        output, temporary = self.split(b"abc")
+        with temporary:
+            block = output / "blk000000000.bin"
+            decoded = subprocess.run(["brotli", "-d", "-c", str(block) + ".br"],
+                                     check=True, capture_output=True).stdout
+            self.assertEqual(decoded, block.read_bytes())
+            self.assertNotIn(".br", (output / "blk.txt").read_text())
+
+    def test_missing_brotli_warns_and_removes_stale_compressed_block(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "disk.img"
+            source.write_bytes(b"abc")
+            output = root / f"drive-{splitimg.image_hash(source, 1)}"
+            output.mkdir()
+            stale = output / "blk000000000.bin.br"
+            stale.write_bytes(b"stale")
+            warning = io.StringIO()
+            with patch.object(splitimg.shutil, "which", return_value=None), redirect_stderr(warning):
+                splitimg.split_image(source, root, 1)
+            self.assertIn("install brotli", warning.getvalue())
+            self.assertFalse(stale.exists())
+            self.assertTrue((output / "blk000000000.bin").is_file())
 
     def test_custom_block_size_is_recorded(self) -> None:
         output, temporary = self.split(b"x", 2)

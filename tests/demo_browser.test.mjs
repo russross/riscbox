@@ -1,8 +1,17 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { access, mkdtemp, rm } from "node:fs/promises";
+import assert from "node:assert/strict";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
 import { runChromePage } from "./chrome.mjs";
+
+test("demo keeps documentation uncompressed and supplies compressed app assets", async () => {
+    const dist = resolve(import.meta.dirname, "../demo/dist");
+    await access(join(dist, "app.js.br"));
+    await access(join(dist, "riscbox", "README.md"));
+    await assert.rejects(access(join(dist, "riscbox", "README.md.br")));
+    await assert.rejects(access(join(dist, "examples", "adventure", "README.md.br")));
+});
 
 // Real focus events gate requests while delayed response bodies remain in flight.
 test("demo prefetch pauses on terminal focus and resumes after blur", async () => {

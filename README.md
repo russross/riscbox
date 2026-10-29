@@ -18,7 +18,8 @@ The docs for using riscbox are split into two parts:
 loads the configuration and block devices, and returns a halted VM. Populate
 optional 9p shares, then call `boot()`. Configuration can also be supplied as
 text or an object, with initial block bytes in the same preparation call.
-WASM and config fetches revalidate cached responses. Destroy is terminal;
+Config fetches revalidate cached responses; WASM in a hash-named path is cached
+as immutable. Destroy is terminal;
 prepare a fresh client to create another VM.
 
 Most users will just a [packaged release from github](https://github.com/russross/riscbox/releases) that includes riscbox assets, plus a Linux kernel image, OpenSBI firmware, and a U-boot bootloader, all customized and pre-built.

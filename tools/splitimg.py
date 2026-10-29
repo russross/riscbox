@@ -12,6 +12,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 from pathlib import Path
+import shutil
+import subprocess
 import sys
 
 DEFAULT_BLOCK_KIB = 512
@@ -48,6 +50,11 @@ def split_image(source: Path, output_parent: Path, block_kib: int) -> tuple[Path
     output = output_parent / f"drive-{image_hash(source, block_kib)}"
     output.mkdir(exist_ok=True)
 
+    # Compressed siblings are optional; the manifest always describes original blocks.
+    brotli = shutil.which("brotli")
+    if brotli is None:
+        print("splitimg: warning: install brotli to compress image blocks", file=sys.stderr)
+
     block_size = block_kib * 1024
     block_count = 0
     with source.open("rb") as image:
@@ -55,6 +62,10 @@ def split_image(source: Path, output_parent: Path, block_kib: int) -> tuple[Path
             padded = block.ljust(block_size, b"\0")
             block_path = output / f"blk{block_count:09d}.bin"
             block_path.write_bytes(padded)
+            if brotli is not None:
+                subprocess.run([brotli, "-q", "11", "-f", "-k", str(block_path)], check=True)
+            else:
+                block_path.with_suffix(".bin.br").unlink(missing_ok=True)
             block_count += 1
 
     manifest = (
@@ -92,7 +103,7 @@ def main(arguments: list[str]) -> int:
         output, block_count = split_image(
             options.input, options.output, options.block_size_kib
         )
-    except (OSError, ValueError) as error:
+    except (OSError, ValueError, subprocess.CalledProcessError) as error:
         print(f"splitimg: {error}", file=sys.stderr)
         return 1
     print(f"{output.name} {block_count} blocks")

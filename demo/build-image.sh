@@ -12,8 +12,8 @@ export PATH
 for command in curl sha256sum fakeroot cpio gzip tar timeout qemu-system-riscv64 truncate mkfs.ext4; do
     command -v "$command" >/dev/null 2>&1 || { echo "missing command: $command" >&2; exit 1; }
 done
-kernel=$(find "$release" -maxdepth 1 -name 'linux-*.gz')
-firmware=$(find "$release" -maxdepth 1 -name 'fw_dynamic.bin-*.gz')
+kernel=$(find "$release" -mindepth 2 -maxdepth 2 -name linux)
+firmware=$(find "$release" -mindepth 2 -maxdepth 2 -name fw_dynamic.bin)
 test -f "$kernel" && test -f "$firmware" || { echo "release boot payloads are missing" >&2; exit 1; }
 
 # The pinned minirootfs is verified before its files enter the setup initramfs.
@@ -37,8 +37,8 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 # Fakeroot preserves the minirootfs's numeric ownership in cpio without host privileges.
-gzip -dc "$kernel" > build/linux
-gzip -dc "$firmware" > build/fw_dynamic.bin
+cp "$kernel" build/linux
+cp "$firmware" build/fw_dynamic.bin
 fakeroot sh -eu -c '
     tar -xpf "$1" -C "$2"
     cp -R "$3/." "$2/"

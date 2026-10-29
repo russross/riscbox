@@ -86,7 +86,7 @@ Repository map and terminology
     Keep Rust source modules flat and consolidate helpers with their owning
     architectural boundary instead of adding nested implementation modules.
 *   `demo/` is a release-only embedding example with its own Alpine image and
-    plain browser app. Its Makefile stages the unchanged release tree and uses
+    plain browser app. Its Makefile stages the release and expands its assets, and uses
     only packaged runtime, boot payloads, and splitter assets. Historical image
     projects and the shared application client live outside this repository.
     Assembly links to GitHub-rendered guides and example provenance at the
@@ -164,11 +164,12 @@ ISO9660 tree and loads the media's kernel and initramfs. Alpine standard
 The custom Linux Image includes its EFI stub, compressed initramfs loading,
 FAT/VFAT, ISO9660 with Rock Ridge/Joliet, loop devices, and SquashFS with
 zlib/XZ/Zstandard. ISO media uses existing split HTTP or VM-owned array disks.
-Decompressed output is bounded by the boot layout. Image
-deployments gzip firmware and the next-stage payload while naming them from
-their uncompressed hashes. HTTP
+Decompressed output is bounded by the boot layout. Release assets use Brotli
+in a flat directory named from an aggregate hash of their original names and
+bytes. Deployments retain compressed and original files at the original URLs. HTTP
 disk writes are session-local. The browser adapter uses `force-cache` for
-content-hash-named boot and disk assets and `no-cache` for WASM and configuration.
+boot, disk, and WASM URLs with a content-hash-named path component. Other WASM
+URLs and configuration fetches use `no-cache`.
 The browser adapter parses configuration files, supplies defaults, and
 resolves boot and drive URLs through the single `Riscbox.prepare(options)` factory,
 which accepts config URL, text, or object sources, optional per-slot block source
@@ -285,7 +286,9 @@ Runnable quanta continue through `MessageChannel` tasks to avoid browser
 clamping of repeated zero-delay timers; delayed wakeups still use `setTimeout`.
 The C interpreter may pass a requested cycle limit at a code-block boundary,
 and Rust accounts for the actual emulated cycles consumed.
-Split HTTP disks use 512 KiB chunks by default.
+Split HTTP disks use 512 KiB chunks by default. The splitter keeps original
+chunks and adds Brotli quality 11 siblings when the executable is available;
+otherwise it warns and continues without them.
 
 The public `speed()` API reports 1/5/15-second active-time Mcycles/s averages,
 clock uptime, and cycling uptime in seconds. Rust owns one deque of completed
@@ -373,9 +376,8 @@ Architecture rules
     `wasm32-unknown-unknown` has no operating-system clock. Validate new Rust
     browser subsystems by calling their WASM operations, since an unused
     implementation can build successfully while retaining unsupported calls.
-*   Deploy boot payloads and split disks under content-derived names. Replace
-    the configuration last as the atomic rollout and retain old assets until an
-    explicit cleanup.
+*   Deploy the content-hashed runtime directory and split disks before updating
+    configuration and script URLs; retain old assets until an explicit cleanup.
 
 Development workflow
 --------------------
@@ -428,7 +430,7 @@ Validation
     counts, arbitrary runtime inputs, cache policy, results, and comparison.
     GitHub workflows must never invoke these benchmarks.
 *   `make kernel`, `make opensbi`, and `make uboot` build the pinned guest
-    components and their hash-named gzip assets. The default `make` builds
+    components. The default `make` builds
     those with the core WASM and JavaScript and packages the release archive.
     The optional demo has an independent make-driven image preparation workflow.
 

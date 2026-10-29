@@ -77,9 +77,10 @@ must match their length in 512-byte sectors; capacity-only arrays start zeroed.
 All configured disks are ready before preparation resolves. Rust validates the
 machine and boot payload bounds/overlap.
 
-WASM and configuration fetches use `cache: "no-cache"`, allowing cached responses
-after validation. WASM uses `WebAssembly.instantiateStreaming`; serve it as
-`application/wasm`. Hash-named boot and disk assets use `force-cache`.
+Configuration fetches use `cache: "no-cache"`. WASM uses `force-cache` when its
+URL has a hash-named path component and `no-cache` otherwise. WASM uses
+`WebAssembly.instantiateStreaming`; serve it as `application/wasm`. Boot and disk
+assets with a hash-named path component use `force-cache`.
 Unknown option names, HTTP failures, syntax errors, and preparation failures
 reject the promise. Failures release partially created VM storage. Cancellation
 retires pending responses; no partially prepared client is returned.
@@ -315,13 +316,14 @@ The resident storage packets are described in [STORAGE-ABI.md](STORAGE-ABI.md)
 and guest 9P2000.L in [NINEP.md](NINEP.md). Those documents describe internal
 implementation boundaries; embedding applications use the JavaScript API above.
 The optional WebSocket wire protocol is described in the release's
-`network/README.md` (source: `js/network/README.md`).
+`NETWORK.md` (source: `js/network/README.md`).
 
 WebSocket frontend
 ------------------
 
-Import `WebSocketNetwork` from the release's `network/index.js`. It implements
-transport only; the VM's startup configuration must separately enable networking.
+Import `WebSocketNetwork` from the release's `riscbox-HASH/network.js`; its types
+are in the package-root `network.d.ts`. The module implements transport only;
+the VM's startup configuration must separately enable networking.
 Its `NetworkRuntime` dependency consists of `networkInput` and `networkCarrier`,
 which the public `Riscbox` facade implements.
 

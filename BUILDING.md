@@ -10,11 +10,11 @@ Prerequisites
 -------------
 
 Install Rust with the `wasm32-unknown-unknown` target, Clang, `ar`, Binaryen
-(`wasm-opt`), GNU Make, `uv`, and Node.js 20.19 or later with npm. The packaged
+(`wasm-opt`), Brotli, GNU Make, `uv`, and Node.js 20.19 or later with npm. The packaged
 Linux and firmware builds also need the RISC-V GNU toolchain, `curl`, `bc`,
 Bison, Flex, and the usual kernel development libraries. On Debian/Ubuntu:
 
-    sudo apt install clang llvm lld binaryen gcc-riscv64-linux-gnu \
+    sudo apt install brotli clang llvm lld binaryen gcc-riscv64-linux-gnu \
         binutils-riscv64-linux-gnu make curl bc bison flex libssl-dev libelf-dev dwarves
     rustup target add wasm32-unknown-unknown
 
